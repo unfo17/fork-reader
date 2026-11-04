@@ -51,6 +51,7 @@ import org.mewx.wenku8_flutter.SpeechLocalePolicy
 class ReaderActivity : FragmentActivity() {
     private lateinit var library: Library
     private lateinit var book: Book
+    private var series: BookSeries? = null
     private var publication: Publication? = null
     private var navigator by mutableStateOf<EpubNavigatorFragment?>(null)
     private var started = 0L
@@ -80,6 +81,7 @@ class ReaderActivity : FragmentActivity() {
         val found = library.books().firstOrNull { it.id == intent.getStringExtra("book") }
         if (found == null) { finish(); return }
         book = found
+        series = library.series.get(intent.getStringExtra("series").orEmpty())?.takeIf { !it.deleted && it.volumes.any { part -> part.bookId == book.id } }
         speech = TextToSpeech(this) { status ->
             speechReady = status == TextToSpeech.SUCCESS
             if (speechReady) {
@@ -107,7 +109,7 @@ class ReaderActivity : FragmentActivity() {
                 }
                 val pub = withContext(Dispatchers.IO) { library.openPublication(book, selectedFontFile) }
                 publication = pub
-                val initial = book.locator?.let { Locator.fromJSON(JSONObject(it)) }
+                val initial = (intent.getStringExtra("jumpLocator") ?: book.locator)?.let { Locator.fromJSON(JSONObject(it)) }
                     ?: if (book.progress > 0) withContext(Dispatchers.IO) {
                         val positions = pub.positions()
                         positions.getOrNull(((positions.size - 1) * book.progress).toInt().coerceAtLeast(0))
@@ -126,6 +128,13 @@ class ReaderActivity : FragmentActivity() {
         }
     }
 
+    private fun openVolume(bookId: String, locator: Locator? = null) {
+        if (bookId == book.id) { locator?.let { navigator?.go(it) }; toc = false; marks = false; return }
+        val collection = series ?: return
+        if (library.books().none { it.id == bookId }) { notice = "该卷原书已移除，请重新导入"; return }
+        startActivity(android.content.Intent(this, ReaderActivity::class.java).putExtra("book", bookId).putExtra("series", collection.id).putExtra("jumpLocator", locator?.toJSON()?.toString()))
+        finish()
+    }
     private fun readerPreferences() = EpubPreferences(
         fontSize = fontSize.toDouble(), theme = if (night) Theme.DARK else Theme.LIGHT, scroll = scroll,
         lineHeight = options.lineHeight.toDouble(), letterSpacing = options.letterSpacing.toDouble(),
@@ -194,7 +203,7 @@ class ReaderActivity : FragmentActivity() {
 
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable private fun ReaderScreen() {
-        Scaffold(topBar = { TopAppBar(title = { Text(book.title, maxLines = 1) }, navigationIcon = { IconButton(onClick = { finish() }) { Icon(Icons.Outlined.ArrowBack, "返回") } }, actions = {
+        Scaffold(topBar = { TopAppBar(title = { Text(series?.let { "${it.title} · ${it.volumes.firstOrNull { part -> part.bookId == book.id }?.title ?: book.title}" } ?: book.title, maxLines = 1) }, navigationIcon = { IconButton(onClick = { finish() }) { Icon(Icons.Outlined.ArrowBack, "返回") } }, actions = {
             IconButton(onClick = { mark() }, enabled = navigator != null && !loading) { Icon(Icons.Outlined.BookmarkAdd, "添加书签") }
             IconButton(onClick = { settings = true }) { Icon(Icons.Outlined.Settings, "阅读设置") }
         }) }, bottomBar = { BottomAppBar {
@@ -265,24 +274,66 @@ class ReaderActivity : FragmentActivity() {
                         entries(link.children, depth + 1)
                     }
                 }
-                entries(publication?.tableOfContents.orEmpty())
+                series?.let { collection ->
+                    Text("分卷", style = MaterialTheme.typography.titleMedium)
+                    collection.volumes.forEach { volume ->
+                        var expanded by remember(volume.bookId) { mutableStateOf(volume.bookId == book.id) }
+                        Row {
+                            TextButton(onClick = { openVolume(volume.bookId) }, modifier = Modifier.weight(1f)) { Text((if (volume.bookId == book.id) "✓ " else "") + volume.title) }
+                            TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起" else "章节") }
+                        }
+                        if (expanded && volume.bookId == book.id) entries(publication?.tableOfContents.orEmpty())
+                        if (expanded && volume.bookId != book.id) {
+                            val chapters by produceState<List<Pair<String, Locator?>>?>(null, volume.bookId) {
+                                value = try {
+                                    val original = library.books().firstOrNull { it.id == volume.bookId } ?: error("原书已移除")
+                                    val pub = library.openPublication(original)
+                                    try {
+                                        fun flattened(links: List<Link>, depth: Int = 0): List<Pair<String, Locator?>> = links.flatMap { link -> listOf(("　".repeat(depth) + (link.title ?: link.href.toString())) to pub.locatorFromLink(link)) + flattened(link.children, depth + 1) }
+                                        flattened(pub.tableOfContents).ifEmpty { pub.readingOrder.map { (it.title ?: it.href.toString()) to pub.locatorFromLink(it) } }
+                                    } finally { pub.close() }
+                                } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { notice = e.message ?: "分卷目录读取失败"; emptyList() }
+                            }
+                            if (chapters == null) LinearProgressIndicator(Modifier.fillMaxWidth())
+                            chapters.orEmpty().forEach { (title, locator) -> TextButton(enabled = locator != null, onClick = { openVolume(volume.bookId, locator) }) { Text(title) } }
+                        }
+                    }
+                }
+                if (series == null) entries(publication?.tableOfContents.orEmpty())
             }
         }
         if (marks) ModalBottomSheet(onDismissRequest = { marks = false }) {
-            var all by remember { mutableStateOf(currentBook().bookmarks) }
+            var markRevision by remember { mutableIntStateOf(0) }
+            val members = remember(markRevision) { series?.volumes?.mapNotNull { volume -> library.books().firstOrNull { it.id == volume.bookId }?.let { volume.title to it } } ?: listOf(book.title to currentBook()) }
             Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
                 Text("书签", style = MaterialTheme.typography.titleLarge)
-                if (all.isEmpty()) Text("还没有书签。点击阅读器右上角添加。", Modifier.padding(16.dp))
-                all.forEachIndexed { index, raw ->
-                    val json = runCatching { JSONObject(raw) }.getOrNull()
-                    val locator = json?.let { Locator.fromJSON(it) }
-                    val legacyProgress = json?.optDouble("txtProgress", 0.0)?.coerceIn(0.0, 1.0) ?: 0.0
-                    Row {
-                        TextButton(onClick = { if (locator != null) navigator?.go(locator) else lifecycleScope.launch {
-                            val positions = withContext(Dispatchers.IO) { publication?.positions().orEmpty() }
-                            positions.getOrNull(((positions.size - 1) * legacyProgress).toInt().coerceAtLeast(0))?.let { navigator?.go(it) }
-                        }; marks = false }, modifier = Modifier.weight(1f)) { Text(locator?.title ?: "书签 ${index + 1} · ${(legacyProgress * 100).toInt()}%") }
-                        IconButton(onClick = { all = all - raw; library.update(currentBook().copy(bookmarks = all)) }) { Icon(Icons.Outlined.DeleteOutline, "删除书签") }
+                if (members.all { it.second.bookmarks.isEmpty() }) Text("还没有书签。点击阅读器右上角添加。", Modifier.padding(16.dp))
+                members.forEach { (volumeTitle, original) ->
+                    if (series != null && original.bookmarks.isNotEmpty()) Text(volumeTitle, style = MaterialTheme.typography.titleMedium)
+                    original.bookmarks.forEachIndexed { index, raw ->
+                        val json = runCatching { JSONObject(raw) }.getOrNull()
+                        val locator = json?.let { Locator.fromJSON(it) }
+                        val legacyProgress = json?.optDouble("txtProgress", 0.0)?.coerceIn(0.0, 1.0) ?: 0.0
+                        Row {
+                            TextButton(onClick = {
+                                if (locator != null) openVolume(original.id, locator)
+                                else lifecycleScope.launch {
+                                    try {
+                                        val pub = if (original.id == book.id) publication else library.openPublication(original)
+                                        try {
+                                            val positions = withContext(Dispatchers.IO) { pub?.positions().orEmpty() }
+                                            positions.getOrNull(((positions.size - 1) * legacyProgress).toInt().coerceAtLeast(0))?.let { if (original.id == book.id) navigator?.go(it) else openVolume(original.id, it) }
+                                            marks = false
+                                        } finally { if (original.id != book.id) pub?.close() }
+                                    } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                                    catch (e: Exception) { notice = e.message ?: "书签定位失败" }
+                                }
+                                if (original.id == book.id) marks = false
+                            }, modifier = Modifier.weight(1f)) { Text(locator?.title ?: "书签 ${index + 1} · ${(legacyProgress * 100).toInt()}%") }
+                            IconButton(onClick = {
+                                library.books().firstOrNull { it.id == original.id }?.let { current -> library.update(current.copy(bookmarks = current.bookmarks - raw)) }; markRevision++
+                            }) { Icon(Icons.Outlined.DeleteOutline, "删除书签") }
+                        }
                     }
                 }
             }

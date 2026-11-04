@@ -39,6 +39,40 @@ class LibraryUiTest {
         assertTrue(node!!.performAction(AccessibilityNodeInfo.ACTION_CLICK))
         instrumentation.waitForIdleSync()
     }
+    @Test fun seriesContentsAndBookmarksNavigateBetweenOriginalReadiumVolumes() = runBlocking<Unit> {
+        val context = instrumentation.targetContext
+        val library = Library.get(context)
+        val sources = (1..2).map { i -> File(context.cacheDir, "ui-volume-$i.txt").apply { writeText("第一章 开篇\n卷 $i 的正文 ${System.nanoTime()}\n第二章 结尾\n结束正文。") } }
+        val books = sources.map { library.import(Uri.fromFile(it)) }
+        var seriesId: String? = null
+        try {
+            val pub = library.openPublication(books[0])
+            val locator = pub.locatorFromLink(pub.readingOrder.last())!!.toJSON().put("title", "跨卷书签").toString()
+            pub.close()
+            library.update(books[0].copy(bookmarks = listOf(locator)))
+            val series = library.saveSeries(null, "界面合订本", books.mapIndexed { i, book -> book.id to if (i == 0) "第一卷" else "第二卷" }, null)
+            seriesId = series.id
+            ActivityScenario.launch(MainActivity::class.java).use {
+                click("本地"); click("界面合订本")
+                text("界面合订本 · 第一卷")
+                click("目录"); click("第二卷")
+                text("界面合订本 · 第二卷")
+                click("书签"); click("跨卷书签")
+                text("界面合订本 · 第一卷")
+                automation.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
+                text("管理分类")
+            }
+        } finally {
+            instrumentation.runOnMainSync {
+                androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED).toList().filterIsInstance<ReaderActivity>().forEach { it.finish() }
+            }
+            instrumentation.waitForIdleSync()
+            seriesId?.let { library.series.dissolve(it) }
+            library.books().filter { book -> book.id in books.map { it.id } }.forEach(library::remove)
+            sources.forEach { it.delete() }
+        }
+    }
+
     @Test fun composeCategoryManagerAndGridPreferencesSurviveActivityRecreation() = runBlocking<Unit> {
         val context = instrumentation.targetContext
         val prefs = context.getSharedPreferences("library-display", 0)

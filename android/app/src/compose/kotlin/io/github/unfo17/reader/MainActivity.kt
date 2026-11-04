@@ -48,7 +48,7 @@ class MainActivity : ComponentActivity() {
 @Composable fun LibraryApp() {
     val context = LocalContext.current
     val library = remember { Library.get(context) }
-    var books by remember { mutableStateOf(library.books()) }
+    var books by remember { mutableStateOf(library.collectionBooks()) }
     var appFonts by remember { mutableStateOf(false) }
     var appearance by remember { mutableStateOf(false) }
     var licenses by remember { mutableStateOf(false) }
@@ -80,10 +80,17 @@ class MainActivity : ComponentActivity() {
     var selectedBooks by remember { mutableStateOf<Set<String>>(emptySet()) }
     var batchAction by remember { mutableStateOf<String?>(null) }
     var editing by remember { mutableStateOf<Book?>(null) }
+    var seriesManager by remember { mutableStateOf(false) }
+    var editingSeries by remember { mutableStateOf<BookSeries?>(null) }
+    fun editBook(book: Book) { val series = library.series.get(book.id); if (series != null) { editingSeries = series; seriesManager = true } else editing = book }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { books = library.books() }
-    fun open(book: Book) { context.startActivity(Intent(context, ReaderActivity::class.java).putExtra("book", book.id)) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { books = library.collectionBooks() }
+    fun open(book: Book) {
+        val series = library.series.get(book.id)?.takeIf { !it.deleted }
+        val member = series?.volumes?.mapNotNull { part -> library.books().firstOrNull { it.id == part.bookId } }?.maxByOrNull { it.lastRead }
+        context.startActivity(Intent(context, ReaderActivity::class.java).putExtra("book", member?.id ?: book.id).putExtra("series", series?.id))
+    }
     var pending by remember { mutableStateOf<List<ImportCandidate>>(emptyList()) }
     var pendingTree by remember { mutableStateOf<Uri?>(null) }
     var copyImport by remember { mutableStateOf(context.getSharedPreferences("import-options", android.content.Context.MODE_PRIVATE).getBoolean("copy", false)) }
@@ -115,7 +122,7 @@ class MainActivity : ComponentActivity() {
             catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
             catch (error: Exception) { errors += error.message ?: "导入失败" }
         } }
-        finally { busy = false; books = library.books() }
+        finally { busy = false; books = library.collectionBooks() }
         snackbar.showSnackbar("新增 $imported 本，已存在 $duplicates 本" + if (errors.isEmpty()) "" else "；${errors.size} 本失败：${errors.first()}")
     } }
     val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris -> pendingTree = null; scope.launch { reviewFiles(uris) } }
@@ -135,7 +142,7 @@ class MainActivity : ComponentActivity() {
         relinking = null
         if (uri != null && target != null) scope.launch {
             busy = true
-            try { library.relink(target, uri); books = library.books(); snackbar.showSnackbar("原文件已重新关联，进度和书签保留") }
+            try { library.relink(target, uri); books = library.collectionBooks(); snackbar.showSnackbar("原文件已重新关联，进度和书签保留") }
             catch (e: Exception) { snackbar.showSnackbar(e.message ?: "关联失败") }
             finally { busy = false }
         }
@@ -145,7 +152,7 @@ class MainActivity : ComponentActivity() {
         coverTarget = null
         if (target != null && uri != null) scope.launch {
             busy = true
-            try { val updated = library.replaceCover(target, uri); books = library.books(); editing = updated }
+            try { val updated = library.replaceCover(target, uri); books = library.collectionBooks(); editing = updated }
             catch (error: Exception) { snackbar.showSnackbar(error.message ?: "封面替换失败") }
             finally { busy = false }
         }
@@ -158,7 +165,7 @@ class MainActivity : ComponentActivity() {
     } }
     val restorePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) scope.launch {
         busy = true
-        try { val count = restoreLibrary(context, uri); organizationRevision++; books = library.books(); snackbar.showSnackbar("已恢复 $count 本书及阅读记录") }
+        try { val count = restoreLibrary(context, uri); organizationRevision++; books = library.collectionBooks(); snackbar.showSnackbar("已恢复 $count 本书及阅读记录") }
         catch (e: Exception) { snackbar.showSnackbar(e.message ?: "恢复失败") }
         finally { busy = false }
     } }
@@ -181,7 +188,7 @@ class MainActivity : ComponentActivity() {
                     val recent = books.filter { it.lastRead > 0 }.sortedByDescending { it.lastRead }
                     item { Text("继续阅读", style = MaterialTheme.typography.titleLarge) }
                     if (recent.isEmpty()) item { Text("从本地导入一本书，开始你的阅读。") }
-                    items(recent.take(5), key = { it.id }) { book -> BookCard(book, { open(book) }, { editing = book }) }
+                    items(recent.take(5), key = { it.id }) { book -> BookCard(book, { open(book) }, { editBook(book) }) }
                 }
                 1 -> {
                     item { OutlinedTextField(value = query, onValueChange = { query = it }, label = { Text("搜索书名、作者、标签（#标签）") }, leadingIcon = { Icon(Icons.Outlined.Search, null) }, modifier = Modifier.fillMaxWidth(), singleLine = true) }
@@ -191,9 +198,10 @@ class MainActivity : ComponentActivity() {
                         OutlinedButton(onClick = { displaySettings = true }) { Text("书架与筛选") }
                     } }
                     item { Text("共 ${filtered.size} 本 · ${filter.sort.label}", style = MaterialTheme.typography.labelLarge) }
-                    if (selectionMode) item { Row {
+                    if (selectionMode) item { FlowRow {
                         TextButton(onClick = { selectedBooks = filtered.map { it.id }.toSet() }) { Text("全选") }
                         TextButton(enabled = selectedBooks.isNotEmpty(), onClick = { batchAction = "分类" }) { Text("移动分类 (${selectedBooks.size})") }
+                        TextButton(enabled = selectedBooks.size >= 2 && selectedBooks.none { library.series.get(it) != null }, onClick = { editingSeries = null; seriesManager = true }) { Text("合并分卷") }
                         TextButton(enabled = selectedBooks.isNotEmpty(), onClick = { batchAction = "删除" }) { Text("删除") }
                     } }
                     if (filtered.isEmpty()) item { Text(if (books.isEmpty()) "书架还是空的\n点击“导入书籍”添加电子书。" else "没有符合条件的书籍") }
@@ -201,16 +209,16 @@ class MainActivity : ComponentActivity() {
                         Text("立体书架", style = MaterialTheme.typography.titleMedium)
                         LazyRow(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
                             items(filtered.take(10), key = { it.id }) { book ->
-                                BookTile(book, { if (selectionMode) selectedBooks = if (book.id in selectedBooks) selectedBooks - book.id else selectedBooks + book.id else open(book) }, { editing = book }, if (selectionMode) book.id in selectedBooks else null, Modifier.width(tileWidth.dp), dimensional = true)
+                                BookTile(book, { if (selectionMode) selectedBooks = if (book.id in selectedBooks) selectedBooks - book.id else selectedBooks + book.id else open(book) }, { editBook(book) }, if (selectionMode) book.id in selectedBooks else null, Modifier.width(tileWidth.dp), dimensional = true)
                             }
                         }
                     }
                     if (view.grid) items(filtered.chunked(columns), key = { it.first().id }) { row ->
                         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            row.forEach { book -> BookTile(book, { if (selectionMode) selectedBooks = if (book.id in selectedBooks) selectedBooks - book.id else selectedBooks + book.id else open(book) }, { editing = book }, if (selectionMode) book.id in selectedBooks else null, Modifier.weight(1f)) }
+                            row.forEach { book -> BookTile(book, { if (selectionMode) selectedBooks = if (book.id in selectedBooks) selectedBooks - book.id else selectedBooks + book.id else open(book) }, { editBook(book) }, if (selectionMode) book.id in selectedBooks else null, Modifier.weight(1f)) }
                             repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
                         }
-                    } else items(filtered, key = { it.id }) { book -> BookCard(book, { if (selectionMode) selectedBooks = if (book.id in selectedBooks) selectedBooks - book.id else selectedBooks + book.id else open(book) }, { editing = book }, if (selectionMode) book.id in selectedBooks else null) }
+                    } else items(filtered, key = { it.id }) { book -> BookCard(book, { if (selectionMode) selectedBooks = if (book.id in selectedBooks) selectedBooks - book.id else selectedBooks + book.id else open(book) }, { editBook(book) }, if (selectionMode) book.id in selectedBooks else null) }
 
                 }
                 2 -> {
@@ -228,6 +236,7 @@ class MainActivity : ComponentActivity() {
             item { Spacer(Modifier.height(90.dp)) }
         }
     }
+    if (seriesManager) SeriesManager(library, editingSeries, selectedBooks, { seriesManager = false }, { books = library.collectionBooks(); selectedBooks = emptySet() })
     if (appFonts) FontManager(onDismiss = { appFonts = false }, selected = context.getSharedPreferences("appearance", android.content.Context.MODE_PRIVATE).getString("fontId", "").orEmpty(), onSelect = { id ->
         context.getSharedPreferences("appearance", android.content.Context.MODE_PRIVATE).edit().putString("fontId", id).apply()
         appFonts = false
@@ -256,13 +265,13 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    if (categories) CategoryManager(library.organization, { categories = false }, { organizationRevision++; books = library.books() })
+    if (categories) CategoryManager(library.organization, { categories = false }, { organizationRevision++; books = library.collectionBooks() })
     if (displaySettings) LibraryDisplaySettings(filter, view, density, books.map { BookQuery.author(it.author) }.distinct().sorted(), { filter = it }, { view = it }, { density = it }, { displaySettings = false })
     if (batchAction == "分类") {
         val expected = remember(selectedBooks) { selectedBooks.associateWith { library.organization.revisionOf(it) } }
-        CategoryManager(library.organization, { batchAction = null }, { organizationRevision++; books = library.books() }, onChoose = { group ->
+        CategoryManager(library.organization, { batchAction = null }, { organizationRevision++; books = library.collectionBooks() }, onChoose = { group ->
             scope.launch {
-                try { val changed = library.organization.assign(selectedBooks, group, expected); organizationRevision++; books = library.books(); selectedBooks = selectedBooks - changed; batchAction = null; snackbar.showSnackbar("已移动 ${changed.size} 本书，已更新的分类保持不变") }
+                try { val changed = library.organization.assign(selectedBooks, group, expected); organizationRevision++; books = library.collectionBooks(); selectedBooks = selectedBooks - changed; batchAction = null; snackbar.showSnackbar("已移动 ${changed.size} 本书，已更新的分类保持不变") }
                 catch (e: Exception) { snackbar.showSnackbar(e.message ?: "移动失败，已保留选择") }
             }
         })
@@ -281,7 +290,7 @@ class MainActivity : ComponentActivity() {
                     try { library.remove(target) }
                     catch (e: Exception) { failed += target.id; errors += e.message ?: "操作失败" }
                 } }
-                books = library.books(); selectedBooks = failed; busy = false
+                books = library.collectionBooks(); selectedBooks = failed; busy = false
                 snackbar.showSnackbar(if (failed.isEmpty()) "已完成 ${targets.size} 本书" else "${failed.size} 本操作失败，已保留选择：${errors.first()}")
             }
         }) { Text("确定") } }, dismissButton = { TextButton(onClick = { batchAction = null }) { Text("取消") } })
@@ -310,7 +319,7 @@ class MainActivity : ComponentActivity() {
         var status by remember(book.id) { mutableStateOf(book.status) }
         var deleting by remember { mutableStateOf(false) }
         if (deleting) AlertDialog(onDismissRequest = { deleting = false }, title = { Text("删除这本书？") }, text = { Text("仅删除应用内文件并移出书架。外部原文件、阅读进度和书签保留。") }, confirmButton = { TextButton(onClick = { scope.launch {
-            try { withContext(Dispatchers.IO) { library.remove(book) }; books = library.books(); editing = null }
+            try { withContext(Dispatchers.IO) { library.remove(book) }; books = library.collectionBooks(); editing = null }
             catch (error: Exception) { snackbar.showSnackbar(error.message ?: "删除失败，书籍已保留") }
         } }) { Text("删除") } }, dismissButton = { TextButton(onClick = { deleting = false }) { Text("取消") } })
         else AlertDialog(onDismissRequest = { editing = null }, title = { Text("编辑书籍") }, text = { Column(Modifier.heightIn(max = 500.dp).verticalScroll(androidx.compose.foundation.rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -329,7 +338,7 @@ class MainActivity : ComponentActivity() {
                 TextButton(onClick = { coverTarget = book; editing = null; coverPicker.launch(arrayOf("image/*")) }) { Text("替换封面") }
                 TextButton(onClick = { scope.launch {
                     busy = true
-                    try { editing = library.restoreCover(book); books = library.books() }
+                    try { editing = library.restoreCover(book); books = library.collectionBooks() }
                     catch (e: Exception) { snackbar.showSnackbar(e.message ?: "恢复封面失败") }
                     finally { busy = false }
                 } }) { Text("恢复原封面") }
@@ -341,7 +350,7 @@ class MainActivity : ComponentActivity() {
         } }, confirmButton = { TextButton(enabled = title.isNotBlank(), onClick = { try {
             library.organization.assign(setOf(book.id), group, mapOf(book.id to categoryRevision))
             val current = library.records().firstOrNull { it.id == book.id } ?: book
-            library.update(current.copy(title = title.trim(), author = author.trim(), summary = summary.trim(), tags = tags.split(',', '，').map { it.trim() }.filter { it.isNotEmpty() }.distinct(), status = status)); books = library.books(); editing = null
+            library.update(current.copy(title = title.trim(), author = author.trim(), summary = summary.trim(), tags = tags.split(',', '，').map { it.trim() }.filter { it.isNotEmpty() }.distinct(), status = status)); books = library.collectionBooks(); editing = null
         } catch (e: Exception) { editError = e.message ?: "保存失败" } }) { Text("保存") } }, dismissButton = { TextButton(onClick = { editing = null }) { Text("取消") } })
     }
 }

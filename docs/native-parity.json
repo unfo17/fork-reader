@@ -200,8 +200,15 @@
       "upstream": [
         "lib/local_book_series.dart"
       ],
-      "status": "pending",
-      "tests": []
+      "status": "partial",
+      "tests": [
+        "io.github.unfo17.reader.SeriesTest.seriesChaptersKeepIdentityAcrossReorderAndRejectedDelayedEdits",
+        "io.github.unfo17.reader.SeriesTest.failedSeriesWriteRetainsMembershipAndChapterCoordinates",
+        "io.github.unfo17.reader.SeriesTest.duplicateChapterCoordinatesAndSharedVolumeOwnersAreRejected",
+        "io.github.unfo17.reader.SeriesTest.originalFilesLocatorsAndBookmarksSurviveSeriesBackupReorderAndDissolution",
+        "io.github.unfo17.reader.SeriesTest.seriesSuggestionsRequireAnExplicitVolumeMarker",
+        "io.github.unfo17.reader.LibraryUiTest.seriesContentsAndBookmarksNavigateBetweenOriginalReadiumVolumes"
+      ]
     },
     {
       "id": "library.delete",

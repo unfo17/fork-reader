@@ -96,6 +96,7 @@ class Library private constructor(private val context: Context) {
     private val prefs = context.getSharedPreferences("library", Context.MODE_PRIVATE)
     val organization = LibraryOrganization({ prefs.getString("organization", null) }, { prefs.edit().putString("organization", it).commit() })
     init { organization.migrateLegacy(JSONArray(prefs.getString("books", "[]")).let { a -> List(a.length()) { Book.from(a.getJSONObject(it)) } }) }
+    val series = SeriesStore({ prefs.getString("series", null) }, { prefs.edit().putString("series", it).commit() })
     val engine = ReadiumEngine(context)
     private val links = BookTextLinks(context)
     private val importSession = BookDocumentImportSession<Uri>(File(context.noBackupFilesDir, "book-import-staging")) { uri, target, limit ->
@@ -174,15 +175,46 @@ class Library private constructor(private val context: Context) {
         return JSONArray(prefs.getString("books", "[]")).let { a -> List(a.length()) { Book.from(a.getJSONObject(it)).let { book -> book.copy(category = groups[assignments[book.id]] ?: "未分类") } } }
     }
     fun books(): List<Book> = records().filterNot { it.removed }
+    fun collectionBooks(): List<Book> {
+        val originals = books(); val byId = originals.associateBy { it.id }
+        val collections = series.definitions().filter { !it.deleted && it.volumes.all { part -> part.bookId in byId } }
+        val hidden = collections.flatMap { it.volumes.map { volume -> volume.bookId } }.toSet()
+        return originals.filterNot { it.id in hidden } + collections.map { collection ->
+            val members = collection.volumes.map { byId.getValue(it.bookId) }
+            val first = members.first()
+            val chapters = collection.volumes.sumOf { it.chapters.size }.coerceAtLeast(1)
+            first.copy(id = collection.id, title = collection.title, author = collection.author, summary = collection.summary, tags = collection.tags,
+                category = organization.nameOf(organization.groupOf(collection.id)), addedAt = members.minOf { it.addedAt }, lastRead = members.maxOf { it.lastRead },
+                progress = collection.volumes.sumOf { volume -> byId.getValue(volume.bookId).progress * volume.chapters.size } / chapters,
+                minutes = members.sumOf { it.minutes }, bookmarks = members.flatMap { it.bookmarks }, status = "auto")
+        }
+    }
+    suspend fun saveSeries(id: String?, title: String, volumes: List<Pair<String, String>>, expectedAt: Long?, author: String? = null, summary: String? = null, tags: List<String>? = null): BookSeries {
+        val parts = volumes.map { (bookId, label) ->
+            val original = books().firstOrNull { it.id == bookId } ?: error("分卷原书已移除")
+            val publication = openPublication(original)
+            try { Triple(original, label, publication.readingOrder.map { it.href.toString() }) } finally { publication.close() }
+        }
+        return synchronized(this@Library) {
+            val active = books().map { it.id }.toSet()
+            require(parts.all { it.first.id in active }) { "分卷原书已变化，请重新选择" }
+            series.save(id, title, parts, expectedAt, author, summary, tags)
+        }
+    }
     @Synchronized fun update(book: Book) { save(records().filterNot { it.id == book.id } + book) }
-    @Synchronized fun replaceRecords(books: List<Book>, organizationState: String? = null) {
+    @Synchronized fun replaceRecords(books: List<Book>, organizationState: String? = null, seriesState: String? = null) {
         val edit = prefs.edit().putString("books", JSONArray(books.map { it.json() }).toString())
         if (organizationState != null) edit.putString("organization", organization.merged(organizationState))
+        if (seriesState != null) edit.putString("series", series.merged(seriesState))
         check(edit.commit()) { "书库保存失败" }
         if (organizationState != null) organization.invalidateAssignments()
     }
     private fun save(books: List<Book>) { check(prefs.edit().putString("books", JSONArray(books.map { it.json() }).toString()).commit()) }
     @Synchronized fun remove(book: Book) {
+        series.get(book.id)?.takeIf { !it.deleted }?.let { collection ->
+            collection.volumes.forEach { part -> books().firstOrNull { it.id == part.bookId }?.let(::remove) }
+            return
+        }
         // Match upstream local_book_removal.dart: delete local content, retain history and bookmarks.
         File(book.file).takeIf { book.sourceReference == null }?.let { check(!it.exists() || it.delete()) { "本机文件删除失败，书籍和记录已保留" } }
         update(book.copy(removed = true, sourceReference = null, sourceSize = 0, sourceModified = 0, bundleFile = null))
