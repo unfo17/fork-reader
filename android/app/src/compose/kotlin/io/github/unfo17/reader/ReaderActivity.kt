@@ -32,6 +32,13 @@ import org.readium.r2.navigator.epub.EpubNavigatorFactory
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
 import org.readium.r2.navigator.epub.EpubPreferences
 import org.readium.r2.navigator.preferences.Theme
+import org.readium.r2.navigator.preferences.TextAlign
+import org.readium.r2.navigator.preferences.ColumnCount
+import org.readium.r2.navigator.preferences.Color
+import android.view.KeyEvent
+import android.view.WindowManager
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import org.readium.r2.shared.publication.Link
 import org.readium.r2.shared.publication.Locator
 import org.readium.r2.shared.publication.Publication
@@ -51,6 +58,7 @@ class ReaderActivity : FragmentActivity() {
     private var toc by mutableStateOf(false)
     private var marks by mutableStateOf(false)
     private var settings by mutableStateOf(false)
+    private var options by mutableStateOf(ReaderOptions())
     private var fontSize by mutableFloatStateOf(100f)
     private var night by mutableStateOf(false)
     private var scroll by mutableStateOf(false)
@@ -83,11 +91,14 @@ class ReaderActivity : FragmentActivity() {
         val preferences = getSharedPreferences("reader-${book.id}", MODE_PRIVATE)
         fontSize = preferences.getFloat("fontSize", 100f)
         night = preferences.getBoolean("night", false)
-        scroll = preferences.getBoolean("scroll", false)
+        scroll = preferences.getBoolean("scroll", true)
+        options = ReaderOptions.decode(book.readerOptions)
+        if (book.readerOptions != null) { fontSize = options.fontSize; night = options.night; scroll = options.scroll }
+        applyWindowOptions()
         setContent { ReaderTheme { ReaderScreen() } }
         lifecycleScope.launch {
             try {
-                val pub = withContext(Dispatchers.IO) { library.engine.open(library.publicationFile(book)) }
+                val pub = withContext(Dispatchers.IO) { library.openPublication(book) }
                 publication = pub
                 val initial = book.locator?.let { Locator.fromJSON(JSONObject(it)) }
                     ?: if (book.progress > 0) withContext(Dispatchers.IO) {
@@ -103,9 +114,41 @@ class ReaderActivity : FragmentActivity() {
         }
     }
 
-    private fun readerPreferences() = EpubPreferences(fontSize = fontSize.toDouble(), theme = if (night) Theme.DARK else Theme.LIGHT, scroll = scroll)
+    private fun readerPreferences() = EpubPreferences(
+        fontSize = fontSize.toDouble(), theme = if (night) Theme.DARK else Theme.LIGHT, scroll = scroll,
+        lineHeight = options.lineHeight.toDouble(), letterSpacing = options.letterSpacing.toDouble(),
+        paragraphSpacing = options.paragraphGap.toDouble() / 16.0, pageMargins = options.margin.toDouble() / 26.0,
+        paragraphIndent = if (options.indent) 2.0 else 0.0,
+        textAlign = if (options.justify) TextAlign.JUSTIFY else TextAlign.START,
+        publisherStyles = options.publisherStyles, verticalText = options.vertical,
+        columnCount = if (options.twoPages) ColumnCount.TWO else ColumnCount.ONE,
+        fontWeight = options.weight.toDouble(),
+        textColor = parseColor(options.textColor), backgroundColor = parseColor(options.backgroundColor)
+    )
+    private fun parseColor(value: String): Color? = runCatching { Color(android.graphics.Color.parseColor(value)) }.getOrNull()
+    private fun applyWindowOptions() {
+        if (options.keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        if (options.hideSystemStatus) controller.hide(WindowInsetsCompat.Type.systemBars()) else controller.show(WindowInsetsCompat.Type.systemBars())
+        window.attributes = window.attributes.apply { screenBrightness = options.brightness }
+    }
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (options.volumePaging && keyCode in listOf(KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN)) {
+            if (event?.repeatCount == 0) { if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) navigator?.goForward() else navigator?.goBackward() }
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (options.volumePaging && keyCode in listOf(KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN)) return true
+        return super.onKeyUp(keyCode, event)
+    }
     private fun applySettings() {
+        options = options.copy(fontSize = fontSize, night = night, scroll = scroll)
         navigator?.submitPreferences(readerPreferences())
+        applyWindowOptions()
+        library.update(currentBook().copy(readerOptions = options.json()))
         getSharedPreferences("reader-${book.id}", MODE_PRIVATE).edit().putFloat("fontSize", fontSize).putBoolean("night", night).putBoolean("scroll", scroll).apply()
     }
     private fun currentBook() = library.books().first { it.id == book.id }
@@ -232,12 +275,44 @@ class ReaderActivity : FragmentActivity() {
             }
         }
         if (settings) ModalBottomSheet(onDismissRequest = { settings = false }) {
-            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.padding(24.dp).heightIn(max = 600.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("阅读设置", style = MaterialTheme.typography.titleLarge)
                 Text("字号 ${(fontSize).toInt()}%")
                 Slider(fontSize, { fontSize = it; applySettings() }, valueRange = 75f..200f)
                 Row { Text("夜间阅读", Modifier.weight(1f)); Switch(night, { night = it; applySettings() }) }
-                if (publication != null) Row { Text("滚动阅读", Modifier.weight(1f)); Switch(scroll, { scroll = it; applySettings() }) }
+                Row { Text("滚动阅读", Modifier.weight(1f)); Switch(scroll, { scroll = it; applySettings() }) }
+                @Composable fun toggle(label: String, value: Boolean, update: (Boolean) -> ReaderOptions) {
+                    Row { Text(label, Modifier.weight(1f)); Switch(value, { options = update(it); applySettings() }) }
+                }
+                @Composable fun control(label: String, value: Float, range: ClosedFloatingPointRange<Float>, update: (Float) -> ReaderOptions) {
+                    Text("$label ${"%.1f".format(value)}")
+                    Slider(value, { options = update(it); navigator?.submitPreferences(readerPreferences()) }, valueRange = range, onValueChangeFinished = { applySettings() })
+                }
+                toggle("保留原书样式", options.publisherStyles) { options.copy(publisherStyles = it) }
+                toggle("竖排", options.vertical) { options.copy(vertical = it) }
+                toggle("双页", options.twoPages) { options.copy(twoPages = it) }
+                toggle("首行缩进", options.indent) { options.copy(indent = it) }
+                toggle("两端对齐", options.justify) { options.copy(justify = it) }
+                control("行高", options.lineHeight, 1f..3f) { options.copy(lineHeight = it) }
+                control("字距", options.letterSpacing, 0f..3f) { options.copy(letterSpacing = it) }
+                control("段距", options.paragraphGap, 0f..32f) { options.copy(paragraphGap = it) }
+                control("页边距", options.margin, 0f..80f) { options.copy(margin = it) }
+                control("字重", options.weight, .5f..2f) { options.copy(weight = it) }
+                toggle("屏幕常亮", options.keepScreenOn) { options.copy(keepScreenOn = it) }
+                toggle("音量键翻页", options.volumePaging) { options.copy(volumePaging = it) }
+                toggle("沉浸阅读", options.hideSystemStatus) { options.copy(hideSystemStatus = it) }
+                TextButton(onClick = { options = options.copy(brightness = -1f); applySettings() }) { Text("亮度跟随系统") }
+                control("亮度", options.brightness.coerceAtLeast(0f), 0f..1f) { options.copy(brightness = it) }
+                var textColor by remember { mutableStateOf(options.textColor) }
+                var backgroundColor by remember { mutableStateOf(options.backgroundColor) }
+                OutlinedTextField(textColor, { textColor = it }, label = { Text("文字颜色，例如 #222222（留空为默认）") })
+                OutlinedTextField(backgroundColor, { backgroundColor = it }, label = { Text("背景颜色，例如 #F5EBD8") })
+                TextButton(onClick = {
+                    if ((textColor.isBlank() || parseColor(textColor) != null) && (backgroundColor.isBlank() || parseColor(backgroundColor) != null)) {
+                        options = options.copy(textColor = textColor, backgroundColor = backgroundColor); applySettings()
+                    } else notice = "请输入有效的颜色值"
+                }) { Text("应用颜色") }
+                TextButton(onClick = { options = ReaderOptions(); fontSize = options.fontSize; night = options.night; scroll = options.scroll; applySettings() }) { Text("恢复默认阅读设置") }
             }
         }
     }

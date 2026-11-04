@@ -13,6 +13,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -48,6 +49,7 @@ class MainActivity : ComponentActivity() {
     val context = LocalContext.current
     val library = remember { Library.get(context) }
     var books by remember { mutableStateOf(library.books()) }
+    var history by remember { mutableStateOf(false) }
     var tab by remember { mutableIntStateOf(0) }
     var query by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("全部") }
@@ -62,23 +64,50 @@ class MainActivity : ComponentActivity() {
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { books = library.books() }
     fun open(book: Book) { context.startActivity(Intent(context, ReaderActivity::class.java).putExtra("book", book.id)) }
     var pending by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var pendingTree by remember { mutableStateOf<Uri?>(null) }
+    var copyImport by remember { mutableStateOf(false) }
+    var coverTarget by remember { mutableStateOf<Book?>(null) }
+    var relinking by remember { mutableStateOf<Book?>(null) }
     var importMenu by remember { mutableStateOf(false) }
-    fun importFiles(uris: List<Uri>) { scope.launch {
+    fun importFiles(uris: List<Uri>, copy: Boolean, tree: Uri?) { scope.launch {
             busy = true
             var imported = 0
             val errors = mutableListOf<String>()
-            try { uris.forEach { uri -> try { library.import(uri); imported++ } catch (e: Exception) { errors += e.message ?: "导入失败" } } }
+            try { uris.forEach { uri -> try { library.import(uri, copy, tree); imported++ } catch (e: Exception) { errors += e.message ?: "导入失败" } } }
             finally { busy = false; books = library.books() }
             snackbar.showSnackbar("已导入 $imported 本" + errors.firstOrNull()?.let { "；$it" }.orEmpty())
         }
     }
-    val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { pending = it }
+    val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { pendingTree = null; pending = it }
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree -> if (tree != null) scope.launch {
         busy = true
-        try { pending = scanFolder(context, tree); if (pending.isEmpty()) snackbar.showSnackbar("目录中没有 EPUB 或 TXT") }
+        try {
+            pendingTree = tree
+            runCatching { context.contentResolver.takePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            pending = scanFolder(context, tree); if (pending.isEmpty()) snackbar.showSnackbar("目录中没有 EPUB 或 TXT") }
         catch (e: Exception) { snackbar.showSnackbar(e.message ?: "扫描失败") }
         finally { busy = false }
     } }
+    val relinker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val target = relinking
+        relinking = null
+        if (uri != null && target != null) scope.launch {
+            busy = true
+            try { library.relink(target, uri); books = library.books(); snackbar.showSnackbar("原文件已重新关联，进度和书签保留") }
+            catch (e: Exception) { snackbar.showSnackbar(e.message ?: "关联失败") }
+            finally { busy = false }
+        }
+    }
+    val coverPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val target = coverTarget
+        coverTarget = null
+        if (target != null && uri != null) scope.launch {
+            busy = true
+            try { val updated = library.replaceCover(target, uri); books = library.books(); editing = updated }
+            catch (error: Exception) { snackbar.showSnackbar(error.message ?: "封面替换失败") }
+            finally { busy = false }
+        }
+    }
     val exportPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri -> if (uri != null) scope.launch {
         busy = true
         try { exportLibrary(context, uri); snackbar.showSnackbar("备份已保存") }
@@ -134,9 +163,9 @@ class MainActivity : ComponentActivity() {
                 }
                 2 -> {
                     item { Text("我的书房", style = MaterialTheme.typography.headlineMedium) }
-                    item { ListItem(headlineContent = { Text("阅读记录") }, supportingContent = { Text("读过 ${books.count { it.lastRead > 0 }} 本 · ${books.sumOf { it.bookmarks.size }} 个书签") }, leadingContent = { Icon(Icons.Outlined.AutoStories, null) }) }
+                    item { ListItem(modifier = Modifier.clickable { history = true }, headlineContent = { Text("阅读记录") }, supportingContent = { Text("读过 ${library.records().count { it.lastRead > 0 }} 本 · ${library.records().sumOf { it.bookmarks.size }} 个书签") }, leadingContent = { Icon(Icons.Outlined.AutoStories, null) }) }
                     item { ListItem(headlineContent = { Text("外观") }, supportingContent = { Text("Material 3 · 跟随系统深浅色和动态配色") }, leadingContent = { Icon(Icons.Outlined.Palette, null) }) }
-                    item { ListItem(headlineContent = { Text("数据存储") }, supportingContent = { Text("导入时复制到应用内；卸载应用会删除书库，请保留原文件。") }, leadingContent = { Icon(Icons.Outlined.Storage, null) }) }
+                    item { ListItem(headlineContent = { Text("数据存储") }, supportingContent = { Text("默认关联原文件，也可选择复制。删除本机文件后保留进度和书签。") }, leadingContent = { Icon(Icons.Outlined.Storage, null) }) }
                     item { OutlinedButton(enabled = !busy, onClick = { exportPicker.launch("本地书房备份.zip") }) { Text("导出书库与阅读记录") } }
                     item { OutlinedButton(enabled = !busy, onClick = { restorePicker.launch(arrayOf("application/zip", "application/octet-stream")) }) { Text("从备份合并恢复") } }
                     item { ListItem(headlineContent = { Text("关于本地书房") }, supportingContent = { Text("0.2.0-dev · Compose / Readium\n基于 Wenku8_Flutter，遵循 GPL-2.0") }) }
@@ -145,14 +174,36 @@ class MainActivity : ComponentActivity() {
             item { Spacer(Modifier.height(90.dp)) }
         }
     }
+    if (history) ModalBottomSheet(onDismissRequest = { history = false }) {
+        val records = library.records().filter { it.lastRead > 0 || it.bookmarks.isNotEmpty() }.sortedByDescending { it.lastRead }
+        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 600.dp), contentPadding = PaddingValues(20.dp)) {
+            item { Text("阅读记录", style = MaterialTheme.typography.titleLarge) }
+            if (records.isEmpty()) item { Text("还没有阅读记录。", Modifier.padding(vertical = 20.dp)) }
+            items(records, key = { it.id }) { record ->
+                ListItem(headlineContent = { Text(record.title) }, supportingContent = { Text("${(record.progress * 100).toInt()}% · ${record.bookmarks.size} 个书签 · ${record.minutes / 60} 分钟" + if (record.removed) "\n本机文件已删除，重新导入原书可恢复阅读" else "") },
+                    modifier = if (record.removed) Modifier else Modifier.clickable { history = false; open(record) })
+            }
+        }
+    }
     batchAction?.let { action ->
         var group by remember { mutableStateOf("") }
         AlertDialog(onDismissRequest = { batchAction = null }, title = { Text("$action ${selectedBooks.size} 本书") }, text = {
-            if (action == "删除") Text("将删除应用内副本、阅读进度和书签。原文件保留。")
+            if (action == "删除") Text("仅删除应用内文件并移出书架。外部原文件、阅读进度和书签保留。")
             else OutlinedTextField(group, { group = it }, label = { Text("目标分类") })
         }, confirmButton = { TextButton(onClick = {
-            books.filter { it.id in selectedBooks }.forEach { if (action == "删除") library.remove(it) else library.update(it.copy(category = group.trim().ifBlank { "未分类" })) }
-            books = library.books(); selectedBooks = emptySet(); batchAction = null
+            val targets = books.filter { it.id in selectedBooks }
+            batchAction = null
+            scope.launch {
+                busy = true
+                val failed = mutableSetOf<String>()
+                val errors = mutableListOf<String>()
+                withContext(Dispatchers.IO) { targets.forEach { target ->
+                    try { if (action == "删除") library.remove(target) else library.update(target.copy(category = group.trim().ifBlank { "未分类" })) }
+                    catch (e: Exception) { failed += target.id; errors += e.message ?: "操作失败" }
+                } }
+                books = library.books(); selectedBooks = failed; busy = false
+                snackbar.showSnackbar(if (failed.isEmpty()) "已完成 ${targets.size} 本书" else "${failed.size} 本操作失败，已保留选择：${errors.first()}")
+            }
         }) { Text("确定") } }, dismissButton = { TextButton(onClick = { batchAction = null }) { Text("取消") } })
     }
     if (importMenu) AlertDialog(onDismissRequest = { importMenu = false }, title = { Text("导入书籍") }, text = { Text("选择文件，或扫描指定目录中的 EPUB 和 TXT。") }, confirmButton = { TextButton(onClick = { importMenu = false; importer.launch(arrayOf("application/epub+zip", "text/plain")) }) { Text("选择文件") } }, dismissButton = { TextButton(onClick = { importMenu = false; folderPicker.launch(null) }) { Text("扫描目录") } })
@@ -160,27 +211,52 @@ class MainActivity : ComponentActivity() {
         var selected by remember(pending) { mutableStateOf(pending.toSet()) }
         AlertDialog(onDismissRequest = { pending = emptyList() }, title = { Text("导入预览 · ${pending.size} 个文件") }, text = {
             Column {
-                Text("文件将复制到应用内，重复内容自动跳过。")
+                Text("默认关联原文件，请保留原文件的位置。重复内容自动跳过。")
+                Row { Checkbox(copyImport, { copyImport = it }); Text("复制到应用", Modifier.padding(top = 12.dp)) }
                 LazyColumn(Modifier.heightIn(max = 320.dp)) { items(pending) { uri ->
                     var name by remember(uri) { mutableStateOf("读取文件名…") }
                     LaunchedEffect(uri) { name = withContext(Dispatchers.IO) { context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { if (it.moveToFirst()) it.getString(0) else "未知文件" } ?: "未知文件" } }
                     Row { Checkbox(uri in selected, { selected = if (it) selected + uri else selected - uri }); Text(name, Modifier.padding(top = 12.dp)) }
                 } }
             }
-        }, confirmButton = { TextButton(enabled = selected.isNotEmpty(), onClick = { val files = selected.toList(); pending = emptyList(); importFiles(files) }) { Text("导入 ${selected.size} 本") } }, dismissButton = { TextButton(onClick = { pending = emptyList() }) { Text("取消") } })
+        }, confirmButton = { TextButton(enabled = selected.isNotEmpty(), onClick = { val files = selected.toList(); pending = emptyList(); importFiles(files, copyImport, pendingTree) }) { Text("导入 ${selected.size} 本") } }, dismissButton = { TextButton(onClick = { pending = emptyList() }) { Text("取消") } })
     }
     editing?.let { book ->
         var title by remember(book.id) { mutableStateOf(book.title) }
         var author by remember(book.id) { mutableStateOf(book.author) }
         var group by remember(book.id) { mutableStateOf(book.category) }
+        var summary by remember(book.id) { mutableStateOf(book.summary) }
+        var tags by remember(book.id) { mutableStateOf(book.tags.joinToString("，")) }
+        var status by remember(book.id) { mutableStateOf(book.status) }
         var deleting by remember { mutableStateOf(false) }
-        if (deleting) AlertDialog(onDismissRequest = { deleting = false }, title = { Text("删除这本书？") }, text = { Text("应用内副本、进度和书签将一并删除。原文件保留。") }, confirmButton = { TextButton(onClick = { library.remove(book); books = library.books(); editing = null }) { Text("删除") } }, dismissButton = { TextButton(onClick = { deleting = false }) { Text("取消") } })
-        else AlertDialog(onDismissRequest = { editing = null }, title = { Text("编辑书籍") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (deleting) AlertDialog(onDismissRequest = { deleting = false }, title = { Text("删除这本书？") }, text = { Text("仅删除应用内文件并移出书架。外部原文件、阅读进度和书签保留。") }, confirmButton = { TextButton(onClick = { scope.launch {
+            try { withContext(Dispatchers.IO) { library.remove(book) }; books = library.books(); editing = null }
+            catch (error: Exception) { snackbar.showSnackbar(error.message ?: "删除失败，书籍已保留") }
+        } }) { Text("删除") } }, dismissButton = { TextButton(onClick = { deleting = false }) { Text("取消") } })
+        else AlertDialog(onDismissRequest = { editing = null }, title = { Text("编辑书籍") }, text = { Column(Modifier.heightIn(max = 500.dp).verticalScroll(androidx.compose.foundation.rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(title, { title = it }, label = { Text("书名") })
             OutlinedTextField(author, { author = it }, label = { Text("作者") })
             OutlinedTextField(group, { group = it }, label = { Text("分类") })
+            OutlinedTextField(summary, { summary = it }, label = { Text("简介") })
+            OutlinedTextField(tags, { tags = it }, label = { Text("标签（逗号分隔）") })
+            var statusesExpanded by remember { mutableStateOf(false) }
+            Box {
+                OutlinedButton(onClick = { statusesExpanded = true }) { Text(readingStateLabel(status)) }
+                DropdownMenu(statusesExpanded, { statusesExpanded = false }) { listOf("auto", "unread", "reading", "finished", "paused").forEach { value -> DropdownMenuItem(text = { Text(readingStateLabel(value)) }, onClick = { status = value; statusesExpanded = false }) } }
+            }
+            Row {
+                TextButton(onClick = { coverTarget = book; editing = null; coverPicker.launch(arrayOf("image/*")) }) { Text("替换封面") }
+                TextButton(onClick = { scope.launch {
+                    busy = true
+                    try { editing = library.restoreCover(book); books = library.books() }
+                    catch (e: Exception) { snackbar.showSnackbar(e.message ?: "恢复封面失败") }
+                    finally { busy = false }
+                } }) { Text("恢复原封面") }
+            }
+            Text(if (book.sourceReference != null) "已关联原文件" else "应用内副本", style = MaterialTheme.typography.labelMedium)
+            TextButton(onClick = { relinking = book; editing = null; relinker.launch(arrayOf(if (book.file.endsWith(".epub")) "application/epub+zip" else "text/plain")) }) { Text("重新关联原文件") }
             TextButton(onClick = { deleting = true }) { Text("删除书籍", color = MaterialTheme.colorScheme.error) }
-        } }, confirmButton = { TextButton(enabled = title.isNotBlank(), onClick = { library.update(book.copy(title = title.trim(), author = author.trim(), category = group.trim().ifBlank { "未分类" })); books = library.books(); editing = null }) { Text("保存") } }, dismissButton = { TextButton(onClick = { editing = null }) { Text("取消") } })
+        } }, confirmButton = { TextButton(enabled = title.isNotBlank(), onClick = { library.update(book.copy(title = title.trim(), author = author.trim(), category = group.trim().ifBlank { "未分类" }, summary = summary.trim(), tags = tags.split(',', '，').map { it.trim() }.filter { it.isNotEmpty() }.distinct(), status = status)); books = library.books(); editing = null }) { Text("保存") } }, dismissButton = { TextButton(onClick = { editing = null }) { Text("取消") } })
     }
 }
 
@@ -188,7 +264,7 @@ class MainActivity : ComponentActivity() {
     ElevatedCard(onClick = open, modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             if (selected != null) Checkbox(selected, { open() })
-            val cover by produceState<android.graphics.Bitmap?>(null, book.file) { value = withContext(Dispatchers.IO) { android.graphics.BitmapFactory.decodeFile(book.file + ".jpg") } }
+            val cover by produceState<android.graphics.Bitmap?>(null, book.file, book.coverRevision) { value = loadCover(book) }
             Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.medium) {
                 if (cover != null) Image(cover!!.asImageBitmap(), "封面", Modifier.size(56.dp, 80.dp), contentScale = ContentScale.Crop)
                 else Icon(Icons.Outlined.MenuBook, null, Modifier.padding(16.dp).size(32.dp))

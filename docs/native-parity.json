@@ -1,0 +1,502 @@
+{
+  "baseline": "mikufoxxx/Wenku8_Flutter@ebcd7f1",
+  "scope": "Android本地阅读相关全部功能；在线书城、发现和账号页面按用户要求移除",
+  "releaseRequirement": "每项均verified，并具有同一提交的自动验收证据；未全部通过不得发布正式Release",
+  "features": [
+    {
+      "id": "import.file",
+      "feature": "系统文件多选及导入预览",
+      "upstream": [
+        "lib/local_import_review.dart"
+      ],
+      "status": "partial",
+      "tests": []
+    },
+    {
+      "id": "import.folder",
+      "feature": "目录递归扫描、选择确认和重复导入",
+      "upstream": [
+        "lib/local_import_page.dart"
+      ],
+      "status": "partial",
+      "tests": []
+    },
+    {
+      "id": "import.link",
+      "feature": "原文件关联、持久授权、变化检测与重新关联",
+      "upstream": [
+        "android/app/src/main/kotlin/org/mewx/wenku8_flutter/localcore/BookTextLinks.kt"
+      ],
+      "status": "partial",
+      "tests": []
+    },
+    {
+      "id": "import.copy",
+      "feature": "显式复制到应用与导入暂存失败恢复",
+      "upstream": [
+        "android/app/src/main/kotlin/org/mewx/wenku8_flutter/localcore/BookImportQueue.kt"
+      ],
+      "status": "partial",
+      "tests": []
+    },
+    {
+      "id": "import.txt",
+      "feature": "多编码、流式TXT、章节与卷规则",
+      "upstream": [
+        "lib/local_text_rules.dart"
+      ],
+      "status": "partial",
+      "tests": []
+    },
+    {
+      "id": "import.rules",
+      "feature": "自定义目录规则、自动标题及规则超时隔离",
+      "upstream": [
+        "lib/local_import_options.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "import.epub",
+      "feature": "EPUB元数据、封面、目录、原生插图与Readium阅读",
+      "upstream": [
+        "lib/local_books.dart"
+      ],
+      "status": "partial",
+      "tests": []
+    },
+    {
+      "id": "import.mobi",
+      "feature": "MOBI/AZW/AZW3/PRC转换",
+      "upstream": [
+        "android/app/src/main/cpp/mobi_jni.c"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "import.fb2",
+      "feature": "FB2正文、图片与脚注",
+      "upstream": [
+        "lib/local_book_importer.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "import.pdf",
+      "feature": "PDF导入与阅读",
+      "upstream": [
+        "lib/local_book_importer.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "import.office",
+      "feature": "DOC/DOCX/RTF正文与图片",
+      "upstream": [
+        "lib/local_book_importer.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "import.markup",
+      "feature": "HTML/Markdown正文、图片与目录",
+      "upstream": [
+        "lib/local_markup_decode.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "import.zip",
+      "feature": "ZIP批量电子书与同名资源、大小限制",
+      "upstream": [
+        "lib/local_book_archive.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "library.metadata",
+      "feature": "标题作者简介和标签编辑",
+      "upstream": [
+        "lib/local_book_editor.dart"
+      ],
+      "status": "partial",
+      "tests": []
+    },
+    {
+      "id": "library.cover",
+      "feature": "自定义封面与恢复原始封面",
+      "upstream": [
+        "lib/local_book_editor.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "library.category",
+      "feature": "分类创建、改名、删除、批量移动",
+      "upstream": [
+        "lib/book_categories.dart"
+      ],
+      "status": "partial",
+      "tests": []
+    },
+    {
+      "id": "library.filter",
+      "feature": "分类、阅读状态、来源筛选与多种排序",
+      "upstream": [
+        "lib/local_library_preferences.dart"
+      ],
+      "status": "partial",
+      "tests": []
+    },
+    {
+      "id": "library.views",
+      "feature": "列表、网格、立体书架及密度设置",
+      "upstream": [
+        "lib/local_library_preferences.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "library.series",
+      "feature": "同系列分卷合并、排序与拆分，坐标不丢失",
+      "upstream": [
+        "lib/local_book_series.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "library.delete",
+      "feature": "删除本机内容但保留进度书签，失败保留选择",
+      "upstream": [
+        "lib/local_book_removal.dart"
+      ],
+      "status": "partial",
+      "tests": []
+    },
+    {
+      "id": "library.maintenance",
+      "feature": "旧布局升级、重复资源清理与原书保护",
+      "upstream": [
+        "lib/local_book_maintenance.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "reader.progress",
+      "feature": "全书与章节进度、拖动跳转、跨章节连续阅读",
+      "upstream": [
+        "lib/local_book_navigation.dart"
+      ],
+      "status": "partial",
+      "tests": []
+    },
+    {
+      "id": "reader.contents",
+      "feature": "多卷目录、章节跳转、当前位置",
+      "upstream": [
+        "lib/local_epub_navigation.dart"
+      ],
+      "status": "partial",
+      "tests": []
+    },
+    {
+      "id": "reader.bookmarks",
+      "feature": "书签、分类、选区批注、编辑与定位",
+      "upstream": [
+        "lib/library_state.dart"
+      ],
+      "status": "partial",
+      "tests": []
+    },
+    {
+      "id": "reader.highlights",
+      "feature": "选区高亮与批注持久化",
+      "upstream": [
+        "lib/epub_rich_text.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "reader.excerpts",
+      "feature": "摘录图片、分享与原图保存",
+      "upstream": [
+        "android/app/src/main/kotlin/org/mewx/wenku8_flutter/localcore/BookImageStore.kt"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "reader.search",
+      "feature": "全书、当前章节搜索及全部结果分页",
+      "upstream": [
+        "lib/local_book_navigation.dart"
+      ],
+      "status": "partial",
+      "tests": []
+    },
+    {
+      "id": "reader.typography",
+      "feature": "字体、字号、粗细、行高、字距和四边距，每书保存",
+      "upstream": [
+        "lib/library_state.dart"
+      ],
+      "status": "partial",
+      "tests": []
+    },
+    {
+      "id": "reader.fonts",
+      "feature": "导入字体、离线字体与字体管理",
+      "upstream": [
+        "lib/library_state.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "reader.layout",
+      "feature": "横竖排、滚动、双页、续段与翻页模式",
+      "upstream": [
+        "lib/local_epub_markup.dart"
+      ],
+      "status": "partial",
+      "tests": []
+    },
+    {
+      "id": "reader.colors",
+      "feature": "文字背景色、背景图片与透明度",
+      "upstream": [
+        "lib/library_state.dart"
+      ],
+      "status": "partial",
+      "tests": []
+    },
+    {
+      "id": "reader.controls",
+      "feature": "音量键、亮度手势、屏幕常亮、沉浸阅读",
+      "upstream": [
+        "android/app/src/main/kotlin/org/mewx/wenku8_flutter/ReaderControlsPlugin.kt"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "reader.auto",
+      "feature": "自动阅读、翻页速度与定时停止",
+      "upstream": [
+        "lib/library_state.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "reader.epub-semantics",
+      "feature": "ruby、脚注弹窗、分隔、图片缩放和混合书写",
+      "upstream": [
+        "lib/local_epub_markup.dart"
+      ],
+      "status": "partial",
+      "tests": []
+    },
+    {
+      "id": "reader.languages",
+      "feature": "每书显示语言与双语内容选择",
+      "upstream": [
+        "lib/library_state.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "speech.system",
+      "feature": "系统语音、语种声线、0.5–3倍速",
+      "upstream": [
+        "android/app/src/main/kotlin/org/mewx/wenku8_flutter/SystemSpeechPlugin.kt"
+      ],
+      "status": "partial",
+      "tests": []
+    },
+    {
+      "id": "speech.continuous",
+      "feature": "全书连续朗读、段落跟随和进度",
+      "upstream": [
+        "lib/reader_speech_highlight.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "speech.background",
+      "feature": "后台播放、锁屏和音频焦点",
+      "upstream": [
+        "lib/listening/widgets.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "speech.timer",
+      "feature": "睡眠定时、暂停恢复与章节结束",
+      "upstream": [
+        "lib/listening/widgets.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "speech.online",
+      "feature": "在线自然语音与自定义Microsoft SSML端点",
+      "upstream": [
+        "lib/listening/widgets.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "dictionary.mdict",
+      "feature": "MDict离线词典导入与查词",
+      "upstream": [
+        "lib/dictionary_engine.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "dictionary.stardict",
+      "feature": "StarDict离线词典导入与查词",
+      "upstream": [
+        "lib/dictionary_stardict.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "dictionary.kindle",
+      "feature": "Kindle离线词典导入与查词",
+      "upstream": [
+        "lib/dictionary_mobi.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "cloud.webdav",
+      "feature": "WebDAV/OpenList浏览和导入",
+      "upstream": [
+        "lib/cloud_sources.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "cloud.quark",
+      "feature": "夸克网盘实验导入",
+      "upstream": [
+        "lib/cloud_sources.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "sync.backup",
+      "feature": "原书、记录、分类、设置完整备份及合并恢复",
+      "upstream": [
+        "lib/book_sync.dart"
+      ],
+      "status": "partial",
+      "tests": []
+    },
+    {
+      "id": "sync.s3",
+      "feature": "S3原书、进度、书签、分类同步",
+      "upstream": [
+        "lib/cloud_s3.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "sync.lan",
+      "feature": "局域网发现、双端首次确认、原书传输和续读",
+      "upstream": [
+        "lib/local_book_handoff.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "sync.conflict",
+      "feature": "前台增量记录同步、同时编辑冲突解决",
+      "upstream": [
+        "lib/book_sync.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "stats.history",
+      "feature": "保留阅读记录、时间范围和隐藏记录",
+      "upstream": [
+        "lib/library_state.dart"
+      ],
+      "status": "partial",
+      "tests": []
+    },
+    {
+      "id": "stats.reports",
+      "feature": "总览、节律、书籍、书签、触摸活动与自定义范围",
+      "upstream": [
+        "lib/reading_report_range.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "stats.exports",
+      "feature": "八种报告、日历、摘录卡片预览与导出",
+      "upstream": [
+        "lib/reading_report_options.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "widgets.android",
+      "feature": "小组件、独立配置、尺寸、深浅色与阅读跳转",
+      "upstream": [
+        "android/app/src/main/kotlin/org/mewx/wenku8_flutter/ReadingWidgetsPlugin.kt"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "migration.flutter",
+      "feature": "原Flutter本地原书、元数据、分卷、进度与书签导入",
+      "upstream": [
+        "lib/local_books.dart"
+      ],
+      "status": "pending",
+      "tests": []
+    },
+    {
+      "id": "appearance.md3",
+      "feature": "Compose三栏导航、MD3和动态深浅色",
+      "upstream": [
+        "lib/local_library_page.dart"
+      ],
+      "status": "partial",
+      "tests": []
+    }
+  ]
+}

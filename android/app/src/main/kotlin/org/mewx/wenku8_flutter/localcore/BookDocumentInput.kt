@@ -14,9 +14,9 @@ import java.util.zip.ZipException
 /** Reopen a granted descriptor, not the underlying scoped-storage path. Each
  * stream owns its duplicate and uses positional reads, including nested DOCX
  * image reads while the XML stream remains open. */
-internal class BookDocumentInput private constructor(val file: File?, val descriptor: Int?, val size: Long) {
+internal class BookDocumentInput private constructor(val file: File?, val descriptor: Int?, val size: Long, private val base: Long = 0) {
     constructor(file: File) : this(file, null, file.length())
-    constructor(descriptor: Int, size: Long) : this(null, descriptor, size)
+    constructor(descriptor: Int, size: Long, offset: Long = 0) : this(null, descriptor, size, offset)
     fun length() = size
     fun inputStream(): InputStream {
         file?.let { return it.inputStream() }
@@ -27,7 +27,7 @@ internal class BookDocumentInput private constructor(val file: File?, val descri
             override fun read(bytes: ByteArray, offset: Int, length: Int): Int {
                 if (length == 0) return 0
                 if (position >= size) return -1
-                val count = owner.channel.read(ByteBuffer.wrap(bytes, offset, minOf(length.toLong(), size - position).toInt()), position)
+                val count = owner.channel.read(ByteBuffer.wrap(bytes, offset, minOf(length.toLong(), size - position).toInt()), base + position)
                 if (count > 0) position += count
                 return count
             }

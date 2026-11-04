@@ -45,7 +45,7 @@ internal class BookTextLinks(private val context: Context) {
             context.contentResolver.releasePersistableUriPermission(grant, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         } catch (_: SecurityException) { /* Already revoked by the user. */ }
     }
-    private fun source(reference: String): Uri = records().optJSONObject(reference)?.getString("uri")?.let(Uri::parse)
+    fun source(reference: String): Uri = records().optJSONObject(reference)?.getString("uri")?.let(Uri::parse)
         ?: error("原文件授权已失效，请重新定位原文件")
 
     /** A live, read-only descriptor lease, not a second file or saved path.
@@ -170,7 +170,7 @@ internal fun linkedDocumentRange(startOffset: Long, declaredLength: Long, descri
         require(descriptorSize >= startOffset) { "原文件为空或超过 512 MiB" }
         descriptorSize - startOffset
     }
-    require(size in 1..BookArchiveImport.MAX_ARCHIVE) { "原文件为空或超过 512 MiB" }
+    require(size in 1..512L * 1024 * 1024) { "原文件为空或超过 512 MiB" }
     require(startOffset <= Long.MAX_VALUE - size) { "原文件位置有误，请重新定位" }
     return LinkedDocumentRange(startOffset, size)
 }

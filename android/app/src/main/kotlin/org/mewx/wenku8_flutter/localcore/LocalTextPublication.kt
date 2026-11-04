@@ -19,6 +19,10 @@ internal object LocalTextPublication {
     }
 
     fun prepare(source: File, output: File, title: String, workspace: File, encoding: String = "auto") {
+        prepare(BookDocumentInput(source), output, title, workspace, encoding)
+    }
+
+    fun prepare(source: BookDocumentInput, output: File, title: String, workspace: File, encoding: String = "auto") {
         BookImportWorkspace(workspace).use { session ->
             val normalized = File(session.root, "normalized.txt")
             BookTextDecoder.normalize(source, normalized, encoding)

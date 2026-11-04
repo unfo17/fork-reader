@@ -180,3 +180,7 @@ key.properties
 !android/gradle/wrapper/gradle-wrapper.jar
 !android/app/src/composeTest/
 !android/app/src/composeTest/**
+
+!tools/check_native_release.py
+!tools/tests/
+!tools/tests/**
