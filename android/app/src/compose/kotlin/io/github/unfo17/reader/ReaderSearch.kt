@@ -10,7 +10,7 @@ import kotlinx.coroutines.launch
 
 enum class ReaderSearchScope(val label: String) { BOOK("全书"), VOLUME("当前卷"), CHAPTER("当前章节") }
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable fun ReaderSearch(library: Library, current: Book, series: BookSeries?, chapterHref: String?, onDismiss: () -> Unit, onNavigate: (PublicationSearch.Hit) -> Unit) {
+@Composable fun ReaderSearch(library: Library, current: Book, series: BookSeries?, chapterLocator: org.readium.r2.shared.publication.Locator?, onDismiss: () -> Unit, onNavigate: (PublicationSearch.Hit) -> Unit) {
     var query by remember { mutableStateOf("") }
     var searched by remember { mutableStateOf("") }
     var searchScope by remember { mutableStateOf(ReaderSearchScope.BOOK) }
@@ -46,7 +46,8 @@ enum class ReaderSearchScope(val label: String) { BOOK("全书"), VOLUME("当前
                     val originals = library.books().associateBy { it.id }
                     val books = ids.mapNotNull { originals[it] }
                     if (books.size != ids.size) error = "部分分卷已移除，请重新导入后搜索"
-                    else { val session = PublicationSearch(library, books, searched, if (searchScope == ReaderSearchScope.CHAPTER) chapterHref else null); cursor = session; load(session) }
+                    else if (searchScope == ReaderSearchScope.CHAPTER && chapterLocator == null) error = "正文尚未定位，请稍后重试"
+                    else { val session = PublicationSearch(library, books, searched, if (searchScope == ReaderSearchScope.CHAPTER) chapterLocator?.href?.toString() else null, if (searchScope == ReaderSearchScope.CHAPTER) chapterLocator else null); cursor = session; load(session) }
                 }) { Text("搜索") }
                 if (busy) TextButton(onClick = { job?.cancel(); cursor?.close(); cursor = null; error = "搜索已停止，已加载结果保留" }) { Text("停止搜索") }
             } }

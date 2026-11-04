@@ -13,7 +13,7 @@ import org.readium.r2.shared.publication.services.content.Content
 import org.readium.r2.shared.publication.services.content.content
 
 /** One forward iterator across originals. Paging resumes within a paragraph, without rescanning. */
-class PublicationSearch(private val library: Library, private val books: List<Book>, query: String, private val chapterHref: String? = null) : AutoCloseable {
+class PublicationSearch(private val library: Library, private val books: List<Book>, query: String, private val chapterHref: String? = null, private val chapterLocator: Locator? = null) : AutoCloseable {
     data class Hit(val bookId: String, val bookTitle: String, val locator: Locator, val snippet: String, val offset: Int)
     data class Page(val hits: List<Hit>, val finished: Boolean)
     private val term = query.trim().also { require(it.isNotEmpty() && it.length <= 120) { "搜索文字需要 1–120 个字符" } }
@@ -26,6 +26,8 @@ class PublicationSearch(private val library: Library, private val books: List<Bo
     private var iterator: Content.Iterator? = null
     private var pending: Content.TextualElement? = null
     private var offset = 0
+    private var chapterWindow: ChapterSearchWindow? = null
+    private var pendingWindow: ChapterSearchWindow.Window? = null
     private var finished = false
     suspend fun nextPage(size: Int = 50): Page = mutex.withLock { withContext(Dispatchers.IO) {
         require(size in 1..100)
@@ -38,14 +40,15 @@ class PublicationSearch(private val library: Library, private val books: List<Bo
             if (paragraph != null) {
                 val text = paragraph.text.orEmpty()
                 val start = text.indexOf(term, offset, ignoreCase = true)
-                if (start < 0) { pending = null; continue }
+                if (start < 0 || start + term.length > (pendingWindow?.end ?: text.length)) { pending = null; continue }
                 val end = start + term.length
                 offset = end
                 val before = suffix(paragraph.locator.text.before.orEmpty() + text.substring(0, start), 80)
                 val after = prefix(text.substring(end) + paragraph.locator.text.after.orEmpty(), 100)
                 val match = text.substring(start, end)
                 val locator = paragraph.locator.copy(text = Locator.Text(before, match, after))
-                hits += Hit(current!!.id, current!!.title, locator, before + match + after, start)
+                val snippet = pendingWindow?.let { window -> suffix(text.substring(window.start, start), 80) + match + prefix(text.substring(end, window.end), 100) } ?: (before + match + after)
+                hits += Hit(current!!.id, current!!.title, locator, snippet, start)
                 continue
             }
             if (iterator == null) {
@@ -56,6 +59,7 @@ class PublicationSearch(private val library: Library, private val books: List<Bo
                 val content = try {
                     val link = chapterHref?.let { href -> opened.readingOrder.firstOrNull { resource(it.href.toString()) == resource(href) } }
                     require(chapterHref == null || link != null) { "当前章节已不在原书中" }
+                    chapterWindow = chapterHref?.let { ChapterSearchWindow.create(opened, it, chapterLocator) }
                     opened.content(link?.let { opened.locatorFromLink(it) })?.iterator() ?: error("《${book.title}》无法提取正文")
                 } catch (e: Exception) { opened.close(); throw e }
                 synchronized(lifecycleLock) {
@@ -67,7 +71,11 @@ class PublicationSearch(private val library: Library, private val books: List<Bo
             if (element == null || chapterHref != null && resource(element.locator.href.toString()) != resource(chapterHref)) {
                 publication?.close(); publication = null; iterator = null; continue
             }
-            if (element is Content.TextualElement && !element.text.isNullOrEmpty()) { pending = element; offset = 0 }
+            if (element is Content.TextualElement && !element.text.isNullOrEmpty()) {
+                pendingWindow = chapterWindow?.window(element)
+                if (pendingWindow?.let { it.start >= it.end } == true) continue
+                pending = element; offset = pendingWindow?.start ?: 0
+            }
         }
         Page(hits, finished)
     } }

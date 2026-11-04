@@ -62,6 +62,11 @@ class ReaderLayoutTest {
                 val navigator = assertViewport(scenario)
                 withContext(Dispatchers.Main) { navigator.go(nextChapter) }
                 assertViewport(scenario, next = true)
+                var reader: ReaderActivity? = null
+                scenario.onActivity { reader = it }
+                val origin = withContext(Dispatchers.Main) { reader!!.captureSearchLocator() }
+                assertEquals(nextChapter.href.toString(), origin?.href?.toString())
+                assertNotNull(origin?.toJSON()?.optJSONObject("locations")?.optJSONObject("forkSourceRange")?.optJSONObject("start"))
                 scenario.recreate(); assertViewport(scenario)
             }
             // Small default spacing and negative spacing must remain exact at a larger font size.

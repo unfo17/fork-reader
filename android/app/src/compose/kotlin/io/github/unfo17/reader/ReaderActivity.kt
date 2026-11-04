@@ -88,6 +88,7 @@ class ReaderActivity : FragmentActivity() {
     private var speechReady = false
     private var speaking by mutableStateOf(false)
     private var search by mutableStateOf(false)
+    private var searchOrigin by mutableStateOf<Locator?>(null)
     private var notice by mutableStateOf<String?>(null)
     private var progression by mutableDoubleStateOf(0.0)
 
@@ -288,6 +289,46 @@ class ReaderActivity : FragmentActivity() {
             } catch (e: Exception) { notice = e.message ?: "无法朗读" }
         }
     }
+    internal suspend fun captureSearchLocator(): Locator? {
+        val fragment = navigator ?: return null
+        val before = fragment.currentLocator.value ?: return null
+        val anchor = fragment.evaluateJavascript("""
+            (function(){
+              function path(e){var p=[];while(e&&e.nodeType===1){var i=1,n=e.previousElementSibling;while(n){if(n.tagName===e.tagName)i++;n=n.previousElementSibling;}p.unshift(e.tagName.toLowerCase()+':nth-of-type('+i+')');e=e.parentElement;}return p.join(' > ');}
+              var style=getComputedStyle(document.documentElement),right=style.writingMode.indexOf('vertical')>=0||style.direction==='rtl';
+              var x=right?innerWidth-2:2,ys=[2,8,24,48];
+              for(var i=0;i<ys.length;i++){
+                var r=document.caretRangeFromPoint(x,ys[i]);if(!r)continue;
+                var n=r.startContainer;if(n.nodeType!==3||!n.textContent.trim())continue;
+                var offset=Math.min(r.startOffset,n.length-1),probe=document.createRange();probe.setStart(n,offset);probe.setEnd(n,offset+1);
+                var b=probe.getBoundingClientRect();if(b.bottom<=0||b.top>=innerHeight||b.right<=0||b.left>=innerWidth)continue;
+                return {resource:location.href,cssSelector:path(n.parentElement),forkSourceRange:{start:{selector:path(n.parentElement),childNodeIndex:Array.prototype.indexOf.call(n.parentNode.childNodes,n),offset:offset,nodeType:3}}};
+              }
+              return {resource:location.href};
+            })()
+        """.trimIndent())?.let { runCatching { JSONObject(it) }.getOrNull() }
+        val after = fragment.currentLocator.value ?: before
+        if (anchor == null) return after
+        // Readium emits currentLocator asynchronously after a turn. Use the visible document's
+        // resource identity so a fast search cannot pair the new page's source point with the old href.
+        val uri = android.net.Uri.parse(anchor.optString("resource"))
+        val path = uri.encodedPath?.takeIf { uri.scheme == "https" && uri.host == "readium" && it.startsWith("/publication/") }?.removePrefix("/publication/")
+        val visibleLink = publication?.readingOrder?.firstOrNull { link ->
+            path != null && android.net.Uri.decode(ChapterSearchWindow.resource(link.href.toString()).removePrefix("/")) == android.net.Uri.decode(path)
+        }
+        val source = if (visibleLink != null && ChapterSearchWindow.resource(after.href.toString()) != ChapterSearchWindow.resource(visibleLink.href.toString())) publication?.locatorFromLink(visibleLink) ?: after else after
+        val json = source.toJSON()
+        val locations = json.optJSONObject("locations") ?: JSONObject().also { json.put("locations", it) }
+        listOf("cssSelector", "forkSourceRange").forEach { key -> if (anchor.has(key)) locations.put(key, anchor.get(key)) }
+        return Locator.fromJSON(json) ?: source
+    }
+    private fun openSearch() {
+        lifecycleScope.launch {
+            try { searchOrigin = captureSearchLocator(); search = true }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { notice = e.message ?: "正文尚未定位，请稍后重试" }
+        }
+    }
     private fun mark() {
         val locator = navigator?.currentLocator?.value ?: return
         try {
@@ -299,7 +340,6 @@ class ReaderActivity : FragmentActivity() {
 
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable private fun ReaderScreen() {
-        val currentLocation = navigator?.currentLocator?.collectAsState()?.value
         BackHandler(enabled = pendingRange != null) { cancelRangeAdjustment() }
         Scaffold(topBar = { TopAppBar(title = { Text(series?.let { "${it.title} · ${it.volumes.firstOrNull { part -> part.bookId == book.id }?.title ?: book.title}" } ?: book.title, maxLines = 1) }, navigationIcon = { IconButton(onClick = { if (pendingRange != null) cancelRangeAdjustment() else finish() }) { Icon(Icons.Outlined.ArrowBack, "返回") } }, actions = {
             IconButton(onClick = { mark() }, enabled = navigator != null && !loading && pendingRange == null) { Icon(Icons.Outlined.BookmarkAdd, "添加书签") }
@@ -317,7 +357,7 @@ class ReaderActivity : FragmentActivity() {
             BottomAppBar {
             TextButton(onClick = { toc = true }, enabled = publication != null) { Text("目录") }
             TextButton(onClick = { marks = true }, enabled = pendingRange == null) { Text("书签") }
-            IconButton(onClick = { search = true }, enabled = !loading && failure == null) { Icon(Icons.Outlined.Search, "全文搜索") }
+            IconButton(onClick = { openSearch() }, enabled = !loading && failure == null) { Icon(Icons.Outlined.Search, "全文搜索") }
             IconButton(onClick = { toggleSpeech() }, enabled = !loading && failure == null) { Icon(if (speaking) Icons.Outlined.Stop else Icons.Outlined.VolumeUp, if (speaking) "停止朗读" else "朗读") }
             Spacer(Modifier.weight(1f))
             Text("${(progression * 100).toInt()}%", Modifier.padding(12.dp))
@@ -382,7 +422,7 @@ class ReaderActivity : FragmentActivity() {
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Exception) { notice = e.message ?: "书签定位失败" }
         } })
-        if (search) ReaderSearch(library, currentBook(), series, currentLocation?.href?.toString(), { search = false }, { hit -> openVolume(hit.bookId, hit.locator); search = false })
+        if (search) ReaderSearch(library, currentBook(), series, searchOrigin, { search = false }, { hit -> openVolume(hit.bookId, hit.locator); search = false })
         if (toc) ModalBottomSheet(onDismissRequest = { toc = false }) {
             Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
                 Text("目录", style = MaterialTheme.typography.titleLarge)
