@@ -261,8 +261,11 @@
       "upstream": [
         "lib/library_state.dart"
       ],
-      "status": "pending",
-      "tests": []
+      "status": "partial",
+      "tests": [
+        "io.github.unfo17.reader.FontTest.importedFontIsActuallyLoadedByReadiumAndRemovalResetsPreference",
+        "io.github.unfo17.reader.FontTest.catalogueMatchesUpstreamAndInvalidFontsLeaveNoEntry"
+      ]
     },
     {
       "id": "reader.layout",

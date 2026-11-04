@@ -1,0 +1,162 @@
+[
+  {
+    "id": "sourceHanSerif",
+    "name": "思源宋体",
+    "fileName": "SourceHanSerifCN-2.003.otf",
+    "bytes": 22613144,
+    "transferBytes": 22613144,
+    "archiveEntry": null,
+    "description": "简体宋体 · 书页般的清晰与层次",
+    "urls": [
+      "https://mirror.iscas.ac.cn/adobe-fonts/source-han-serif/Variable/OTF/Subset/SourceHanSerifCN-VF.otf",
+      "https://raw.githubusercontent.com/adobe-fonts/source-han-serif/2.003R/Variable/OTF/Subset/SourceHanSerifCN-VF.otf"
+    ]
+  },
+  {
+    "id": "sourceHanSans",
+    "name": "思源黑体",
+    "fileName": "SourceHanSansCN-2.005.otf",
+    "bytes": 15636088,
+    "transferBytes": 15636088,
+    "archiveEntry": null,
+    "description": "简体黑体 · 简洁利落，多种字重",
+    "urls": [
+      "https://mirror.iscas.ac.cn/adobe-fonts/source-han-sans/Variable/OTF/Subset/SourceHanSansCN-VF.otf",
+      "https://raw.githubusercontent.com/adobe-fonts/source-han-sans/2.005R/Variable/OTF/Subset/SourceHanSansCN-VF.otf"
+    ]
+  },
+  {
+    "id": "lxgwWenKai",
+    "name": "霞鹜文楷屏幕版",
+    "fileName": "LXGWWenKaiGBScreen-1.530.ttf",
+    "bytes": 26456786,
+    "transferBytes": 26456786,
+    "archiveEntry": null,
+    "description": "简体文楷 · 为屏幕阅读调整笔画",
+    "urls": [
+      "https://github.com/lxgw/LxgwWenKai-Screen/releases/download/v1.530/LXGWWenKaiGBScreen.ttf"
+    ]
+  },
+  {
+    "id": "zhuqueFangsong",
+    "name": "朱雀仿宋",
+    "fileName": "ZhuqueFangsong-0.212.ttf",
+    "bytes": 8824084,
+    "transferBytes": 5743932,
+    "archiveEntry": "ZhuqueFangsong-Regular.ttf",
+    "description": "简体仿宋 · 轻盈书卷气，字体预览版",
+    "urls": [
+      "https://github.com/TrionesType/zhuque/releases/download/v0.212/ZhuqueFangsong-v0.212.zip"
+    ]
+  },
+  {
+    "id": "iansui",
+    "name": "芫荽",
+    "fileName": "Iansui-1.020.ttf",
+    "bytes": 9447424,
+    "transferBytes": 9447424,
+    "archiveEntry": null,
+    "description": "繁体楷书 · 台湾字形与温润笔意",
+    "urls": [
+      "https://raw.githubusercontent.com/ButTaiwan/iansui/v1.020/fonts/ttf/Iansui-Regular.ttf"
+    ]
+  },
+  {
+    "id": "lxgwZhenKai",
+    "name": "霞鹜臻楷",
+    "fileName": "LXGWZhenKaiSlabGB-0.827.ttf",
+    "bytes": 17453376,
+    "transferBytes": 17453376,
+    "archiveEntry": null,
+    "description": "简体楷书 · 饱满笔画，清楚耐读",
+    "urls": [
+      "https://github.com/lxgw/LxgwZhenKai/releases/download/v0.827/LXGWZhenKaiSlabGB-Regular.ttf"
+    ]
+  },
+  {
+    "id": "lxgwMarkerGothic",
+    "name": "霞鹜漫黑",
+    "fileName": "LXGWMarkerGothic-1.004.ttf",
+    "bytes": 3190368,
+    "transferBytes": 3703389,
+    "archiveEntry": "LxgwMarkerGothic-v1.004/fonts/ttf/LXGWMarkerGothic-Regular.ttf",
+    "description": "简繁漫黑 · 轻快的马克笔笔触",
+    "urls": [
+      "https://github.com/lxgw/LxgwMarkerGothic/releases/download/v1.004/LxgwMarkerGothic-v1.004.zip"
+    ]
+  },
+  {
+    "id": "xiaolai",
+    "name": "小赖",
+    "fileName": "Xiaolai-3.126.ttf",
+    "bytes": 22220806,
+    "transferBytes": 22220806,
+    "archiveEntry": null,
+    "description": "简繁手写 · 圆润活泼，字库较全",
+    "urls": [
+      "https://github.com/lxgw/kose-font/releases/download/v3.126/Xiaolai-Regular.ttf"
+    ]
+  },
+  {
+    "id": "yozai",
+    "name": "悠哉",
+    "fileName": "Yozai-Medium-0.868.ttf",
+    "bytes": 15238394,
+    "transferBytes": 15238394,
+    "archiveEntry": null,
+    "description": "简繁手写 · 自然舒展，中等字重",
+    "urls": [
+      "https://github.com/lxgw/yozai-font/releases/download/v0.868/Yozai-Medium.ttf"
+    ]
+  },
+  {
+    "id": "sourceHanSerifTW",
+    "name": "思源宋体 · 繁体",
+    "fileName": "SourceHanSerifTW-2.003.otf",
+    "bytes": 15175972,
+    "transferBytes": 15175972,
+    "archiveEntry": null,
+    "description": "繁体宋体 · 台湾字形，多种字重",
+    "urls": [
+      "https://mirror.iscas.ac.cn/adobe-fonts/source-han-serif/Variable/OTF/Subset/SourceHanSerifTW-VF.otf",
+      "https://raw.githubusercontent.com/adobe-fonts/source-han-serif/2.003R/Variable/OTF/Subset/SourceHanSerifTW-VF.otf"
+    ]
+  },
+  {
+    "id": "sourceHanSansTW",
+    "name": "思源黑体 · 繁体",
+    "fileName": "SourceHanSansTW-2.005.otf",
+    "bytes": 10495320,
+    "transferBytes": 10495320,
+    "archiveEntry": null,
+    "description": "繁体黑体 · 台湾字形，清晰均衡",
+    "urls": [
+      "https://mirror.iscas.ac.cn/adobe-fonts/source-han-sans/Variable/OTF/Subset/SourceHanSansTW-VF.otf",
+      "https://raw.githubusercontent.com/adobe-fonts/source-han-sans/2.005R/Variable/OTF/Subset/SourceHanSansTW-VF.otf"
+    ]
+  },
+  {
+    "id": "lxgwWenKaiTC",
+    "name": "霞鹜文楷 TC",
+    "fileName": "LXGWWenKaiTC-1.530.ttf",
+    "bytes": 15341148,
+    "transferBytes": 15341148,
+    "archiveEntry": null,
+    "description": "繁体文楷 · 传承字形，柔和书写感",
+    "urls": [
+      "https://github.com/lxgw/LxgwWenkaiTC/releases/download/v1.530/LXGWWenKaiTC-Regular.ttf"
+    ]
+  },
+  {
+    "id": "openHuninn",
+    "name": "jf open 粉圆",
+    "fileName": "jf-openhuninn-2.1.ttf",
+    "bytes": 4911464,
+    "transferBytes": 4911464,
+    "archiveEntry": null,
+    "description": "繁体圆体 · 台湾常用字，轻盈亲切",
+    "urls": [
+      "https://github.com/justfont/open-huninn-font/releases/download/v2.1/jf-openhuninn-2.1.ttf"
+    ]
+  }
+]

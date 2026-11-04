@@ -31,6 +31,8 @@ import org.json.JSONObject
 import org.readium.r2.navigator.epub.EpubNavigatorFactory
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
 import org.readium.r2.navigator.epub.EpubPreferences
+import org.readium.r2.navigator.preferences.FontFamily
+import org.readium.r2.shared.util.AbsoluteUrl
 import org.readium.r2.navigator.preferences.Theme
 import org.readium.r2.navigator.preferences.TextAlign
 import org.readium.r2.navigator.preferences.ColumnCount
@@ -57,6 +59,8 @@ class ReaderActivity : FragmentActivity() {
     private var failure by mutableStateOf<String?>(null)
     private var toc by mutableStateOf(false)
     private var marks by mutableStateOf(false)
+    private var fonts by mutableStateOf(false)
+    private var selectedFontFile: File? = null
     private var settings by mutableStateOf(false)
     private var options by mutableStateOf(ReaderOptions())
     private var fontSize by mutableFloatStateOf(100f)
@@ -98,7 +102,10 @@ class ReaderActivity : FragmentActivity() {
         setContent { ReaderTheme { ReaderScreen() } }
         lifecycleScope.launch {
             try {
-                val pub = withContext(Dispatchers.IO) { library.openPublication(book) }
+                selectedFontFile = withContext(Dispatchers.IO) {
+                    FontStore(this@ReaderActivity).fonts().firstOrNull { it.id == options.fontId }?.let { File(it.file).takeIf { file -> file.isFile } }
+                }
+                val pub = withContext(Dispatchers.IO) { library.openPublication(book, selectedFontFile) }
                 publication = pub
                 val initial = book.locator?.let { Locator.fromJSON(JSONObject(it)) }
                     ?: if (book.progress > 0) withContext(Dispatchers.IO) {
@@ -107,7 +114,12 @@ class ReaderActivity : FragmentActivity() {
                     } else null
                 supportFragmentManager.fragmentFactory = EpubNavigatorFactory(pub).createFragmentFactory(
                     initialLocator = initial,
-                    initialPreferences = readerPreferences()
+                    initialPreferences = readerPreferences(),
+                    configuration = EpubNavigatorFragment.Configuration {
+                        selectedFontFile?.let { file -> addFontFamilyDeclaration(FontFamily(options.fontId)) {
+                            addFontFace { addSource(ReadiumEngine.fontUrl(file)); setFontWeight(100..900) }
+                        } }
+                    }
                 )
                 loading = false
             } catch (e: Exception) { failure = e.message ?: "无法打开书籍"; loading = false }
@@ -123,7 +135,8 @@ class ReaderActivity : FragmentActivity() {
         publisherStyles = options.publisherStyles, verticalText = options.vertical,
         columnCount = if (options.twoPages) ColumnCount.TWO else ColumnCount.ONE,
         fontWeight = options.weight.toDouble(),
-        textColor = parseColor(options.textColor), backgroundColor = parseColor(options.backgroundColor)
+        textColor = parseColor(options.textColor), backgroundColor = parseColor(options.backgroundColor),
+        fontFamily = options.fontId.takeIf { it.isNotEmpty() && selectedFontFile != null }?.let { FontFamily(it) }
     )
     private fun parseColor(value: String): Color? = runCatching { Color(android.graphics.Color.parseColor(value)) }.getOrNull()
     private fun applyWindowOptions() {
@@ -274,9 +287,16 @@ class ReaderActivity : FragmentActivity() {
                 }
             }
         }
+        if (fonts) FontManager(onDismiss = { fonts = false }, selected = options.fontId, onSelect = { identity ->
+            options = options.copy(fontId = identity, publisherStyles = if (identity.isEmpty()) options.publisherStyles else false)
+            applySettings()
+            fonts = false
+            recreate()
+        })
         if (settings) ModalBottomSheet(onDismissRequest = { settings = false }) {
             Column(Modifier.padding(24.dp).heightIn(max = 600.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("阅读设置", style = MaterialTheme.typography.titleLarge)
+                OutlinedButton(onClick = { settings = false; fonts = true }) { Text("字体管理与下载") }
                 Text("字号 ${(fontSize).toInt()}%")
                 Slider(fontSize, { fontSize = it; applySettings() }, valueRange = 75f..200f)
                 Row { Text("夜间阅读", Modifier.weight(1f)); Switch(night, { night = it; applySettings() }) }

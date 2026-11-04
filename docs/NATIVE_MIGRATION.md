@@ -16,7 +16,7 @@
 | BookDocumentInput / BookDocumentZip | 原文件及描述符输入、受限 ZIP 读取 |
 | LinkedTextFile / BookTextLinks | 分块读取、授权租约、关联原书、变化检测和重新关联 |
 | BookImportQueue / BookImportWorkspace | 逐文件导入暂存、失败清理、会话隔离 |
-| BookEpubWriter | TXT 内容打包成可重建 EPUB，保留原文件；唯一调整为内联原 512MiB 输出限制，解除缺失 BookArchiveImport 的依赖 |
+| BookEpubWriter | TXT 内容打包成可重建 EPUB，保留原文件；内联原 512MiB 输出限制，并补齐标准 XHTML head、EPUB 元数据及未压缩 mimetype，保证 Readium 正确注入样式与脚本 |
 | SpeechLocalePolicy | 沿用原系统朗读的语言规则 |
 
 新增 LocalTextPublication 只负责把原有解码器和打包器连接到 Readium；默认章节／卷规则和等号装饰标题处理来自 `lib/local_import_options.dart` 与 `lib/local_text_rules.dart`。未开放自定义正则设置，原项目对规则超时的隔离策略还需迁移。
@@ -44,7 +44,7 @@
 | MOBI/AZW/FB2/PDF/DOC/DOCX/RTF/HTML/MD/ZIP 导入 | 未迁移 |
 | 系列／卷合并、卷排序、维护升级 | 未迁移 |
 | 3D 书架、密度／网格设置 | 未迁移，当前为 MD3 列表 |
-| 手动封面、字体导入、详细排版、竖排控制 | 封面和上述排版控制已实现；字体与四边独立页边距尚待完成 |
+| 手动封面、字体导入、详细排版、竖排控制 | 封面、上述排版、TTF/OTF 导入与移除已实现；沿用上游13款字体目录支持按需下载，应用字体与阅读字体分别选择；四边独立页边距尚待完成 |
 | 选区批注、高亮、摘录图片 | 未迁移；当前为位置书签 |
 | 在线语音、后台朗读、锁屏、定时、自动翻页 | 未迁移 |
 | MDict/StarDict/Kindle 离线词典 | 未迁移 |
@@ -60,7 +60,7 @@ Readium 官方 EPUB Navigator 基于 Fragment/WebView，嵌入 Compose 的 Andro
 
 ## 验证
 
-设备测试共八项：五种 TXT 编码、长段落、默认标题规则、Readium 渲染、关联与重新关联、文件变动、删除后记录恢复、描述符偏移、封面与每书设置备份、非法备份回滚等。另有两项发布门槛测试。当前验证设备为 Android 15 / API 35。尚未宣称对全部设备和全部上游能力完成验收。
+设备测试共十项：五种 TXT 编码、长段落、默认标题规则、Readium 渲染、关联与重新关联、文件变动、删除后记录恢复、描述符偏移、封面与每书设置备份、非法备份回滚、字体校验及 WebView 实际加载导入字体。另有两项发布门槛测试。当前验证设备为 Android 15 / API 35。尚未宣称对全部设备和全部上游能力完成验收。
 
 ## 完整对齐与发布门槛
 

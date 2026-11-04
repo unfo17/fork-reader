@@ -36,19 +36,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable fun ReaderTheme(content: @Composable () -> Unit) {
-    val context = LocalContext.current
-    val dark = isSystemInDarkTheme()
-    MaterialTheme(colorScheme = if (android.os.Build.VERSION.SDK_INT >= 31) {
-        if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-    } else if (dark) darkColorScheme() else lightColorScheme(), content = content)
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable fun LibraryApp() {
     val context = LocalContext.current
     val library = remember { Library.get(context) }
     var books by remember { mutableStateOf(library.books()) }
+    var appFonts by remember { mutableStateOf(false) }
+    var appearance by remember { mutableStateOf(false) }
+    var licenses by remember { mutableStateOf(false) }
     var history by remember { mutableStateOf(false) }
     var tab by remember { mutableIntStateOf(0) }
     var query by remember { mutableStateOf("") }
@@ -164,16 +159,35 @@ class MainActivity : ComponentActivity() {
                 2 -> {
                     item { Text("我的书房", style = MaterialTheme.typography.headlineMedium) }
                     item { ListItem(modifier = Modifier.clickable { history = true }, headlineContent = { Text("阅读记录") }, supportingContent = { Text("读过 ${library.records().count { it.lastRead > 0 }} 本 · ${library.records().sumOf { it.bookmarks.size }} 个书签") }, leadingContent = { Icon(Icons.Outlined.AutoStories, null) }) }
-                    item { ListItem(headlineContent = { Text("外观") }, supportingContent = { Text("Material 3 · 跟随系统深浅色和动态配色") }, leadingContent = { Icon(Icons.Outlined.Palette, null) }) }
+                    item { ListItem(modifier = Modifier.clickable { appearance = true }, headlineContent = { Text("外观") }, supportingContent = { Text("Material 3 · 跟随系统深浅色和动态配色") }, leadingContent = { Icon(Icons.Outlined.Palette, null) }) }
                     item { ListItem(headlineContent = { Text("数据存储") }, supportingContent = { Text("默认关联原文件，也可选择复制。删除本机文件后保留进度和书签。") }, leadingContent = { Icon(Icons.Outlined.Storage, null) }) }
                     item { OutlinedButton(enabled = !busy, onClick = { exportPicker.launch("本地书房备份.zip") }) { Text("导出书库与阅读记录") } }
                     item { OutlinedButton(enabled = !busy, onClick = { restorePicker.launch(arrayOf("application/zip", "application/octet-stream")) }) { Text("从备份合并恢复") } }
+                    item { TextButton(onClick = { appFonts = true }) { Text("应用字体与字体管理") } }
+                    item { TextButton(onClick = { licenses = true }) { Text("开源许可") } }
                     item { ListItem(headlineContent = { Text("关于本地书房") }, supportingContent = { Text("0.2.0-dev · Compose / Readium\n基于 Wenku8_Flutter，遵循 GPL-2.0") }) }
                 }
             }
             item { Spacer(Modifier.height(90.dp)) }
         }
     }
+    if (appFonts) FontManager(onDismiss = { appFonts = false }, selected = context.getSharedPreferences("appearance", android.content.Context.MODE_PRIVATE).getString("fontId", "").orEmpty(), onSelect = { id ->
+        context.getSharedPreferences("appearance", android.content.Context.MODE_PRIVATE).edit().putString("fontId", id).apply()
+        appFonts = false
+    })
+    if (appearance) ModalBottomSheet(onDismissRequest = { appearance = false }) {
+        val preferences = context.getSharedPreferences("appearance", android.content.Context.MODE_PRIVATE)
+        var theme by remember { mutableStateOf(preferences.getString("theme", "system")) }
+        var dynamic by remember { mutableStateOf(preferences.getBoolean("dynamicColor", true)) }
+        Column(Modifier.padding(24.dp)) {
+            Text("外观", style = MaterialTheme.typography.titleLarge)
+            listOf("system" to "跟随系统", "light" to "浅色", "dark" to "深色").forEach { (value, label) ->
+                Row(Modifier.clickable { theme = value; preferences.edit().putString("theme", value).apply() }) { RadioButton(theme == value, { theme = value; preferences.edit().putString("theme", value).apply() }); Text(label, Modifier.padding(top = 12.dp)) }
+            }
+            Row { Text("动态配色", Modifier.weight(1f)); Switch(dynamic, { dynamic = it; preferences.edit().putBoolean("dynamicColor", it).apply() }) }
+        }
+    }
+    if (licenses) Licenses { licenses = false }
     if (history) ModalBottomSheet(onDismissRequest = { history = false }) {
         val records = library.records().filter { it.lastRead > 0 || it.bookmarks.isNotEmpty() }.sortedByDescending { it.lastRead }
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 600.dp), contentPadding = PaddingValues(20.dp)) {

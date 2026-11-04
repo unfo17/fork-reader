@@ -26,7 +26,7 @@ internal object LocalTextPublication {
         BookImportWorkspace(workspace).use { session ->
             val normalized = File(session.root, "normalized.txt")
             BookTextDecoder.normalize(source, normalized, encoding)
-            val writer = BookEpubWriter(session.root, title)
+            val writer = BookEpubWriter(session.root, title).apply { identifier = "urn:local:${output.nameWithoutExtension}" }
             normalized.bufferedReader().use { reader ->
                 val buffer = CharArray(8192)
                 val line = StringBuilder()

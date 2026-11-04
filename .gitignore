@@ -185,3 +185,8 @@ key.properties
 !tools/tests/
 !tools/tests/**
 /tools/tests/__pycache__/
+
+!tools/export_font_catalog.py
+
+/android/.cxx/
+/android/app/.cxx/

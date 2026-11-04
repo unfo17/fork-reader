@@ -12,7 +12,7 @@ android {
             manifest.srcFile("src/compose/AndroidManifest.xml")
             java.setSrcDirs(listOf("src/compose/kotlin", "../../third_party/juniversalchardet-2.0.4/src/main/java"))
             res.setSrcDirs(listOf("src/compose/res"))
-            assets.setSrcDirs(emptyList<String>())
+            assets.setSrcDirs(listOf("src/compose/assets", "../../assets/licenses"))
         }
         getByName("androidTest") {
             java.setSrcDirs(listOf("src/composeTest/java"))

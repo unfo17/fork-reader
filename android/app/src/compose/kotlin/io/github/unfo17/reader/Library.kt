@@ -23,6 +23,10 @@ import org.mewx.wenku8_flutter.BookTextLinks
 import org.mewx.wenku8_flutter.BookDocumentInput
 import org.mewx.wenku8_flutter.retainBookOpenReadGrant
 import org.readium.r2.shared.util.AbsoluteUrl
+import org.readium.r2.shared.util.Url
+import org.readium.r2.shared.util.data.Container
+import org.readium.r2.shared.util.resource.Resource
+import org.readium.r2.shared.util.file.FileResource
 import android.content.Intent
 import org.mewx.wenku8_flutter.LocalTextPublication
 import org.mewx.wenku8_flutter.BookDocumentImportSession
@@ -32,12 +36,25 @@ class ReadiumEngine(context: Context) {
     private val http = DefaultHttpClient()
     private val assets = AssetRetriever(context.contentResolver, http)
     private val opener = PublicationOpener(DefaultPublicationParser(context, httpClient = http, assetRetriever = assets, pdfFactory = null))
-    suspend fun open(file: File): Publication {
-        return open(file.toUrl())
+    suspend fun open(file: File, font: File? = null): Publication {
+        return open(file.toUrl(), font)
     }
-    suspend fun open(url: AbsoluteUrl): Publication {
+    suspend fun open(url: AbsoluteUrl, font: File? = null): Publication {
         val asset = assets.retrieve(url).getOrElse { error("无法读取文件：$it") }
-        return opener.open(asset, allowUserInteraction = false).getOrElse { asset.close(); error("无法解析 EPUB：$it") }
+        return opener.open(asset, allowUserInteraction = false, onCreatePublication = {
+            if (font != null) {
+                val original = container
+                val fontHref = Url.fromDecodedPath("__reader_fonts__/selected.${font.extension.lowercase()}")!!
+                container = object : Container<Resource> by original {
+                    override val entries: Set<Url> = original.entries + fontHref
+                    override fun get(url: Url): Resource? = if (url == fontHref || url == fontUrl(font)) FileResource(font) else original[url]
+                }
+            }
+        }).getOrElse { asset.close(); error("无法解析 EPUB：$it") }
+    }
+    companion object {
+        // Match the local publication origin used by Readium 3.1.2's WebViewServer.
+        fun fontUrl(font: File): AbsoluteUrl = AbsoluteUrl("https://readium/publication/__reader_fonts__/selected.${font.extension.lowercase()}")!!
     }
 }
 
@@ -96,16 +113,16 @@ class Library private constructor(private val context: Context) {
         return try { action(BookDocumentInput(lease.getValue("descriptor") as Int, lease.getValue("size") as Long, lease["offset"] as? Long ?: 0L)) }
         finally { links.closeDocument(lease.getValue("lease") as String) }
     }
-    suspend fun openPublication(book: Book): Publication = withContext(Dispatchers.IO) {
+    suspend fun openPublication(book: Book, font: File? = null): Publication = withContext(Dispatchers.IO) {
         check(!book.removed) { "本机文件已删除，请重新导入原书；阅读记录仍保留" }
         if (book.sourceReference != null && book.file.endsWith(".epub")) {
             withOriginal(book) { Unit } // Validate the upstream descriptor lease before Readium opens its own resource.
-            engine.open(AbsoluteUrl(links.source(book.sourceReference).toString()) ?: error("原文件位置无效"))
-        } else engine.open(publicationFile(book))
+            engine.open(AbsoluteUrl(links.source(book.sourceReference).toString()) ?: error("原文件位置无效"), font)
+        } else engine.open(publicationFile(book), font)
     }
     suspend fun publicationFile(book: Book): File = withContext(Dispatchers.IO) {
         if (!book.file.endsWith(".txt", true)) return@withContext File(book.file)
-        val target = File(context.filesDir, "text-publications/${book.id}.epub")
+        val target = File(context.filesDir, "text-publications/${book.id}.v2.epub")
         textMutex.lock()
         try {
             withOriginal(book) { source ->
@@ -125,7 +142,7 @@ class Library private constructor(private val context: Context) {
         update(book.copy(removed = true, sourceReference = null, sourceSize = 0, sourceModified = 0))
         book.sourceReference?.let(links::release)
         File(book.file + ".jpg").delete()
-        File(context.filesDir, "text-publications/${book.id}.epub").delete()
+        File(context.filesDir, "text-publications/${book.id}.v2.epub").delete()
     }
     suspend fun import(uri: Uri, copy: Boolean = true, treeGrant: Uri? = null): Book {
         importMutex.lock()
@@ -172,7 +189,7 @@ class Library private constructor(private val context: Context) {
             update(book)
             book
         } catch (error: Exception) {
-            created?.let { File(it.file + ".jpg").delete(); File(context.filesDir, "text-publications/${it.id}.epub").delete() }
+            created?.let { File(it.file + ".jpg").delete(); File(context.filesDir, "text-publications/${it.id}.v2.epub").delete() }
             if (books().none { it.sourceReference == reference }) links.release(reference)
             throw error
         }

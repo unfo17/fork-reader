@@ -8,6 +8,7 @@ import java.util.zip.ZipOutputStream
 /** Bounded chapters and disk-backed resources; no whole-book image byte array. */
 internal class BookEpubWriter(private val work: File, var title: String) {
     var author = ""
+    var identifier = "urn:uuid:${java.util.UUID.randomUUID()}"
     var cover: String? = null
     private val chapters = mutableListOf<Pair<String, File>>()
     private val references = linkedMapOf<String, Int>()
@@ -86,21 +87,23 @@ internal class BookEpubWriter(private val work: File, var title: String) {
                 zip.putNextEntry(ZipEntry(path).apply { time = 0 })
                 zip.write(value.toByteArray(Charsets.UTF_8)); zip.closeEntry()
             }
-            entry("mimetype", "application/epub+zip")
+            val mime = "application/epub+zip".toByteArray(Charsets.US_ASCII)
+            zip.putNextEntry(ZipEntry("mimetype").apply { method = ZipEntry.STORED; size = mime.size.toLong(); compressedSize = size; crc = java.util.zip.CRC32().apply { update(mime) }.value; time = 0 })
+            zip.write(mime); zip.closeEntry()
             entry("META-INF/container.xml", """<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>""")
             val coverId = cover?.let { references[it] }
             val manifest = chapters.indices.joinToString("") { "<item id=\"c$it\" href=\"c$it.xhtml\" media-type=\"application/xhtml+xml\"/>" } +
                 resources.entries.sortedBy { it.key }.joinToString("") { (id, item) ->
                     "<item id=\"i$id\" href=\"image-$id.${item.first}\" media-type=\"image/${if (item.first == "jpg") "jpeg" else item.first}\"${if (id == coverId) " properties=\"cover-image\"" else ""}/>"
                 }
-            entry("content.opf", """<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>${escape(title)}</dc:title><dc:creator>${escape(author)}</dc:creator></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>$manifest</manifest><spine>${chapters.indices.joinToString("") { "<itemref idref=\"c$it\"/>" }}</spine></package>""")
-            entry("nav.xhtml", """<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol>${chapters.mapIndexed { i, c -> "<li><a href=\"c$i.xhtml\">${escape(c.first)}</a></li>" }.joinToString("")}</ol></nav></body></html>""")
+            entry("content.opf", """<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book-id">${escape(identifier)}</dc:identifier><dc:title>${escape(title)}</dc:title><dc:creator>${escape(author)}</dc:creator><dc:language>zh</dc:language><meta property="dcterms:modified">2000-01-01T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>$manifest</manifest><spine>${chapters.indices.joinToString("") { "<itemref idref=\"c$it\"/>" }}</spine></package>""")
+            entry("nav.xhtml", """<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><meta charset="utf-8"/><title>目录</title></head><body><nav epub:type="toc"><ol>${chapters.mapIndexed { i, c -> "<li><a href=\"c$i.xhtml\">${escape(c.first)}</a></li>" }.joinToString("")}</ol></nav></body></html>""")
             for ((i, chapter) in chapters.withIndex()) {
                 val html = chapter.second.readText().replace(Regex("resource:(\\d+)")) { match ->
                     val id = match.groupValues[1].toInt()
                     resources[id]?.let { "image-$id.${it.first}" } ?: ""
                 }
-                entry("c$i.xhtml", "<html xmlns=\"http://www.w3.org/1999/xhtml\"><body>$html</body></html>")
+                entry("c$i.xhtml", "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><meta charset=\"utf-8\"/><title>${escape(chapter.first)}</title></head><body>$html</body></html>")
             }
             for ((id, item) in resources.toSortedMap()) {
                 zip.putNextEntry(ZipEntry("image-$id.${item.first}").apply { time = 0 })
