@@ -40,7 +40,17 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val library = Library.get(this)
+        @Suppress("DEPRECATION")
+        val pending = savedInstanceState?.getParcelableArrayList<Intent>("external-open-requests")
+        if (pending != null) pending.forEach { library.restoreExternal(it) }
+        else if (savedInstanceState == null) library.offerExternal(intent)
         setContent { ReaderTheme { LibraryApp() } }
+    }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); Library.get(this).offerExternal(intent) }
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putParcelableArrayList("external-open-requests", Library.get(this).pendingExternalIntents())
+        super.onSaveInstanceState(outState)
     }
 }
 
@@ -49,6 +59,8 @@ class MainActivity : ComponentActivity() {
     val context = LocalContext.current
     val library = remember { Library.get(context) }
     var books by remember { mutableStateOf(library.collectionBooks()) }
+    val externalRevision by library.externalRevision.collectAsState()
+    val externalRequest by produceState<ExternalBookRequest?>(null, externalRevision) { value = library.pendingExternal() }
     var appFonts by remember { mutableStateOf(false) }
     var appearance by remember { mutableStateOf(false) }
     var licenses by remember { mutableStateOf(false) }
@@ -98,6 +110,7 @@ class MainActivity : ComponentActivity() {
     var coverTarget by remember { mutableStateOf<Book?>(null) }
     var relinking by remember { mutableStateOf<Book?>(null) }
     var textImportSettings by remember { mutableStateOf(false) }
+    var locatingExternal by rememberSaveable { mutableStateOf<String?>(null) }
     var importMenu by remember { mutableStateOf(false) }
     suspend fun reviewFiles(uris: List<Uri>) {
         busy = true
@@ -127,7 +140,11 @@ class MainActivity : ComponentActivity() {
         finally { busy = false; books = library.collectionBooks() }
         snackbar.showSnackbar("新增 $imported 本，已存在 $duplicates 本" + if (errors.isEmpty()) "" else "；${errors.size} 本失败：${errors.first()}")
     } }
-    val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris -> pendingTree = null; scope.launch { reviewFiles(uris) } }
+    val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        val replacing = locatingExternal; locatingExternal = null
+        if (uris.isNotEmpty() && replacing != null) library.finishExternal(replacing)
+        pendingTree = null; scope.launch { reviewFiles(uris) }
+    }
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree -> if (tree != null) scope.launch {
         busy = true
         try {
@@ -240,6 +257,9 @@ class MainActivity : ComponentActivity() {
             item { Spacer(Modifier.height(90.dp)) }
         }
     }
+    externalRequest?.let { request -> key(request.id) {
+        ExternalOpenDialog(request, library, onLocate = { locatingExternal = request.id; importer.launch(arrayOf("*/*")) }, onChanged = { books = library.collectionBooks() }, onOpen = { open(it) })
+    } }
     if (textImportSettings) TextImportSettings { textImportSettings = false }
     if (annotations) AnnotationsPanel(library, onDismiss = { annotations = false })
     if (seriesManager) SeriesManager(library, editingSeries, selectedBooks, { seriesManager = false }, { books = library.collectionBooks(); selectedBooks = emptySet() })

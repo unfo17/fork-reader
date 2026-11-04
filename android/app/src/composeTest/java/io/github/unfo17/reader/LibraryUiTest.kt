@@ -23,10 +23,13 @@ class LibraryUiTest {
         yield(node)
         for (index in 0 until node.childCount) node.getChild(index)?.let { yieldAll(descendants(it)) }
     }
-    private fun waitNode(predicate: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo {
+    private fun waitNode(scroll: Boolean = false, predicate: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo {
         val deadline = SystemClock.uptimeMillis() + 10000
         while (SystemClock.uptimeMillis() < deadline) {
-            automation.rootInActiveWindow?.let { root -> descendants(root).firstOrNull(predicate)?.let { return it } }
+            automation.rootInActiveWindow?.let { root ->
+                descendants(root).firstOrNull(predicate)?.let { return it }
+                if (scroll) descendants(root).firstOrNull { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+            }
             SystemClock.sleep(100)
         }
         val root = automation.rootInActiveWindow
@@ -68,7 +71,7 @@ class LibraryUiTest {
                 val input = waitNode { it.className?.toString() == "android.widget.EditText" }
                 assertTrue(input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "卷 2 的正文") }))
                 click("搜索")
-                var result: AccessibilityNodeInfo? = waitNode { node -> node.text?.toString()?.let { value -> value.contains("卷 2 的正文") && value != "卷 2 的正文" && !value.startsWith("“") } == true }
+                var result: AccessibilityNodeInfo? = waitNode(scroll = true) { node -> node.text?.toString()?.let { value -> value.contains("卷 2 的正文") && value != "卷 2 的正文" && !value.startsWith("“") } == true }
                 while (result != null && !result.isClickable) result = result.parent
                 assertTrue(result?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true)
                 text("界面合订本 · 第二卷")

@@ -28,7 +28,9 @@
         "android/app/src/main/kotlin/org/mewx/wenku8_flutter/localcore/BookTextLinks.kt"
       ],
       "status": "partial",
-      "tests": []
+      "tests": [
+        "io.github.unfo17.reader.ExternalOpenTest.realPersistableSafGrantSurvivesRecreationAndConsumedIntentDoesNotReplay"
+      ]
     },
     {
       "id": "import.copy",
@@ -37,7 +39,26 @@
         "android/app/src/main/kotlin/org/mewx/wenku8_flutter/localcore/BookImportQueue.kt"
       ],
       "status": "partial",
-      "tests": []
+      "tests": [
+        "io.github.unfo17.reader.ExternalOpenTest.temporarySafAccessRequiresExplicitCopyAndMimeResolvesExtensionlessNames"
+      ]
+    },
+    {
+      "id": "import.external",
+      "feature": "文件管理器打开、临时/持久授权、复制/重新定位/安全移动、请求恢复且不重播",
+      "upstream": [
+        "android/app/src/main/kotlin/org/mewx/wenku8_flutter/localcore/BookOpenRequests.kt",
+        "android/app/src/main/kotlin/org/mewx/wenku8_flutter/localcore/BookOpenTransfer.kt"
+      ],
+      "status": "partial",
+      "tests": [
+        "io.github.unfo17.reader.ExternalOpenTest.realPersistableSafGrantSurvivesRecreationAndConsumedIntentDoesNotReplay",
+        "io.github.unfo17.reader.ExternalOpenTest.temporarySafAccessRequiresExplicitCopyAndMimeResolvesExtensionlessNames",
+        "io.github.unfo17.reader.ExternalOpenTest.movingAnAlreadyLinkedBookCreatesVerifiedManagedCopyBeforeDeletingSource",
+        "io.github.unfo17.reader.ExternalOpenTest.changedSourceFailsTransferVerificationAndRemainsUntouched",
+        "io.github.unfo17.reader.ExternalOpenTest.browserUrlsAndPrivateFilePathsCannotBecomeExternalBookRequests",
+        "io.github.unfo17.reader.ExternalOpenTest.openWithDialogCopiesTemporarySourceOnlyAfterUserActionAndOpensReadium"
+      ]
     },
     {
       "id": "import.txt",

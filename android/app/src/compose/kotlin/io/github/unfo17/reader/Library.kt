@@ -100,6 +100,55 @@ class Library private constructor(private val context: Context) {
     val series = SeriesStore({ prefs.getString("series", null) }, { prefs.edit().putString("series", it).commit() })
     val engine = ReadiumEngine(context)
     private val links = BookTextLinks(context)
+    private val externalRequests = org.mewx.wenku8_flutter.BookOpenRequests(context)
+    val externalRevision = kotlinx.coroutines.flow.MutableStateFlow(0)
+    @Synchronized fun offerExternal(intent: Intent?): Boolean = externalRequests.offer(intent).also { if (it) externalRevision.value++ }
+    @Synchronized fun restoreExternal(intent: Intent): Boolean = externalRequests.restore(intent).also { if (it) externalRevision.value++ }
+    fun pendingExternalIntents() = externalRequests.pendingIntents()
+    internal suspend fun pendingExternal(): ExternalBookRequest? = withContext(Dispatchers.IO) {
+        externalRequests.pending()?.let { raw -> ExternalBookRequest(raw.getValue("id") as String, raw.getValue("name") as String, raw["canLink"] == true, raw["canLocate"] == true, raw["canMove"] == true, raw["sourceName"] as? String, raw["sourceLocation"] as? String, raw["error"] as? String) }
+    }
+    @Synchronized fun finishExternal(id: String) { externalRequests.finish(id, links); externalRevision.value++ }
+    internal suspend fun previewExternal(request: ExternalBookRequest, copy: Boolean, move: Boolean = false): ExternalBookPreview = withContext(Dispatchers.IO) {
+        require(!move || request.canMove) { "来源不支持移动，原书保留" }
+        val (uri, grant) = externalRequests.source(request.id, copy || move)
+        ExternalBookPreview(request.id, preview(uri, request.name), grant, copy || move, move)
+    }
+    internal suspend fun moveExternal(id: String, book: Book): Book = withContext(Dispatchers.IO) {
+        val saved = ensureManagedCopy(book)
+        java.io.RandomAccessFile(saved.file, "rw").use { it.fd.sync() }
+        for (directory in listOf(File(saved.file).parentFile, File(context.applicationInfo.dataDir, "shared_prefs"))) {
+            val descriptor = android.system.Os.open(checkNotNull(directory).path, android.system.OsConstants.O_RDONLY, 0)
+            try { android.system.Os.fsync(descriptor) } finally { android.system.Os.close(descriptor) }
+        }
+        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+        externalRequests.deleteSource(id, saved.file) { file -> books().any { it.id == saved.id && it.sourceReference == null && File(it.file).canonicalFile == file } }
+        saved
+    }
+    private suspend fun ensureManagedCopy(book: Book): Book = withContext(Dispatchers.IO) {
+        importMutex.lock()
+        var target: File? = null
+        var committed = false
+        try {
+            val current = books().firstOrNull { it.id == book.id } ?: error("书籍已移除，原文件保留")
+            if (current.sourceReference == null) return@withContext current
+            require(current.archiveEntry == null && File(current.file).extension.lowercase() in listOf("epub", "txt")) { "此格式不支持移动原文件" }
+            val copy = File(context.filesDir, "books/${UUID.randomUUID()}.${File(current.file).extension}").apply { parentFile?.mkdirs() }
+            target = copy
+            withOriginal(current) { source -> source.inputStream().use { input -> copy.outputStream().use { output -> input.copyTo(output, 65536) } } }
+            require(digest(BookDocumentInput(copy)) == current.id) { "原书已变化，原文件保留" }
+            File(current.file + ".jpg").takeIf { it.isFile }?.copyTo(File(copy.path + ".jpg"))
+            val saved = synchronized(this@Library) {
+                val latest = books().firstOrNull { it.id == current.id } ?: error("书籍已移除，原文件保留")
+                require(latest.sourceReference == current.sourceReference && latest.file == current.file) { "原书位置已变化，原文件保留" }
+                latest.copy(file = copy.path, sourceReference = null, sourceSize = 0, sourceModified = 0).also { update(it) }
+            }
+            committed = true
+            current.sourceReference?.let(::releaseReference)
+            File(current.file + ".jpg").delete()
+            saved
+        } finally { if (!committed) target?.let { it.delete(); File(it.path + ".jpg").delete() }; importMutex.unlock() }
+    }
     private val importSession = BookDocumentImportSession<Uri>(File(context.noBackupFilesDir, "book-import-staging")) { uri, target, limit ->
         context.contentResolver.openInputStream(uri)?.use { input ->
             target.outputStream().use { output ->
@@ -256,9 +305,9 @@ class Library private constructor(private val context: Context) {
         publicationCache(book).delete()
         File(publicationCache(book).path + ".warnings.json").delete()
     }
-    suspend fun import(uri: Uri, copy: Boolean = true, treeGrant: Uri? = null): Book {
+    suspend fun import(uri: Uri, copy: Boolean = true, treeGrant: Uri? = null, nameHint: String? = null): Book {
         importMutex.lock()
-        try { return if (copy) importSelected(uri) else importLinked(uri, treeGrant) }
+        try { return if (copy) importSelected(uri, nameHint) else importLinked(uri, treeGrant, nameHint) }
         finally { importMutex.unlock() }
     }
     private fun textRulesFor(id: String): String? {
@@ -269,8 +318,8 @@ class Library private constructor(private val context: Context) {
         val old = records().firstOrNull { it.id == book.id } ?: return book
         return old.copy(file = book.file, removed = false, sourceReference = book.sourceReference, sourceSize = book.sourceSize, sourceModified = book.sourceModified, originalName = book.originalName, warnings = book.warnings, archiveEntry = book.archiveEntry, archiveEntrySize = book.archiveEntrySize, archiveCharset = book.archiveCharset, bundleFile = book.bundleFile, bundleDigest = book.bundleDigest, sourceDigest = book.sourceDigest)
     }
-    internal suspend fun preview(uri: Uri): List<ImportCandidate> = withContext(Dispatchers.IO) {
-        val name = displayName(uri)
+    internal suspend fun preview(uri: Uri, nameHint: String? = null): List<ImportCandidate> = withContext(Dispatchers.IO) {
+        val name = nameHint ?: displayName(uri)
         if (!name.endsWith(".zip", true)) { require(BookArchiveImport.supported(name)) { "不支持的书籍格式：$name" }; return@withContext listOf(ImportCandidate(uri, name)) }
         val hash = context.contentResolver.openInputStream(uri)?.use { stream ->
             val digest = java.security.MessageDigest.getInstance("SHA-256")
@@ -284,7 +333,7 @@ class Library private constructor(private val context: Context) {
         inspection.entries.map { ImportCandidate(uri, name, it, inspection.charset, hash) }
     }
     internal suspend fun importCandidate(candidate: ImportCandidate, copy: Boolean, tree: Uri?): Book {
-        if (candidate.entry == null) return import(candidate.uri, copy, tree)
+        if (candidate.entry == null) return import(candidate.uri, copy, tree, candidate.name)
         importMutex.lock()
         try { return importArchiveMember(candidate, copy, tree) } finally { importMutex.unlock() }
     }
@@ -357,8 +406,8 @@ class Library private constructor(private val context: Context) {
         check(retained) { "文件提供方无法保留读取权限，请改选「复制到应用」" }
         return grant
     }
-    private suspend fun importLinked(uri: Uri, tree: Uri?): Book = withContext(Dispatchers.IO) {
-        val name = displayName(uri)
+    private suspend fun importLinked(uri: Uri, tree: Uri?, nameHint: String? = null): Book = withContext(Dispatchers.IO) {
+        val name = nameHint ?: displayName(uri)
         require(BookArchiveImport.supported(name)) { "暂不支持所选文档格式" }
         val reference = links.remember(uri, retainGrant(uri, tree))
         var created: Book? = null
@@ -459,9 +508,10 @@ class Library private constructor(private val context: Context) {
         update(updated)
         updated
     }
-    private fun displayName(uri: Uri): String = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
-        if (it.moveToFirst()) it.getString(0) else null
-    } ?: uri.lastPathSegment ?: "导入的书籍"
+    private fun displayName(uri: Uri): String {
+        val name = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { if (it.moveToFirst() && !it.isNull(0)) it.getString(0) else null } ?: uri.lastPathSegment.orEmpty()
+        return org.mewx.wenku8_flutter.BookOpenNames.resolve(name, runCatching { context.contentResolver.getType(uri) }.getOrNull())
+    }
     private fun digest(source: BookDocumentInput): String {
         val hash = java.security.MessageDigest.getInstance("SHA-256")
         source.inputStream().use { input ->
@@ -470,10 +520,8 @@ class Library private constructor(private val context: Context) {
         }
         return hash.digest().joinToString("") { "%02x".format(it) }
     }
-    private suspend fun importSelected(uri: Uri): Book = withContext(Dispatchers.IO) {
-        val name = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
-            if (it.moveToFirst()) it.getString(0) else null
-        } ?: uri.lastPathSegment ?: "导入的书籍"
+    private suspend fun importSelected(uri: Uri, nameHint: String? = null): Book = withContext(Dispatchers.IO) {
+        val name = nameHint ?: displayName(uri)
         require(BookArchiveImport.supported(name)) { "暂不支持所选文档格式" }
         val extension = name.substringAfterLast('.').lowercase()
         val dir = File(context.filesDir, "books").apply { mkdirs() }

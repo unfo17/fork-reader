@@ -16,21 +16,43 @@ import java.util.UUID
 /** Engine-owned inbox. UI recreation must not lose a pending ACTION_VIEW or
  * replay it. No incoming URI/path is exposed to Dart or diagnostic messages. */
 internal class BookOpenRequests(private val context: Context) {
-    private data class Request(val id: String, val uri: Uri, val flags: Int, val mime: String?) {
+    private data class Request(val id: String, val uri: Uri, var flags: Int, var mime: String?) {
         var newGrant = false
         var linked: Link? = null
     }
     private data class Link(val uri: Uri, val grant: Uri? = null)
     private val requests = linkedMapOf<String, Request>()
+    private companion object { const val SAVED_ID = "reader.savedOpenId"; const val SAVED_GRANT = "reader.savedOpenGrant" }
 
     @Synchronized fun offer(intent: Intent?): Boolean {
         if (intent?.action != Intent.ACTION_VIEW) return false
         val uri = intent.data ?: return false
-        if (uri.scheme !in setOf("content", "file")) return false
-        if (requests.values.none { it.uri == uri }) {
+        if (uri.scheme !in setOf("content", "file") || uri.toString().length > 8192) return false
+        val existing = requests.values.firstOrNull { it.uri == uri }
+        if (existing == null) {
+            if (requests.size >= 32) return false
             val id = UUID.randomUUID().toString()
             requests[id] = Request(id, uri, intent.flags, intent.type)
+        } else {
+            existing.flags = existing.flags or intent.flags
+            if (intent.type != null) existing.mime = intent.type
         }
+        return true
+    }
+
+    @Synchronized fun pendingIntents(): ArrayList<Intent> = ArrayList(requests.values.map { request ->
+        Intent(Intent.ACTION_VIEW).putExtra(SAVED_ID, request.id).putExtra(SAVED_GRANT, request.newGrant).setDataAndType(request.uri, request.mime).addFlags(request.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION))
+    })
+
+    @Synchronized fun restore(intent: Intent): Boolean {
+        val existing = requests.values.any { it.uri == intent.data }
+        if (!offer(intent)) return false
+        if (existing) return true
+        val identity = intent.getStringExtra(SAVED_ID) ?: return true
+        if (!identity.matches(Regex("[a-f0-9-]{36}")) || requests.containsKey(identity)) return true
+        val created = requests.values.first { it.uri == intent.data }
+        requests.remove(created.id)
+        requests[identity] = created.copy(id = identity).apply { newGrant = intent.getBooleanExtra(SAVED_GRANT, false) }
         return true
     }
 
@@ -164,14 +186,13 @@ internal class BookOpenRequests(private val context: Context) {
 
     fun initialUri(id: String): Uri = request(id).let { pickerUri(it) ?: it.uri }
 
-    fun deleteSource(id: String, path: String) {
+    fun deleteSource(id: String, path: String, verifiedCopy: ((File) -> Boolean)? = null) {
         val request = try {
             val offered = request(id)
             check(canMove(offered, name(offered))) { "来源未授予删除权限，原文件未删除" }
             val copy = File(path).canonicalFile
             val app = File(context.applicationInfo.dataDir).canonicalFile
-            check(copy.path.startsWith(app.path + File.separator) && copy.name == "original" &&
-                File(copy.parentFile, "book.json").isFile) { "书库副本尚未确认，原文件未删除" }
+            check(copy.path.startsWith(app.path + File.separator) && (verifiedCopy?.invoke(copy) ?: (copy.name == "original" && File(copy.parentFile, "book.json").isFile))) { "书库副本尚未确认，原文件未删除" }
             context.contentResolver.openInputStream(offered.uri)?.use { source ->
                 copy.inputStream().use { saved ->
                     check(sameBookOpenBytes(source, saved)) { "原文件已变化或副本不完整，原文件未删除" }
@@ -179,13 +200,21 @@ internal class BookOpenRequests(private val context: Context) {
             } ?: error("无法核对原文件，原文件未删除")
             offered
         } catch (error: Exception) {
-            throw BookOpenMoveFailure("move_not_deleted", error.message ?: "未通过核对，原文件未删除")
+            throw BookOpenMoveFailure("move_not_deleted", bookImportMessage(error))
         }
         val deleted = try { DocumentsContract.deleteDocument(context.contentResolver, request.uri) }
         catch (_: Exception) {
             throw BookOpenMoveFailure("move_unconfirmed", "已导入书库，但未能确认原文件是否删除")
         }
         if (!deleted) throw BookOpenMoveFailure("move_not_deleted", "来源未完成删除，原文件未删除")
+    }
+
+    fun source(id: String, copy: Boolean): Pair<Uri, Uri?> {
+        val request = request(id)
+        name(request)
+        if (copy) return request.uri to null
+        val durable = link(request) ?: error("文件应用只提供临时授权，请重新定位原书或选择复制到应用")
+        return durable.uri to durable.grant
     }
 
     fun resolve(id: String, copy: Boolean, links: BookTextLinks,
@@ -225,7 +254,7 @@ internal object BookOpenNames {
     fun resolve(raw: String, mime: String?): String {
         var name = raw.replace('\\', '/').substringAfterLast('/').trim()
         require(name.length <= 1024 && name.none { it.code < 32 || it.code == 127 }) { "书籍文件名有误，请重新选择" }
-        if ('.' !in name || !BookArchiveImport.supported(name)) {
+        if ('.' !in name || !(BookArchiveImport.supported(name) || name.endsWith(".zip", true))) {
             val extension = extensions[mime?.substringBefore(';')?.trim()?.lowercase()]
             require(extension != null && (name.isBlank() || '.' !in name)) { "请选择支持的电子书或文档" }
             name = "${name.ifBlank { "所选书籍" }}.$extension"

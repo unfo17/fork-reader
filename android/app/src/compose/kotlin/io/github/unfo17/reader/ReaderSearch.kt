@@ -21,6 +21,8 @@ enum class ReaderSearchScope(val label: String) { BOOK("全书"), VOLUME("当前
     var error by remember { mutableStateOf<String?>(null) }
     var job by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val scope = rememberCoroutineScope()
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val focus = androidx.compose.ui.platform.LocalFocusManager.current
     DisposableEffect(cursor) { val active = cursor; onDispose { active?.close() } }
     fun load(session: PublicationSearch) {
         job = scope.launch {
@@ -31,13 +33,14 @@ enum class ReaderSearchScope(val label: String) { BOOK("全书"), VOLUME("当前
             finally { busy = false }
         }
     }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 680.dp), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             item { Text("正文搜索", style = MaterialTheme.typography.titleLarge) }
             item { OutlinedTextField(query, { query = it }, label = { Text("搜索文字（最多 120 字符）") }, modifier = Modifier.fillMaxWidth(), enabled = !busy, singleLine = true) }
             item { ChoiceMenu("范围", searchScope, ReaderSearchScope.entries.filter { it != ReaderSearchScope.VOLUME || series != null }.map { it to it.label }, enabled = !busy) { searchScope = it } }
             item { Row {
                 TextButton(enabled = !busy && query.trim().length in 1..120, onClick = {
+                    keyboard?.hide(); focus.clearFocus()
                     cursor?.close(); hits = emptyList(); finished = false; error = null; searched = query.trim()
                     val ids = if (searchScope == ReaderSearchScope.BOOK && series != null) series.volumes.map { it.bookId } else listOf(current.id)
                     val originals = library.books().associateBy { it.id }

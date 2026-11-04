@@ -17,6 +17,7 @@ android {
             assets.setSrcDirs(listOf("src/compose/assets", "../../assets/licenses"))
         }
         getByName("androidTest") {
+            manifest.srcFile("src/composeTest/AndroidManifest.xml")
             java.setSrcDirs(listOf("src/composeTest/java"))
             assets.setSrcDirs(listOf("src/composeTest/assets"))
         }

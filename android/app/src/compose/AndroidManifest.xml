@@ -1,12 +1,43 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <uses-permission android:name="android.permission.INTERNET" />
-    <queries><intent><action android:name="android.intent.action.TTS_SERVICE" /></intent></queries>
-    <application android:theme="@style/AppTheme" android:label="本地书房" android:allowBackup="false" android:supportsRtl="true">
-        <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.share" android:exported="false" android:grantUriPermissions="true"><meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/share_paths" /></provider>
-        <service android:name="org.mewx.wenku8_flutter.TextRuleService" android:exported="false" android:isolatedProcess="true" android:process=":toc_rules" />
-        <activity android:name=".ReaderActivity" android:exported="false" />
-        <activity android:name=".MainActivity" android:exported="true">
-            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
-        </activity>
-    </application>
+  <uses-permission android:name="android.permission.INTERNET" />
+  <queries>
+    <intent>
+      <action android:name="android.intent.action.TTS_SERVICE" />
+    </intent>
+  </queries>
+  <application android:theme="@style/AppTheme" android:label="本地书房" android:allowBackup="false" android:supportsRtl="true">
+    <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.share" android:exported="false" android:grantUriPermissions="true">
+      <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/share_paths" />
+    </provider>
+    <service android:name="org.mewx.wenku8_flutter.TextRuleService" android:exported="false" android:isolatedProcess="true" android:process=":toc_rules" />
+    <activity android:name=".ReaderActivity" android:exported="false" />
+    <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <data android:mimeType="text/plain" />
+        <data android:mimeType="application/epub+zip" />
+        <data android:mimeType="application/x-mobipocket-ebook" />
+        <data android:mimeType="application/vnd.amazon.ebook" />
+        <data android:mimeType="application/vnd.amazon.mobi8-ebook" />
+        <data android:mimeType="application/x-fictionbook+xml" />
+        <data android:mimeType="application/fb2+xml" />
+        <data android:mimeType="application/pdf" />
+        <data android:mimeType="application/msword" />
+        <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+        <data android:mimeType="application/rtf" />
+        <data android:mimeType="text/rtf" />
+        <data android:mimeType="text/html" />
+        <data android:mimeType="application/xhtml+xml" />
+        <data android:mimeType="text/markdown" />
+        <data android:mimeType="text/x-markdown" />
+        <data android:mimeType="application/zip" />
+        <data android:mimeType="application/x-zip-compressed" />
+      </intent-filter>
+    </activity>
+  </application>
 </manifest>

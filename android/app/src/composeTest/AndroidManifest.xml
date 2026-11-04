@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <provider android:name="io.github.unfo17.reader.TestDocumentsProvider" android:authorities="io.github.unfo17.reader.test.documents" android:exported="true" android:grantUriPermissions="true" android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter><action android:name="android.content.action.DOCUMENTS_PROVIDER" /></intent-filter>
+        </provider>
+        <activity android:name="io.github.unfo17.reader.TestSourceActivity" android:exported="true" android:theme="@android:style/Theme.NoDisplay" android:noHistory="true" />
+    </application>
+</manifest>
