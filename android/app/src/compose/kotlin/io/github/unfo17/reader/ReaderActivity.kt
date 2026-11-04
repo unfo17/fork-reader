@@ -3,6 +3,10 @@ package io.github.unfo17.reader
 
 import android.os.Bundle
 import android.view.View
+import android.view.ActionMode
+import android.view.Menu
+import android.view.MenuItem
+import org.readium.r2.navigator.DecorableNavigator
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -58,6 +62,10 @@ class ReaderActivity : FragmentActivity() {
     private val containerId = View.generateViewId()
     private var loading by mutableStateOf(true)
     private var failure by mutableStateOf<String?>(null)
+    private var annotationDraft by mutableStateOf<ReadingMark?>(null)
+    private var annotationExpected: Long? = null
+    private var annotations by mutableStateOf(false)
+    private var decorationJob: kotlinx.coroutines.Job? = null
     private var toc by mutableStateOf(false)
     private var marks by mutableStateOf(false)
     private var fonts by mutableStateOf(false)
@@ -118,6 +126,9 @@ class ReaderActivity : FragmentActivity() {
                     initialLocator = initial,
                     initialPreferences = readerPreferences(),
                     configuration = EpubNavigatorFragment.Configuration {
+                        decorationTemplates = annotationTemplates()
+                        selectionActionModeCallback = annotationSelectionMenu()
+
                         selectedFontFile?.let { file -> addFontFamilyDeclaration(FontFamily(options.fontId)) {
                             addFontFace { addSource(ReadiumEngine.fontUrl(file)); setFontWeight(100..900) }
                         } }
@@ -128,6 +139,50 @@ class ReaderActivity : FragmentActivity() {
         }
     }
 
+    private fun annotationSelectionMenu() = object : ActionMode.Callback {
+        private fun add(menu: Menu) { listOf(MarkStyle.UNDERLINE, MarkStyle.HIGHLIGHT, MarkStyle.OUTLINE, MarkStyle.NONE).forEachIndexed { index, style -> if (menu.findItem(0x46524b00 + index) == null) menu.add(Menu.NONE, 0x46524b00 + index, index, if (style == MarkStyle.NONE) "批注" else style.label) } }
+        override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean { add(menu); return true }
+        override fun onPrepareActionMode(mode: ActionMode, menu: Menu): Boolean { add(menu); return false }
+        override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
+            val index = item.itemId - 0x46524b00
+            if (index !in 0..3) return false
+            annotateSelection(listOf(MarkStyle.UNDERLINE, MarkStyle.HIGHLIGHT, MarkStyle.OUTLINE, MarkStyle.NONE)[index]) { mode.finish() }
+            return true
+        }
+        override fun onDestroyActionMode(mode: ActionMode) { }
+    }
+    internal fun annotateSelection(style: MarkStyle, captured: () -> Unit = {}) {
+        lifecycleScope.launch {
+            try {
+                val selection = navigator?.currentSelection() ?: return@launch
+                val anchor = navigator?.evaluateJavascript("""
+                    (function(){var s=window.getSelection();if(!s||!s.rangeCount)return null;var r=s.getRangeAt(0);
+                    function path(e){var p=[];while(e&&e.nodeType===1){var n=1,t=e.previousElementSibling;while(t){if(t.tagName===e.tagName)n++;t=t.previousElementSibling;}p.unshift(e.tagName.toLowerCase()+':nth-of-type('+n+')');e=e.parentElement;}return p.join(' > ');}
+                    function point(n,o){return {selector:path(n.nodeType===1?n:n.parentElement),childNodeIndex:n.nodeType===1?-1:Array.prototype.indexOf.call(n.parentNode.childNodes,n),offset:o,nodeType:n.nodeType};}
+                    var e=r.commonAncestorContainer;if(e.nodeType!==1)e=e.parentElement;
+                    return {cssSelector:path(e),forkSourceRange:{start:point(r.startContainer,r.startOffset),end:point(r.endContainer,r.endOffset)}};})()
+                """.trimIndent())?.let { runCatching { JSONObject(it) }.getOrNull() }
+                val json = selection.locator.toJSON()
+                if (anchor != null) {
+                    val locations = json.optJSONObject("locations") ?: JSONObject().also { json.put("locations", it) }
+                    anchor.keys().forEach { locations.put(it, anchor.get(it)) }
+                }
+                val draft = ReadingMark.create(Locator.fromJSON(json) ?: selection.locator, style)
+                val existing = currentBook().annotations.firstOrNull { !it.deleted && it.sameAnchor(draft) }
+                annotationExpected = existing?.revision
+                annotationDraft = existing ?: draft
+                captured(); navigator?.clearSelection()
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { notice = e.message ?: "无法获取选区" }
+        }
+    }
+    private fun refreshDecorations() {
+        val fragment = navigator ?: return
+        val ink = parseColor(options.textColor)?.int ?: if (night) android.graphics.Color.WHITE else android.graphics.Color.DKGRAY
+        val decorations = currentBook().annotations.mapNotNull { it.decoration(ink) }
+        decorationJob?.cancel()
+        decorationJob = lifecycleScope.launch { fragment.applyDecorations(decorations, "annotations") }
+    }
     private fun openVolume(bookId: String, locator: Locator? = null) {
         if (bookId == book.id) { locator?.let { navigator?.go(it) }; toc = false; marks = false; return }
         val collection = series ?: return
@@ -170,6 +225,7 @@ class ReaderActivity : FragmentActivity() {
         options = options.copy(fontSize = fontSize, night = night, scroll = scroll)
         navigator?.submitPreferences(readerPreferences())
         applyWindowOptions()
+        refreshDecorations()
         library.update(currentBook().copy(readerOptions = options.json()))
         getSharedPreferences("reader-${book.id}", MODE_PRIVATE).edit().putFloat("fontSize", fontSize).putBoolean("night", night).putBoolean("scroll", scroll).apply()
     }
@@ -195,10 +251,12 @@ class ReaderActivity : FragmentActivity() {
         }
     }
     private fun mark() {
-        val locator = navigator?.currentLocator?.value?.toJSON()?.toString() ?: return
-        val current = currentBook()
-        if (locator !in current.bookmarks) library.update(current.copy(bookmarks = current.bookmarks + locator))
-        notice = "书签已保存"
+        val locator = navigator?.currentLocator?.value ?: return
+        try {
+            val mark = ReadingMark.create(locator, MarkStyle.NONE)
+            if (currentBook().annotations.none { !it.deleted && it.locator == mark.locator }) library.saveAnnotation(book.id, mark)
+            notice = "书签已保存，可在书签列表编辑分类和笔记"
+        } catch (e: Exception) { notice = e.message ?: "书签保存失败" }
     }
 
     @OptIn(ExperimentalMaterial3Api::class)
@@ -225,7 +283,16 @@ class ReaderActivity : FragmentActivity() {
                             id = containerId
                             val fragment = supportFragmentManager.fragmentFactory.instantiate(classLoader, EpubNavigatorFragment::class.java.name) as EpubNavigatorFragment
                             navigator = fragment
-                            doOnAttach { supportFragmentManager.beginTransaction().replace(id, fragment, "epub").commitNow() }
+                            doOnAttach {
+                                supportFragmentManager.beginTransaction().replace(id, fragment, "epub").commitNow()
+                                fragment.addDecorationListener("annotations", object : DecorableNavigator.Listener {
+                                    override fun onDecorationActivated(event: DecorableNavigator.OnActivatedEvent): Boolean {
+                                        val mark = currentBook().annotations.firstOrNull { !it.deleted && it.id == event.decoration.id } ?: return false
+                                        annotationExpected = mark.revision; annotationDraft = mark; return true
+                                    }
+                                })
+                                refreshDecorations()
+                            }
                             lifecycleScope.launch { fragment.currentLocator.collect { locator ->
                                 progression = locator.locations.totalProgression ?: locator.locations.progression ?: 0.0
                                 val current = currentBook()
@@ -237,6 +304,27 @@ class ReaderActivity : FragmentActivity() {
             }
         }
         notice?.let { message -> AlertDialog(onDismissRequest = { notice = null }, text = { Text(message) }, confirmButton = { TextButton(onClick = { notice = null }) { Text("确定") } }) }
+        annotationDraft?.let { draft -> AnnotationEditor(draft, { annotationDraft = null }, { updated ->
+            library.saveAnnotation(book.id, updated, annotationExpected); annotationDraft = null; refreshDecorations()
+        }, onDelete = annotationExpected?.let { expected -> { library.deleteAnnotation(book.id, draft.id, expected); annotationDraft = null; refreshDecorations() } }, book = currentBook()) }
+        if (annotations || marks) AnnotationsPanel(library, series?.volumes?.map { it.bookId }?.toSet() ?: setOf(book.id), { annotations = false; marks = false }, { refreshDecorations() }, onNavigate = { original, mark ->
+            Locator.fromJSON(JSONObject(mark.locator))?.let { openVolume(original.id, it) }; annotations = false; marks = false
+        }, onNavigateLegacy = { original, raw -> lifecycleScope.launch {
+            try {
+                val json = JSONObject(raw)
+                val locator = Locator.fromJSON(json)
+                if (locator != null) openVolume(original.id, locator)
+                else {
+                    val pub = if (original.id == book.id) publication else library.openPublication(original)
+                    try {
+                        val positions = withContext(Dispatchers.IO) { pub?.positions().orEmpty() }
+                        positions.getOrNull(((positions.size - 1) * json.optDouble("txtProgress", 0.0).coerceIn(0.0, 1.0)).toInt().coerceAtLeast(0))?.let { openVolume(original.id, it) }
+                    } finally { if (original.id != book.id) pub?.close() }
+                }
+                annotations = false; marks = false
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { notice = e.message ?: "书签定位失败" }
+        } })
         if (search) ModalBottomSheet(onDismissRequest = { search = false }) {
             var query by remember { mutableStateOf("") }
             var results by remember { mutableStateOf<List<Pair<String, Locator?>>>(emptyList()) }
@@ -300,42 +388,6 @@ class ReaderActivity : FragmentActivity() {
                     }
                 }
                 if (series == null) entries(publication?.tableOfContents.orEmpty())
-            }
-        }
-        if (marks) ModalBottomSheet(onDismissRequest = { marks = false }) {
-            var markRevision by remember { mutableIntStateOf(0) }
-            val members = remember(markRevision) { series?.volumes?.mapNotNull { volume -> library.books().firstOrNull { it.id == volume.bookId }?.let { volume.title to it } } ?: listOf(book.title to currentBook()) }
-            Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
-                Text("书签", style = MaterialTheme.typography.titleLarge)
-                if (members.all { it.second.bookmarks.isEmpty() }) Text("还没有书签。点击阅读器右上角添加。", Modifier.padding(16.dp))
-                members.forEach { (volumeTitle, original) ->
-                    if (series != null && original.bookmarks.isNotEmpty()) Text(volumeTitle, style = MaterialTheme.typography.titleMedium)
-                    original.bookmarks.forEachIndexed { index, raw ->
-                        val json = runCatching { JSONObject(raw) }.getOrNull()
-                        val locator = json?.let { Locator.fromJSON(it) }
-                        val legacyProgress = json?.optDouble("txtProgress", 0.0)?.coerceIn(0.0, 1.0) ?: 0.0
-                        Row {
-                            TextButton(onClick = {
-                                if (locator != null) openVolume(original.id, locator)
-                                else lifecycleScope.launch {
-                                    try {
-                                        val pub = if (original.id == book.id) publication else library.openPublication(original)
-                                        try {
-                                            val positions = withContext(Dispatchers.IO) { pub?.positions().orEmpty() }
-                                            positions.getOrNull(((positions.size - 1) * legacyProgress).toInt().coerceAtLeast(0))?.let { if (original.id == book.id) navigator?.go(it) else openVolume(original.id, it) }
-                                            marks = false
-                                        } finally { if (original.id != book.id) pub?.close() }
-                                    } catch (e: kotlinx.coroutines.CancellationException) { throw e }
-                                    catch (e: Exception) { notice = e.message ?: "书签定位失败" }
-                                }
-                                if (original.id == book.id) marks = false
-                            }, modifier = Modifier.weight(1f)) { Text(locator?.title ?: "书签 ${index + 1} · ${(legacyProgress * 100).toInt()}%") }
-                            IconButton(onClick = {
-                                library.books().firstOrNull { it.id == original.id }?.let { current -> library.update(current.copy(bookmarks = current.bookmarks - raw)) }; markRevision++
-                            }) { Icon(Icons.Outlined.DeleteOutline, "删除书签") }
-                        }
-                    }
-                }
             }
         }
         if (fonts) FontManager(onDismiss = { fonts = false }, selected = options.fontId, onSelect = { identity ->

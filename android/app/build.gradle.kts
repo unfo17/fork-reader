@@ -55,3 +55,11 @@ dependencies {
 kotlin.sourceSets.getByName("main").kotlin.setSrcDirs(listOf(
     "src/compose/kotlin", "src/main/kotlin/org/mewx/wenku8_flutter/localcore"
 ))
+
+// Package only the eight current upstream illustrations, keeping source PNGs outside the APK.
+val prepareReadingArt by tasks.registering(Sync::class) {
+    from(rootProject.file("../assets/reading_art")) { include("*-117.webp") }
+    into(layout.buildDirectory.dir("generated/reader-art/reading-art"))
+}
+android.sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/reader-art"))
+tasks.named("preBuild").configure { dependsOn(prepareReadingArt) }

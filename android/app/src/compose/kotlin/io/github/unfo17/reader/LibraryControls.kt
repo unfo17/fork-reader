@@ -45,12 +45,12 @@ import androidx.compose.ui.unit.dp
     deleting?.let { id -> AlertDialog(onDismissRequest = { deleting = null }, title = { Text("删除分类？") }, text = { Text("分类中的书籍回到未分类，原书与阅读记录保留。") }, confirmButton = { TextButton(onClick = { change { organization.remove(id); deleting = null } }) { Text("删除分类") } }, dismissButton = { TextButton(onClick = { deleting = null }) { Text("取消") } }) }
 }
 
-@Composable fun <T> ChoiceMenu(label: String, value: T, choices: List<Pair<T, String>>, onSelect: (T) -> Unit) {
+@Composable fun <T> ChoiceMenu(label: String, value: T, choices: List<Pair<T, String>>, enabled: Boolean = true, onSelect: (T) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        OutlinedButton(onClick = { expanded = true }) { Text(label + "：" + (choices.firstOrNull { it.first == value }?.second ?: "全部")) }
+        OutlinedButton(enabled = enabled, onClick = { expanded = true }) { Text(label + "：" + (choices.firstOrNull { it.first == value }?.second ?: "全部")) }
         DropdownMenu(expanded, { expanded = false }, modifier = Modifier.heightIn(max = 420.dp)) { choices.forEach { (key, name) ->
-            DropdownMenuItem(text = { Text(name) }, onClick = { onSelect(key); expanded = false })
+            DropdownMenuItem(enabled = enabled, text = { Text(name) }, onClick = { onSelect(key); expanded = false })
         } }
     }
 }
@@ -60,8 +60,8 @@ import androidx.compose.ui.unit.dp
     ModalBottomSheet(onDismissRequest = onDismiss) {
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 650.dp), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             item { Text("书架与筛选", style = MaterialTheme.typography.titleLarge) }
-            item { ChoiceMenu("展示", view, LibraryView.entries.map { it to it.label }, onView) }
-            item { ChoiceMenu("封面大小", density, listOf("auto" to "自动", "small" to "小", "medium" to "中", "large" to "大"), onDensity) }
+            item { ChoiceMenu("展示", view, LibraryView.entries.map { it to it.label }, onSelect = onView) }
+            item { ChoiceMenu("封面大小", density, listOf("auto" to "自动", "small" to "小", "medium" to "中", "large" to "大"), onSelect = onDensity) }
             item { ChoiceMenu("排序", filter.sort, LibrarySort.entries.map { it to it.label }) { onFilter(filter.copy(sort = it)) } }
             item { ChoiceMenu("搜索范围", filter.field, BookSearchField.entries.map { it to it.label }) { onFilter(filter.copy(field = it)) } }
             item { ChoiceMenu("阅读状态", filter.reading, listOf("all" to "全部", "unread" to "未读", "reading" to "在读", "finished" to "已读", "paused" to "暂停")) { onFilter(filter.copy(reading = it)) } }

@@ -70,10 +70,10 @@ data class Book(
     val summary: String = "", val tags: List<String> = emptyList(), val status: String = "auto",
     val addedAt: Long = System.currentTimeMillis(), val readerOptions: String? = null, val originalName: String = "", val warnings: List<String> = emptyList(),
     val archiveEntry: String? = null, val archiveEntrySize: Long = 0, val archiveCharset: String = "UTF-8",
-    val bundleFile: String? = null, val bundleDigest: String? = null, val sourceDigest: String? = null
+    val bundleFile: String? = null, val bundleDigest: String? = null, val sourceDigest: String? = null, val annotations: List<ReadingMark> = emptyList()
 ) {
     fun json() = JSONObject().put("id", id).put("title", title).put("author", author).put("file", file)
-        .put("category", category).put("locator", locator).put("progress", progress).put("lastRead", lastRead)
+        .put("annotations", JSONArray(annotations.map { it.json() })).put("category", category).put("locator", locator).put("progress", progress).put("lastRead", lastRead)
         .put("bookmarks", JSONArray(bookmarks)).put("minutes", minutes)
         .put("archiveEntry", archiveEntry).put("archiveEntrySize", archiveEntrySize).put("archiveCharset", archiveCharset).put("bundleFile", bundleFile).put("bundleDigest", bundleDigest).put("sourceDigest", sourceDigest)
         .put("originalName", originalName).put("warnings", JSONArray(warnings)).put("readerOptions", readerOptions).put("summary", summary).put("tags", JSONArray(tags)).put("status", status).put("addedAt", addedAt).put("coverRevision", coverRevision)
@@ -87,7 +87,8 @@ data class Book(
             j.optString("summary"), j.optJSONArray("tags")?.let { a -> List(a.length()) { a.getString(it) } } ?: emptyList(),
             j.optString("status", "auto"), j.optLong("addedAt"), j.optString("readerOptions").takeIf { it.isNotEmpty() && it != "null" }, j.optString("originalName"), j.optJSONArray("warnings")?.let { a -> List(a.length()) { a.getString(it) } } ?: emptyList(),
             j.optString("archiveEntry").takeUnless { it.isBlank() || it == "null" }, j.optLong("archiveEntrySize"), j.optString("archiveCharset", "UTF-8"),
-            j.optString("bundleFile").takeUnless { it.isBlank() || it == "null" }, j.optString("bundleDigest").takeUnless { it.isBlank() || it == "null" }, j.optString("sourceDigest").takeUnless { it.isBlank() || it == "null" })
+            j.optString("bundleFile").takeUnless { it.isBlank() || it == "null" }, j.optString("bundleDigest").takeUnless { it.isBlank() || it == "null" }, j.optString("sourceDigest").takeUnless { it.isBlank() || it == "null" },
+            j.optJSONArray("annotations")?.let { a -> require(a.length() <= 10000) { "批注记录过多" }; List(a.length()) { ReadingMark.from(a.getJSONObject(it)) }.also { marks -> require(marks.map { it.id }.distinct().size == marks.size) { "批注编号重复" } } } ?: emptyList())
     }
 }
 
@@ -186,7 +187,7 @@ class Library private constructor(private val context: Context) {
             first.copy(id = collection.id, title = collection.title, author = collection.author, summary = collection.summary, tags = collection.tags,
                 category = organization.nameOf(organization.groupOf(collection.id)), addedAt = members.minOf { it.addedAt }, lastRead = members.maxOf { it.lastRead },
                 progress = collection.volumes.sumOf { volume -> byId.getValue(volume.bookId).progress * volume.chapters.size } / chapters,
-                minutes = members.sumOf { it.minutes }, bookmarks = members.flatMap { it.bookmarks }, status = "auto")
+                minutes = members.sumOf { it.minutes }, bookmarks = members.flatMap { it.bookmarks }, annotations = members.flatMap { it.annotations }, status = "auto")
         }
     }
     suspend fun saveSeries(id: String?, title: String, volumes: List<Pair<String, String>>, expectedAt: Long?, author: String? = null, summary: String? = null, tags: List<String>? = null): BookSeries {
@@ -201,9 +202,30 @@ class Library private constructor(private val context: Context) {
             series.save(id, title, parts, expectedAt, author, summary, tags)
         }
     }
-    @Synchronized fun update(book: Book) { save(records().filterNot { it.id == book.id } + book) }
+    @Synchronized fun saveAnnotation(bookId: String, mark: ReadingMark, expectedRevision: Long? = null) {
+        ReadingMark.from(mark.json())
+        val current = records().firstOrNull { it.id == bookId } ?: error("书籍记录已不存在")
+        val previous = current.annotations.firstOrNull { it.id == mark.id }
+        require(previous?.revision == expectedRevision && previous?.deleted != true) { "批注已变化，请重新打开" }
+        require(current.annotations.size < 10000 || previous != null) { "批注数量已达上限" }
+        update(current.copy(annotations = current.annotations.filterNot { it.id == mark.id } + mark))
+    }
+    @Synchronized fun deleteAnnotation(bookId: String, markId: String, expectedRevision: Long) {
+        val current = records().firstOrNull { it.id == bookId } ?: return
+        val previous = current.annotations.firstOrNull { it.id == markId } ?: return
+        require(previous.revision == expectedRevision) { "批注已变化，请重新打开" }
+        val removed = previous.copy(deleted = true, stateAt = maxOf(System.currentTimeMillis(), previous.revision + 1))
+        update(current.copy(annotations = current.annotations.map { if (it.id == markId) removed else it }))
+    }
+    @Synchronized fun update(book: Book) {
+        val current = records()
+        val existing = current.firstOrNull { it.id == book.id }
+        save(current.filterNot { it.id == book.id } + book.copy(annotations = ReadingMark.mergeLists(existing?.annotations.orEmpty(), book.annotations)))
+    }
     @Synchronized fun replaceRecords(books: List<Book>, organizationState: String? = null, seriesState: String? = null) {
-        val edit = prefs.edit().putString("books", JSONArray(books.map { it.json() }).toString())
+        val latest = records().associateBy { it.id }
+        val retained = books.map { book -> book.copy(annotations = ReadingMark.mergeLists(latest[book.id]?.annotations.orEmpty(), book.annotations)) }
+        val edit = prefs.edit().putString("books", JSONArray(retained.map { it.json() }).toString())
         if (organizationState != null) edit.putString("organization", organization.merged(organizationState))
         if (seriesState != null) edit.putString("series", series.merged(seriesState))
         check(edit.commit()) { "书库保存失败" }

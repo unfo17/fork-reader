@@ -52,6 +52,7 @@ class MainActivity : ComponentActivity() {
     var appFonts by remember { mutableStateOf(false) }
     var appearance by remember { mutableStateOf(false) }
     var licenses by remember { mutableStateOf(false) }
+    var annotations by remember { mutableStateOf(false) }
     var history by remember { mutableStateOf(false) }
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var query by rememberSaveable { mutableStateOf("") }
@@ -223,11 +224,12 @@ class MainActivity : ComponentActivity() {
                 }
                 2 -> {
                     item { Text("我的书房", style = MaterialTheme.typography.headlineMedium) }
-                    item { ListItem(modifier = Modifier.clickable { history = true }, headlineContent = { Text("阅读记录") }, supportingContent = { Text("读过 ${library.records().count { it.lastRead > 0 }} 本 · ${library.records().sumOf { it.bookmarks.size }} 个书签") }, leadingContent = { Icon(Icons.Outlined.AutoStories, null) }) }
+                    item { ListItem(modifier = Modifier.clickable { history = true }, headlineContent = { Text("阅读记录") }, supportingContent = { Text("读过 ${library.records().count { it.lastRead > 0 }} 本 · ${library.records().sumOf { it.bookmarks.size + it.annotations.count { mark -> !mark.deleted } }} 个书签") }, leadingContent = { Icon(Icons.Outlined.AutoStories, null) }) }
                     item { ListItem(modifier = Modifier.clickable { appearance = true }, headlineContent = { Text("外观") }, supportingContent = { Text("Material 3 · 跟随系统深浅色和动态配色") }, leadingContent = { Icon(Icons.Outlined.Palette, null) }) }
                     item { ListItem(headlineContent = { Text("数据存储") }, supportingContent = { Text("默认关联原文件，也可选择复制。删除本机文件后保留进度和书签。") }, leadingContent = { Icon(Icons.Outlined.Storage, null) }) }
                     item { OutlinedButton(enabled = !busy, onClick = { exportPicker.launch("本地书房备份.zip") }) { Text(if (books.any { it.archiveEntry != null }) "导出备份（含 ZIP 整个原包）" else "导出书库与阅读记录") } }
                     item { OutlinedButton(enabled = !busy, onClick = { restorePicker.launch(arrayOf("application/zip", "application/octet-stream")) }) { Text("从备份合并恢复") } }
+                    item { TextButton(onClick = { annotations = true }) { Text("全部批注和摘录") } }
                     item { TextButton(onClick = { appFonts = true }) { Text("应用字体与字体管理") } }
                     item { TextButton(onClick = { licenses = true }) { Text("开源许可") } }
                     item { ListItem(headlineContent = { Text("关于本地书房") }, supportingContent = { Text("0.2.0-dev · Compose / Readium\n基于 Wenku8_Flutter，遵循 GPL-2.0") }) }
@@ -236,6 +238,7 @@ class MainActivity : ComponentActivity() {
             item { Spacer(Modifier.height(90.dp)) }
         }
     }
+    if (annotations) AnnotationsPanel(library, onDismiss = { annotations = false })
     if (seriesManager) SeriesManager(library, editingSeries, selectedBooks, { seriesManager = false }, { books = library.collectionBooks(); selectedBooks = emptySet() })
     if (appFonts) FontManager(onDismiss = { appFonts = false }, selected = context.getSharedPreferences("appearance", android.content.Context.MODE_PRIVATE).getString("fontId", "").orEmpty(), onSelect = { id ->
         context.getSharedPreferences("appearance", android.content.Context.MODE_PRIVATE).edit().putString("fontId", id).apply()
@@ -255,7 +258,7 @@ class MainActivity : ComponentActivity() {
     }
     if (licenses) Licenses { licenses = false }
     if (history) ModalBottomSheet(onDismissRequest = { history = false }) {
-        val records = library.records().filter { it.lastRead > 0 || it.bookmarks.isNotEmpty() }.sortedByDescending { it.lastRead }
+        val records = library.records().filter { it.lastRead > 0 || it.bookmarks.isNotEmpty() || it.annotations.any { mark -> !mark.deleted } }.sortedByDescending { it.lastRead }
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 600.dp), contentPadding = PaddingValues(20.dp)) {
             item { Text("阅读记录", style = MaterialTheme.typography.titleLarge) }
             if (records.isEmpty()) item { Text("还没有阅读记录。", Modifier.padding(vertical = 20.dp)) }

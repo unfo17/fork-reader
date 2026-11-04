@@ -253,7 +253,10 @@
         "lib/library_state.dart"
       ],
       "status": "partial",
-      "tests": []
+      "tests": [
+        "io.github.unfo17.reader.AnnotationTest.exactSelectionOutlineSurvivesReopenAndTypographyChanges",
+        "io.github.unfo17.reader.AnnotationTest.independentAnnotationFieldsMergeWithoutRestoringDeletedMarks"
+      ]
     },
     {
       "id": "reader.highlights",
@@ -261,8 +264,11 @@
       "upstream": [
         "lib/epub_rich_text.dart"
       ],
-      "status": "pending",
-      "tests": []
+      "status": "partial",
+      "tests": [
+        "io.github.unfo17.reader.AnnotationTest.exactSelectionOutlineSurvivesReopenAndTypographyChanges",
+        "io.github.unfo17.reader.AnnotationTest.independentAnnotationFieldsMergeWithoutRestoringDeletedMarks"
+      ]
     },
     {
       "id": "reader.excerpts",
@@ -270,8 +276,12 @@
       "upstream": [
         "android/app/src/main/kotlin/org/mewx/wenku8_flutter/localcore/BookImageStore.kt"
       ],
-      "status": "pending",
-      "tests": []
+      "status": "partial",
+      "tests": [
+        "io.github.unfo17.reader.QuoteImageTest.longExcerptsPaginateWithoutDroppingTextOrSplittingSurrogatePairs",
+        "io.github.unfo17.reader.QuoteImageTest.allEightUpstreamThemesRenderBoundedOriginalArtwork",
+        "io.github.unfo17.reader.QuoteImageTest.galleryPublishesTheExactPngAndFailedPublicationRollsBack"
+      ]
     },
     {
       "id": "reader.search",

@@ -26,12 +26,14 @@ suspend fun exportLibrary(context: Context, uri: Uri) = withContext(Dispatchers.
     val library = Library.get(context)
     val records = library.records()
     records.filterNot { it.removed }.forEach { library.withOriginal(it) { source -> require(source.length() > 0) { "原文件无法读取，请重新关联" } } }
+    val manifest = records.map { book -> book.copy(file = "${book.id}.${File(book.file).extension}", sourceReference = null, sourceSize = 0, sourceModified = 0,
+        bundleFile = if (book.archiveEntry != null && !book.removed) "archive-${book.bundleDigest}.zip" else null).json() }
+    val manifestBytes = JSONArray(manifest).toString().toByteArray()
+    require(manifestBytes.size <= 10 * 1024 * 1024) { "书库索引超过 10MiB，暂时无法完整备份；现有数据保留" }
     val output = context.contentResolver.openOutputStream(uri, "wt") ?: error("无法写入备份")
     ZipOutputStream(output).use { zip ->
         zip.putNextEntry(ZipEntry("library.json"))
-        val manifest = records.map { book -> book.copy(file = "${book.id}.${File(book.file).extension}", sourceReference = null, sourceSize = 0, sourceModified = 0,
-            bundleFile = if (book.archiveEntry != null && !book.removed) "archive-${book.bundleDigest}.zip" else null).json() }
-        zip.write(JSONArray(manifest).toString().toByteArray()); zip.closeEntry()
+        zip.write(manifestBytes); zip.closeEntry()
         zip.putNextEntry(ZipEntry("organization.json")); zip.write(library.organization.snapshot().toByteArray()); zip.closeEntry()
         zip.putNextEntry(ZipEntry("series.json")); zip.write(library.series.snapshot().toByteArray()); zip.closeEntry()
         val archives = mutableSetOf<String>()
@@ -136,7 +138,7 @@ suspend fun restoreLibrary(context: Context, uri: Uri): Int = withContext(Dispat
             merged[book.id] = newer.copy(file = content.file, removed = content.removed, sourceReference = content.sourceReference,
                 sourceSize = content.sourceSize, sourceModified = content.sourceModified, bundleFile = content.bundleFile, bundleDigest = content.bundleDigest,
                 archiveEntry = content.archiveEntry, archiveEntrySize = content.archiveEntrySize, archiveCharset = content.archiveCharset, sourceDigest = content.sourceDigest,
-                bookmarks = (existing?.bookmarks.orEmpty() + book.bookmarks).distinct())
+                bookmarks = (existing?.bookmarks.orEmpty() + book.bookmarks).distinct(), annotations = ReadingMark.mergeLists(existing?.annotations.orEmpty(), book.annotations))
         }
         library.replaceRecords(merged.values.toList(), organizationState, seriesState)
         committed = true
