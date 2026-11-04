@@ -4,12 +4,33 @@
 
 目标是 Android Compose / Material 3 本地阅读器。主页放继续阅读和阅读概览，本地管理书库，我的放数据管理。在线 Wenku8 发现、排行、书城、账号不进入新应用。上游历史和源码保留用于功能核对。
 
+## 迁移方式（已调整）
+
+不再把独立简化版作为最终实现。Android 构建入口收回原项目的 `android/`，Compose 页面位于 `app/src/compose/`，原 Flutter 页面与适配器保留，按业务边界逐项迁移。原构建配置保存于 `docs/upstream-android-build/`，可结合 Git 历史核对。
+
+直接复用原 Kotlin 实现，整理至 `android/app/src/main/kotlin/org/mewx/wenku8_flutter/localcore/`，包名不变：
+
+| 原项目代码 | 当前用途 |
+| --- | --- |
+| BookTextDecoder | TXT 编码检测、128MiB 限制、流式 UTF-8 规范化 |
+| BookDocumentInput / BookDocumentZip | 原文件及描述符输入、受限 ZIP 读取 |
+| LinkedTextFile | 原有分块读取实现保留并参与编译，文件引用流程尚待接入 |
+| BookImportQueue / BookImportWorkspace | 逐文件导入暂存、失败清理、会话隔离 |
+| BookEpubWriter | TXT 内容打包成可重建 EPUB，保留原文件；唯一调整为内联原 512MiB 输出限制，解除缺失 BookArchiveImport 的依赖 |
+| SpeechLocalePolicy | 沿用原系统朗读的语言规则 |
+
+新增 LocalTextPublication 只负责把原有解码器和打包器连接到 Readium；默认章节／卷规则和等号装饰标题处理来自 `lib/local_import_options.dart` 与 `lib/local_text_rules.dart`。未开放自定义正则设置，原项目对规则超时的隔离策略还需迁移。
+
+公开源码中 BookDocuments 引用 BookArchiveImport、BookMarkupImport、BookPdfImport，但当前仓库没有这些类的实现。因此多格式导入不能仅通过接上 Flutter 通道完成，后续需要补齐原业务契约并验证，不标为已复用。
+
+应用仍沿用此前迁移版的独立 applicationId；不会覆盖上游发行版。此前迁移版的数据保持可读，但上游 Flutter 数据库尚未自动迁移。旧 TXT 百分比书签按全书 positions 映射到 Readium，是近似位置；不承诺原字符级坐标精度。
+
 ## 功能核对
 
 | 上游本地能力 | 当前状态 |
 | --- | --- |
 | EPUB 导入、元数据、目录、阅读 | 已接 Readium 3.1.2，设备测试通过 |
-| TXT 阅读 | 已实现 UTF-8 / GB18030、滚动进度与书签 |
+| TXT 阅读 | 复用上游编码检测与打包器，支持 UTF-8 / UTF-16 / GB18030 / Big5，通过 Readium 阅读，生成默认章节目录 |
 | 多选文件、目录扫描、导入确认 | 已实现；只处理 EPUB / TXT |
 | 封面展示 | 从 EPUB 提取；暂不支持手动替换 |
 | 分类、书名作者编辑、搜索、排序 | 已实现 |
@@ -39,4 +60,4 @@ Readium 官方 EPUB Navigator 基于 Fragment/WebView，嵌入 Compose 的 Andro
 
 ## 验证
 
-设备测试使用原创生成的 EPUB，覆盖标题作者读取、内容去重、目录解析、Compose 内 Readium Fragment 渲染、阅读时间保存、备份恢复及无效 EPUB 导入回滚。当前验证设备为 Android 15 / API 35。尚未宣称对大文件、全部 EPUB 排版及全部设备完成验收。
+设备测试共四项，新增五种 TXT 编码、无换行长段落、上游默认标题规则与转换后目录校验；另使用原创生成的 EPUB，覆盖标题作者读取、内容去重、目录解析、Compose 内 Readium Fragment 渲染、阅读时间保存、备份恢复及无效 EPUB 导入回滚。当前验证设备为 Android 15 / API 35。尚未宣称对大文件、全部 EPUB 排版及全部设备完成验收。

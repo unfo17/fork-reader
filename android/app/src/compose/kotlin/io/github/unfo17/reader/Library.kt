@@ -19,6 +19,9 @@ import org.readium.r2.streamer.PublicationOpener
 import org.readium.r2.streamer.parser.DefaultPublicationParser
 import java.io.File
 import java.util.UUID
+import org.mewx.wenku8_flutter.LocalTextPublication
+import org.mewx.wenku8_flutter.BookDocumentImportSession
+import org.mewx.wenku8_flutter.BookTextDecoder
 
 class ReadiumEngine(context: Context) {
     private val http = DefaultHttpClient()
@@ -51,11 +54,42 @@ data class Book(
 class Library private constructor(private val context: Context) {
     private val prefs = context.getSharedPreferences("library", Context.MODE_PRIVATE)
     val engine = ReadiumEngine(context)
+    private val importSession = BookDocumentImportSession<Uri>(File(context.noBackupFilesDir, "book-import-staging")) { uri, target, limit ->
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            target.outputStream().use { output ->
+                val bytes = ByteArray(65536)
+                var total = 0L
+                while (true) {
+                    val count = input.read(bytes)
+                    if (count < 0) break
+                    total += count
+                    require(total <= limit) { "所选书籍超过大小限制" }
+                    output.write(bytes, 0, count)
+                }
+                require(total > 0) { "所选书籍为空" }
+            }
+        } ?: error("无法读取所选文件")
+    }
+    private val importMutex = kotlinx.coroutines.sync.Mutex()
+    private val textMutex = kotlinx.coroutines.sync.Mutex()
+    suspend fun publicationFile(book: Book): File = withContext(Dispatchers.IO) {
+        if (!book.file.endsWith(".txt", true)) return@withContext File(book.file)
+        val target = File(context.filesDir, "text-publications/${book.id}.epub")
+        textMutex.lock()
+        try {
+            if (!target.isFile) LocalTextPublication.prepare(File(book.file), target, book.title, File(context.noBackupFilesDir, "text-conversion"))
+            target
+        } finally { textMutex.unlock() }
+    }
     @Synchronized fun books(): List<Book> = JSONArray(prefs.getString("books", "[]")).let { a -> List(a.length()) { Book.from(a.getJSONObject(it)) } }
     @Synchronized fun update(book: Book) { save(books().filterNot { it.id == book.id } + book) }
     private fun save(books: List<Book>) { check(prefs.edit().putString("books", JSONArray(books.map { it.json() }).toString()).commit()) }
-    @Synchronized fun remove(book: Book) { save(books().filterNot { it.id == book.id }); File(book.file).delete(); File(book.file + ".jpg").delete() }
-    suspend fun import(uri: Uri): Book = withContext(Dispatchers.IO) {
+    @Synchronized fun remove(book: Book) { save(books().filterNot { it.id == book.id }); File(book.file).delete(); File(book.file + ".jpg").delete(); File(context.filesDir, "text-publications/${book.id}.epub").delete() }
+    suspend fun import(uri: Uri): Book {
+        importMutex.lock()
+        try { return importSelected(uri) } finally { importMutex.unlock() }
+    }
+    private suspend fun importSelected(uri: Uri): Book = withContext(Dispatchers.IO) {
         val name = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
             if (it.moveToFirst()) it.getString(0) else null
         } ?: uri.lastPathSegment ?: "导入的书籍"
@@ -63,8 +97,13 @@ class Library private constructor(private val context: Context) {
         val extension = if (name.endsWith(".epub", true)) "epub" else "txt"
         val dir = File(context.filesDir, "books").apply { mkdirs() }
         val file = File(dir, "${UUID.randomUUID()}.$extension")
+        var generated: File? = null
         try {
-            context.contentResolver.openInputStream(uri)?.use { input -> file.outputStream().use { input.copyTo(it) } } ?: error("无法读取所选文件")
+            val selected = importSession.queue.select(uri, name, if (extension == "txt") BookTextDecoder.MAX_TEXT else 512L * 1024 * 1024)
+            try {
+                val staged = File(importSession.queue.stage(selected.getValue("token")).getValue("path"))
+                try { check(staged.renameTo(file)) { "无法保存导入文件" } } finally { staged.delete() }
+            } finally { importSession.queue.release(listOf(selected.getValue("token"))) }
             val digest = java.security.MessageDigest.getInstance("SHA-256")
             file.inputStream().use { input -> val buf = ByteArray(8192); var n = input.read(buf); while (n > 0) { digest.update(buf, 0, n); n = input.read(buf) } }
             val id = digest.digest().joinToString("") { "%02x".format(it) }
@@ -76,9 +115,13 @@ class Library private constructor(private val context: Context) {
                     Book(id, publication.metadata.title ?: name.removeSuffix(".epub"), publication.metadata.authors.joinToString { it.name.toString() }, file.path) }
                 finally { publication.close() }
             } else Book(id, name.substringBeforeLast('.'), "", file.path)
+            if (extension == "txt") {
+                val publication = engine.open(publicationFile(book).also { generated = it })
+                publication.close()
+            }
             update(book)
             book
-        } catch (e: Exception) { file.delete(); File(file.path + ".jpg").delete(); throw e }
+        } catch (e: Exception) { file.delete(); File(file.path + ".jpg").delete(); generated?.delete(); throw e }
     }
     companion object {
         @Volatile private var instance: Library? = null

@@ -36,6 +36,8 @@ import org.readium.r2.shared.publication.Link
 import org.readium.r2.shared.publication.Locator
 import org.readium.r2.shared.publication.Publication
 import java.io.File
+import org.readium.r2.shared.publication.services.positions
+import org.mewx.wenku8_flutter.SpeechLocalePolicy
 
 class ReaderActivity : FragmentActivity() {
     private lateinit var library: Library
@@ -46,7 +48,6 @@ class ReaderActivity : FragmentActivity() {
     private val containerId = View.generateViewId()
     private var loading by mutableStateOf(true)
     private var failure by mutableStateOf<String?>(null)
-    private var txt by mutableStateOf<String?>(null)
     private var toc by mutableStateOf(false)
     private var marks by mutableStateOf(false)
     private var settings by mutableStateOf(false)
@@ -57,7 +58,6 @@ class ReaderActivity : FragmentActivity() {
     private var speechReady = false
     private var speaking by mutableStateOf(false)
     private var search by mutableStateOf(false)
-    private var textJump by mutableStateOf<Double?>(null)
     private var notice by mutableStateOf<String?>(null)
     private var progression by mutableDoubleStateOf(0.0)
 
@@ -71,7 +71,7 @@ class ReaderActivity : FragmentActivity() {
         speech = TextToSpeech(this) { status ->
             speechReady = status == TextToSpeech.SUCCESS
             if (speechReady) {
-                speech?.language = Locale.SIMPLIFIED_CHINESE
+                speech?.language = SpeechLocalePolicy.requestedLocale("zh-CN") ?: Locale.SIMPLIFIED_CHINESE
                 speech?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
                     override fun onStart(id: String?) { }
                     override fun onDone(id: String?) { runOnUiThread { speaking = false } }
@@ -87,16 +87,17 @@ class ReaderActivity : FragmentActivity() {
         setContent { ReaderTheme { ReaderScreen() } }
         lifecycleScope.launch {
             try {
-                if (book.file.endsWith(".txt")) {
-                    txt = withContext(Dispatchers.IO) { val bytes = File(book.file).readBytes(); val utf8 = bytes.toString(Charsets.UTF_8); if ('\uFFFD' in utf8) bytes.toString(charset("GB18030")) else utf8 }
-                } else {
-                    val pub = withContext(Dispatchers.IO) { library.engine.open(File(book.file)) }
-                    publication = pub
-                    supportFragmentManager.fragmentFactory = EpubNavigatorFactory(pub).createFragmentFactory(
-                        initialLocator = book.locator?.let { Locator.fromJSON(JSONObject(it)) },
-                        initialPreferences = readerPreferences()
-                    )
-                }
+                val pub = withContext(Dispatchers.IO) { library.engine.open(library.publicationFile(book)) }
+                publication = pub
+                val initial = book.locator?.let { Locator.fromJSON(JSONObject(it)) }
+                    ?: if (book.progress > 0) withContext(Dispatchers.IO) {
+                        val positions = pub.positions()
+                        positions.getOrNull(((positions.size - 1) * book.progress).toInt().coerceAtLeast(0))
+                    } else null
+                supportFragmentManager.fragmentFactory = EpubNavigatorFactory(pub).createFragmentFactory(
+                    initialLocator = initial,
+                    initialPreferences = readerPreferences()
+                )
                 loading = false
             } catch (e: Exception) { failure = e.message ?: "无法打开书籍"; loading = false }
         }
@@ -113,18 +114,23 @@ class ReaderActivity : FragmentActivity() {
         if (!speechReady) { notice = "系统朗读引擎未就绪，请安装中文语音"; return }
         lifecycleScope.launch {
             try {
-                val text = txt?.let { it.substring((it.length * progression).toInt().coerceIn(0, it.length)).take(3000) }
-                    ?: withContext(Dispatchers.IO) {
-                        val iterator = publication?.content(navigator?.currentLocator?.value)?.iterator()
-                        buildString { while (length < 3000) { ensureActive(); val element = iterator?.nextOrNull() ?: break; if (element is Content.TextualElement) append(element.text.orEmpty()).append("\n") } }.take(3000)
-                    }
+                val text = withContext(Dispatchers.IO) {
+                    val iterator = publication?.content(navigator?.currentLocator?.value)?.iterator()
+                    buildString {
+                        while (length < 3000) {
+                            ensureActive()
+                            val element = iterator?.nextOrNull() ?: break
+                            if (element is Content.TextualElement) append(element.text.orEmpty()).append("\n")
+                        }
+                    }.take(3000)
+                }
                 if (text.isBlank()) { notice = "当前位置没有可朗读的文字"; return@launch }
                 speaking = speech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "reading") == TextToSpeech.SUCCESS
             } catch (e: Exception) { notice = e.message ?: "无法朗读" }
         }
     }
     private fun mark() {
-        val locator = navigator?.currentLocator?.value?.toJSON()?.toString() ?: JSONObject().put("txtProgress", progression).toString()
+        val locator = navigator?.currentLocator?.value?.toJSON()?.toString() ?: return
         val current = currentBook()
         if (locator !in current.bookmarks) library.update(current.copy(bookmarks = current.bookmarks + locator))
         notice = "书签已保存"
@@ -133,7 +139,7 @@ class ReaderActivity : FragmentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable private fun ReaderScreen() {
         Scaffold(topBar = { TopAppBar(title = { Text(book.title, maxLines = 1) }, navigationIcon = { IconButton(onClick = { finish() }) { Icon(Icons.Outlined.ArrowBack, "返回") } }, actions = {
-            IconButton(onClick = { mark() }) { Icon(Icons.Outlined.BookmarkAdd, "添加书签") }
+            IconButton(onClick = { mark() }, enabled = navigator != null && !loading) { Icon(Icons.Outlined.BookmarkAdd, "添加书签") }
             IconButton(onClick = { settings = true }) { Icon(Icons.Outlined.Settings, "阅读设置") }
         }) }, bottomBar = { BottomAppBar {
             TextButton(onClick = { toc = true }, enabled = publication != null) { Text("目录") }
@@ -149,16 +155,6 @@ class ReaderActivity : FragmentActivity() {
                 when {
                     loading -> CircularProgressIndicator(Modifier.padding(24.dp))
                     failure != null -> Text(failure!!, Modifier.padding(24.dp))
-                    txt != null -> {
-                        val state = rememberScrollState()
-                        var restored by remember { mutableStateOf(false) }
-                        LaunchedEffect(state.maxValue) { if (state.maxValue > 0 && !restored) { state.scrollTo((book.progress * state.maxValue).toInt()); restored = true } }
-                        LaunchedEffect(textJump) { textJump?.let { state.scrollTo((it * state.maxValue).toInt()); textJump = null } }
-                        LaunchedEffect(state.value) { progression = if (state.maxValue > 0) state.value.toDouble() / state.maxValue else 0.0 }
-                        Surface(color = if (night) androidx.compose.ui.graphics.Color(0xFF191919) else MaterialTheme.colorScheme.surface) {
-                            Text(txt!!, Modifier.fillMaxSize().verticalScroll(state).padding(24.dp), fontSize = (18 * fontSize / 100).sp, lineHeight = (30 * fontSize / 100).sp, color = if (night) androidx.compose.ui.graphics.Color(0xFFE0E0E0) else MaterialTheme.colorScheme.onSurface)
-                        }
-                    }
                     publication != null -> AndroidView(factory = { context ->
                         FragmentContainerView(context).apply {
                             id = containerId
@@ -189,12 +185,11 @@ class ReaderActivity : FragmentActivity() {
                         try {
                             results = withContext(Dispatchers.IO) {
                                 val matches = mutableListOf<Pair<String, Locator?>>()
-                                if (txt != null) {
-                                    var offset = txt!!.indexOf(query, ignoreCase = true)
-                                    while (offset >= 0 && matches.size < 100) { matches += ("$offset:" + txt!!.substring(offset, (offset + 100).coerceAtMost(txt!!.length))) to null; offset = txt!!.indexOf(query, offset + query.length, true) }
-                                } else {
-                                    val iterator = publication?.content()?.iterator()
-                                    while (matches.size < 100) { ensureActive(); val element = iterator?.nextOrNull() ?: break; if (element is Content.TextualElement && element.text.orEmpty().contains(query, true)) matches += element.text.orEmpty().take(180) to element.locator }
+                                val iterator = publication?.content()?.iterator()
+                                while (matches.size < 100) {
+                                    ensureActive()
+                                    val element = iterator?.nextOrNull() ?: break
+                                    if (element is Content.TextualElement && element.text.orEmpty().contains(query, true)) matches += element.text.orEmpty().take(180) to element.locator
                                 }
                                 matches
                             }
@@ -202,7 +197,7 @@ class ReaderActivity : FragmentActivity() {
                         finally { searching = false }
                     }
                 }) { Text(if (searching) "搜索中…" else "搜索（最多 100 条）") }
-                results.forEach { (text, locator) -> TextButton(onClick = { if (locator != null) navigator?.go(locator) else textJump = text.substringBefore(':').toDouble() / txt!!.length; search = false }) { Text(text.substringAfter(':', text)) } }
+                results.forEach { (text, locator) -> TextButton(onClick = { locator?.let { navigator?.go(it) }; search = false }) { Text(text) } }
             }
         }
         if (toc) ModalBottomSheet(onDismissRequest = { toc = false }) {
@@ -223,9 +218,14 @@ class ReaderActivity : FragmentActivity() {
                 Text("书签", style = MaterialTheme.typography.titleLarge)
                 if (all.isEmpty()) Text("还没有书签。点击阅读器右上角添加。", Modifier.padding(16.dp))
                 all.forEachIndexed { index, raw ->
-                    val locator = runCatching { Locator.fromJSON(JSONObject(raw)) }.getOrNull()
+                    val json = runCatching { JSONObject(raw) }.getOrNull()
+                    val locator = json?.let { Locator.fromJSON(it) }
+                    val legacyProgress = json?.optDouble("txtProgress", 0.0)?.coerceIn(0.0, 1.0) ?: 0.0
                     Row {
-                        TextButton(onClick = { if (locator != null) navigator?.go(locator) else textJump = JSONObject(raw).optDouble("txtProgress"); marks = false }, modifier = Modifier.weight(1f)) { Text(locator?.title ?: "书签 ${index + 1} · TXT ${(JSONObject(raw).optDouble("txtProgress") * 100).toInt()}%") }
+                        TextButton(onClick = { if (locator != null) navigator?.go(locator) else lifecycleScope.launch {
+                            val positions = withContext(Dispatchers.IO) { publication?.positions().orEmpty() }
+                            positions.getOrNull(((positions.size - 1) * legacyProgress).toInt().coerceAtLeast(0))?.let { navigator?.go(it) }
+                        }; marks = false }, modifier = Modifier.weight(1f)) { Text(locator?.title ?: "书签 ${index + 1} · ${(legacyProgress * 100).toInt()}%") }
                         IconButton(onClick = { all = all - raw; library.update(currentBook().copy(bookmarks = all)) }) { Icon(Icons.Outlined.DeleteOutline, "删除书签") }
                     }
                 }
@@ -243,7 +243,7 @@ class ReaderActivity : FragmentActivity() {
     }
     override fun onStart() { super.onStart(); started = System.currentTimeMillis() }
     override fun onStop() {
-        if (::book.isInitialized) {
+        if (::book.isInitialized && !loading && failure == null) {
             val current = currentBook()
             library.update(current.copy(progress = progression, lastRead = System.currentTimeMillis(), minutes = current.minutes + (System.currentTimeMillis() - started) / 1000))
         }

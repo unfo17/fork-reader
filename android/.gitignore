@@ -12,3 +12,7 @@ GeneratedPluginRegistrant.java
 key.properties
 **/*.keystore
 **/*.jks
+
+# Commit the wrapper for reproducible native builds.
+!/gradlew
+!gradle/wrapper/gradle-wrapper.jar

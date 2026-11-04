@@ -1,104 +1,51 @@
-import java.util.Properties
-
 plugins {
     id("com.android.application")
-    id("kotlin-android")
-    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
-    id("dev.flutter.flutter-gradle-plugin")
+    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
-
-val releaseKeyFile = rootProject.file("key.properties")
-val releaseKeys = Properties().apply {
-    if (releaseKeyFile.isFile) releaseKeyFile.inputStream().use { load(it) }
-}
-val readerPreview = providers.gradleProperty("wenkuReaderPreview").orNull == "true"
-
 android {
-    namespace = "org.mewx.wenku8_flutter"
-    compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
-
-    compileOptions {
-        isCoreLibraryDesugaringEnabled = true
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
-    }
-
-    defaultConfig {
-        // Public source previews must not replace an installed distribution.
-        applicationId = "org.mewx.wenku8_flutter.source_preview"
-        minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
-        versionCode = flutter.versionCode
-        versionName = flutter.versionName
-        manifestPlaceholders["wenkuAppLabel"] = "轻小说文库 · 源码预览"
-        // AGP otherwise builds upstream desktop utilities too, including the
-        // DRM tool whose encryption code is intentionally disabled in this app.
-        externalNativeBuild.cmake.targets.addAll(listOf("mobi", "wenku_mobi"))
-    }
-
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
+    namespace = "io.github.unfo17.reader"
+    compileSdk = 35
+    defaultConfig { applicationId = "io.github.unfo17.reader"; minSdk = 26; targetSdk = 35; versionCode = 2; versionName = "0.2.0-dev"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    sourceSets {
+        getByName("main") {
+            manifest.srcFile("src/compose/AndroidManifest.xml")
+            java.setSrcDirs(listOf("src/compose/kotlin", "../../third_party/juniversalchardet-2.0.4/src/main/java"))
+            res.setSrcDirs(listOf("src/compose/res"))
+            assets.setSrcDirs(emptyList<String>())
+        }
+        getByName("androidTest") {
+            java.setSrcDirs(listOf("src/composeTest/java"))
+            assets.setSrcDirs(listOf("src/composeTest/assets"))
         }
     }
-
-    if (releaseKeyFile.isFile) {
-        signingConfigs.create("distribution") {
-            keyAlias = releaseKeys.getProperty("keyAlias")
-            keyPassword = releaseKeys.getProperty("keyPassword")
-            storeFile = rootProject.file(requireNotNull(releaseKeys.getProperty("storeFile")))
-            storePassword = releaseKeys.getProperty("storePassword")
-        }
-    }
-
-    buildTypes {
-        release {
-            proguardFile(file("document-import.pro"))
-            if (readerPreview) {
-                applicationIdSuffix = ".reader_preview"
-            }
-            // Local previews remain install-compatible. Public distributions
-            // use an owner's untracked key.properties, never an embedded key.
-            signingConfig = signingConfigs.getByName(
-                if (releaseKeyFile.isFile && !readerPreview) "distribution" else "debug"
-            )
-        }
-    }
-
-    // Match native document import libraries to the selected Flutter targets.
-    val targets = project.findProperty("target-platform")?.toString()
-    if (targets != null && project.findProperty("split-per-abi")?.toString()?.toBoolean() != true) {
-        val targetAbis = targets.split(",").map { platform ->
-            when (platform) {
-                "android-arm" -> "armeabi-v7a"
-                "android-arm64" -> "arm64-v8a"
-                "android-x64" -> "x86_64"
-                else -> error("Unsupported Flutter target platform: $platform")
-            }
-        }
-        buildTypes.configureEach {
-            ndk.abiFilters.clear()
-            ndk.abiFilters.addAll(targetAbis)
-        }
-    }
+    buildFeatures { compose = true }
+    compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17; isCoreLibraryDesugaringEnabled = true }
+    kotlinOptions { jvmTarget = "17" }
+    packaging { resources.excludes += setOf("META-INF/AL2.0", "META-INF/LGPL2.1") }
 }
-
-flutter {
-    source = "../.."
-}
-
 dependencies {
-    implementation("org.apache.poi:poi-scratchpad:5.5.1")
-    implementation("com.github.albfernandez:juniversalchardet:2.0.4")
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
-    implementation("org.jsoup:jsoup:1.23.2")
-    implementation("org.commonmark:commonmark:0.30.1")
-    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
-    // Keep the media host classes available to the app's shared-engine wiring.
-    implementation("androidx.media:media:1.7.0")
+    implementation("androidx.core:core-ktx:1.16.0")
+    implementation(platform("androidx.compose:compose-bom:2025.04.01"))
+    implementation("androidx.activity:activity-compose:1.10.1")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+    implementation("androidx.fragment:fragment-ktx:1.8.6")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
+    implementation("org.readium.kotlin-toolkit:readium-shared:3.1.2")
+    implementation("org.readium.kotlin-toolkit:readium-streamer:3.1.2")
+    implementation("org.readium.kotlin-toolkit:readium-navigator:3.1.2")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:core:1.6.1")
 }
+
+// The original local core keeps its package and implementation; Flutter adapters stay outside this build.
+kotlin.sourceSets.getByName("main").kotlin.setSrcDirs(listOf(
+    "src/compose/kotlin", "src/main/kotlin/org/mewx/wenku8_flutter/localcore"
+))

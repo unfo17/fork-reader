@@ -139,7 +139,7 @@ class MainActivity : ComponentActivity() {
                     item { ListItem(headlineContent = { Text("数据存储") }, supportingContent = { Text("导入时复制到应用内；卸载应用会删除书库，请保留原文件。") }, leadingContent = { Icon(Icons.Outlined.Storage, null) }) }
                     item { OutlinedButton(enabled = !busy, onClick = { exportPicker.launch("本地书房备份.zip") }) { Text("导出书库与阅读记录") } }
                     item { OutlinedButton(enabled = !busy, onClick = { restorePicker.launch(arrayOf("application/zip", "application/octet-stream")) }) { Text("从备份合并恢复") } }
-                    item { ListItem(headlineContent = { Text("关于本地书房") }, supportingContent = { Text("0.1.0 · Compose / Readium\n基于 Wenku8_Flutter，遵循 GPL-2.0") }) }
+                    item { ListItem(headlineContent = { Text("关于本地书房") }, supportingContent = { Text("0.2.0-dev · Compose / Readium\n基于 Wenku8_Flutter，遵循 GPL-2.0") }) }
                 }
             }
             item { Spacer(Modifier.height(90.dp)) }

@@ -107,6 +107,6 @@ internal class BookEpubWriter(private val work: File, var title: String) {
                 item.second.inputStream().use { it.copyTo(zip, 65536) }; zip.closeEntry()
             }
         }
-        require(output.length() <= BookArchiveImport.MAX_ARCHIVE) { "转换后的文档超过 512 MiB" }
+        require(output.length() <= 512L * 1024 * 1024) { "转换后的文档超过 512 MiB" }
     }
 }
