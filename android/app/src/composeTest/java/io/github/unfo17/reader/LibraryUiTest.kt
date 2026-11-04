@@ -35,11 +35,14 @@ class LibraryUiTest {
     }
     private fun text(value: String) = waitNode { it.text?.toString() == value }
     private fun click(value: String) {
-        var node: AccessibilityNodeInfo? = waitNode { it.text?.toString() == value || it.contentDescription?.toString() == value }
-        while (node != null && !node.isClickable) node = node.parent
-        assertNotNull("控件不可点击：$value", node)
-        assertTrue(node!!.performAction(AccessibilityNodeInfo.ACTION_CLICK))
-        instrumentation.waitForIdleSync()
+        val deadline = SystemClock.uptimeMillis() + 12000
+        while (SystemClock.uptimeMillis() < deadline) {
+            var node: AccessibilityNodeInfo? = waitNode { it.text?.toString() == value || it.contentDescription?.toString() == value }
+            while (node != null && !node.isClickable) node = node.parent
+            if (node?.isEnabled == true && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) { instrumentation.waitForIdleSync(); return }
+            SystemClock.sleep(100)
+        }
+        error("控件未就绪：$value")
     }
     @Test fun seriesContentsAndBookmarksNavigateBetweenOriginalReadiumVolumes() = runBlocking<Unit> {
         val context = instrumentation.targetContext

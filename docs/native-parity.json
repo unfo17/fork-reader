@@ -54,8 +54,14 @@
       "upstream": [
         "lib/local_import_options.dart"
       ],
-      "status": "pending",
-      "tests": []
+      "status": "partial",
+      "tests": [
+        "io.github.unfo17.reader.TextRulesTest.isolatedRulesMatchCustomLinesAndRecoverFromInvalidExpressions",
+        "io.github.unfo17.reader.TextRulesTest.runawayExpressionDiesInItsOwnProcessAndMainThreadRemainsResponsive",
+        "io.github.unfo17.reader.TextRulesTest.customVolumeTreeEncodingAndStoredRulesSurviveReimportAndBackup",
+        "io.github.unfo17.reader.TextRulesTest.invalidCustomRuleImportRollsBackOriginalAndMetadata",
+        "io.github.unfo17.reader.TextImportSettingsTest.settingsPreviewAndSaveUseTheSameIsolatedDirectoryRules"
+      ]
     },
     {
       "id": "import.epub",
@@ -217,7 +223,9 @@
         "lib/local_book_removal.dart"
       ],
       "status": "partial",
-      "tests": []
+      "tests": [
+        "io.github.unfo17.reader.ReaderLifecycleTest.stoppingReaderAfterOriginalRemovalPreservesTombstoneAndNeverCrashes"
+      ]
     },
     {
       "id": "library.maintenance",

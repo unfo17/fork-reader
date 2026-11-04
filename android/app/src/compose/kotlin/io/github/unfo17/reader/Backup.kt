@@ -93,8 +93,10 @@ suspend fun restoreLibrary(context: Context, uri: Uri): Int = withContext(Dispat
         val library = Library.get(context)
         val organizationState = File(stage, "organization.json").takeIf { it.exists() }?.let { library.organization.merged(it.readText()) } ?: library.organization.mergedLegacy(incoming)
         val seriesState = File(stage, "series.json").takeIf { it.exists() }?.let { library.series.merged(it.readText()) }
+        val localRecords = library.records().associateBy { it.id }
         val checkedArchives = mutableSetOf<String>()
         incoming.forEach { book ->
+            require(localRecords[book.id]?.let { it.textImportRules == book.textImportRules } != false) { "同一原书的目录设置不同，已保留现有书库；请先备份双方记录后再迁移" }
             require(book.id.matches(Regex("[a-f0-9]{64}")) && book.file == File(book.file).name && BookArchiveImport.supported(book.file)) { "备份中的书籍信息不正确" }
             require(book.sourceReference == null) { "备份不应包含设备文件授权" }
             if (!book.removed) {

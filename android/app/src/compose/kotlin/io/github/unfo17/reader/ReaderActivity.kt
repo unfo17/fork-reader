@@ -226,10 +226,10 @@ class ReaderActivity : FragmentActivity() {
         navigator?.submitPreferences(readerPreferences())
         applyWindowOptions()
         refreshDecorations()
-        library.update(currentBook().copy(readerOptions = options.json()))
+        library.updateReading(book.id) { it.copy(readerOptions = options.json()) }
         getSharedPreferences("reader-${book.id}", MODE_PRIVATE).edit().putFloat("fontSize", fontSize).putBoolean("night", night).putBoolean("scroll", scroll).apply()
     }
-    private fun currentBook() = library.books().first { it.id == book.id }
+    private fun currentBook() = library.records().firstOrNull { it.id == book.id } ?: book
     private fun toggleSpeech() {
         if (speaking) { speech?.stop(); speaking = false; return }
         if (!speechReady) { notice = "系统朗读引擎未就绪，请安装中文语音"; return }
@@ -296,8 +296,7 @@ class ReaderActivity : FragmentActivity() {
                             }
                             lifecycleScope.launch { fragment.currentLocator.collect { locator ->
                                 progression = locator.locations.totalProgression ?: locator.locations.progression ?: 0.0
-                                val current = currentBook()
-                                library.update(current.copy(locator = locator.toJSON().toString(), progress = progression, lastRead = System.currentTimeMillis()))
+                                library.updateReading(book.id) { it.copy(locator = locator.toJSON().toString(), progress = progression, lastRead = System.currentTimeMillis()) }
                             } }
                         }
                     }, modifier = Modifier.fillMaxSize())
@@ -416,8 +415,7 @@ class ReaderActivity : FragmentActivity() {
     override fun onStart() { super.onStart(); started = System.currentTimeMillis() }
     override fun onStop() {
         if (::book.isInitialized && !loading && failure == null) {
-            val current = currentBook()
-            library.update(current.copy(progress = progression, lastRead = System.currentTimeMillis(), minutes = current.minutes + (System.currentTimeMillis() - started) / 1000))
+            library.updateReading(book.id) { current -> current.copy(progress = progression, lastRead = System.currentTimeMillis(), minutes = current.minutes + ((System.currentTimeMillis() - started) / 1000).coerceAtLeast(0)) }
         }
         speech?.stop(); speaking = false
         super.onStop()

@@ -70,10 +70,10 @@ data class Book(
     val summary: String = "", val tags: List<String> = emptyList(), val status: String = "auto",
     val addedAt: Long = System.currentTimeMillis(), val readerOptions: String? = null, val originalName: String = "", val warnings: List<String> = emptyList(),
     val archiveEntry: String? = null, val archiveEntrySize: Long = 0, val archiveCharset: String = "UTF-8",
-    val bundleFile: String? = null, val bundleDigest: String? = null, val sourceDigest: String? = null, val annotations: List<ReadingMark> = emptyList()
+    val bundleFile: String? = null, val bundleDigest: String? = null, val sourceDigest: String? = null, val annotations: List<ReadingMark> = emptyList(), val textImportRules: String? = null
 ) {
     fun json() = JSONObject().put("id", id).put("title", title).put("author", author).put("file", file)
-        .put("annotations", JSONArray(annotations.map { it.json() })).put("category", category).put("locator", locator).put("progress", progress).put("lastRead", lastRead)
+        .put("textImportRules", textImportRules).put("annotations", JSONArray(annotations.map { it.json() })).put("category", category).put("locator", locator).put("progress", progress).put("lastRead", lastRead)
         .put("bookmarks", JSONArray(bookmarks)).put("minutes", minutes)
         .put("archiveEntry", archiveEntry).put("archiveEntrySize", archiveEntrySize).put("archiveCharset", archiveCharset).put("bundleFile", bundleFile).put("bundleDigest", bundleDigest).put("sourceDigest", sourceDigest)
         .put("originalName", originalName).put("warnings", JSONArray(warnings)).put("readerOptions", readerOptions).put("summary", summary).put("tags", JSONArray(tags)).put("status", status).put("addedAt", addedAt).put("coverRevision", coverRevision)
@@ -88,7 +88,7 @@ data class Book(
             j.optString("status", "auto"), j.optLong("addedAt"), j.optString("readerOptions").takeIf { it.isNotEmpty() && it != "null" }, j.optString("originalName"), j.optJSONArray("warnings")?.let { a -> List(a.length()) { a.getString(it) } } ?: emptyList(),
             j.optString("archiveEntry").takeUnless { it.isBlank() || it == "null" }, j.optLong("archiveEntrySize"), j.optString("archiveCharset", "UTF-8"),
             j.optString("bundleFile").takeUnless { it.isBlank() || it == "null" }, j.optString("bundleDigest").takeUnless { it.isBlank() || it == "null" }, j.optString("sourceDigest").takeUnless { it.isBlank() || it == "null" },
-            j.optJSONArray("annotations")?.let { a -> require(a.length() <= 10000) { "批注记录过多" }; List(a.length()) { ReadingMark.from(a.getJSONObject(it)) }.also { marks -> require(marks.map { it.id }.distinct().size == marks.size) { "批注编号重复" } } } ?: emptyList())
+            j.optJSONArray("annotations")?.let { a -> require(a.length() <= 10000) { "批注记录过多" }; List(a.length()) { ReadingMark.from(a.getJSONObject(it)) }.also { marks -> require(marks.map { it.id }.distinct().size == marks.size) { "批注编号重复" } } } ?: emptyList(), j.optString("textImportRules").takeUnless { it.isBlank() || it == "null" }?.also { org.mewx.wenku8_flutter.TextImportRules.decode(it) })
     }
 }
 
@@ -139,7 +139,10 @@ class Library private constructor(private val context: Context) {
             engine.open(AbsoluteUrl(links.source(book.sourceReference).toString()) ?: error("原文件位置无效"), font)
         } else engine.open(publicationFile(book), font)
     }
-    private fun publicationCache(book: Book): File = if (book.file.endsWith(".txt", true)) File(context.filesDir, "text-publications/${book.id}.v2.epub")
+    private fun publicationCache(book: Book): File = if (book.file.endsWith(".txt", true)) {
+        val version = book.textImportRules?.let { "v3-" + java.security.MessageDigest.getInstance("SHA-256").digest(it.toByteArray()).take(12).joinToString("") { byte -> "%02x".format(byte) } } ?: "v2"
+        File(context.filesDir, "text-publications/${book.id}.$version.epub")
+    }
         else File(context.filesDir, "document-publications/${book.id}.v1.epub")
     private fun conversionWarnings(book: Book): List<String> = runCatching {
         val file = File(publicationCache(book).path + ".warnings.json")
@@ -159,7 +162,7 @@ class Library private constructor(private val context: Context) {
                         finally { temporary.delete() }
                         emptyList()
                     } else if (book.file.endsWith(".txt", true)) {
-                        LocalTextPublication.prepare(source, target, book.title, File(context.noBackupFilesDir, "text-conversion")); emptyList()
+                        LocalTextPublication.prepare(source, target, book.title, File(context.noBackupFilesDir, "text-conversion"), options = book.textImportRules?.let { org.mewx.wenku8_flutter.TextImportRules.decode(it) }, context = context); emptyList()
                     } else {
                         val root = File(context.noBackupFilesDir, "format-conversion").apply { mkdirs() }
                         BookArchiveImport(root).apply { documents = org.mewx.wenku8_flutter.BookMarkupImport(root, org.mewx.wenku8_flutter.BookPdfImport(context, root)::read) }
@@ -217,6 +220,12 @@ class Library private constructor(private val context: Context) {
         val removed = previous.copy(deleted = true, stateAt = maxOf(System.currentTimeMillis(), previous.revision + 1))
         update(current.copy(annotations = current.annotations.map { if (it.id == markId) removed else it }))
     }
+    @Synchronized fun updateReading(id: String, change: (Book) -> Book) {
+        val current = records(); val record = current.firstOrNull { it.id == id } ?: return
+        val changed = change(record)
+        require(changed.id == id && changed.removed == record.removed && changed.file == record.file && changed.sourceReference == record.sourceReference) { "阅读记录不能更改原书状态" }
+        save(current.map { if (it.id == id) changed.copy(annotations = ReadingMark.mergeLists(record.annotations, changed.annotations)) else it })
+    }
     @Synchronized fun update(book: Book) {
         val current = records()
         val existing = current.firstOrNull { it.id == book.id }
@@ -251,6 +260,10 @@ class Library private constructor(private val context: Context) {
         importMutex.lock()
         try { return if (copy) importSelected(uri) else importLinked(uri, treeGrant) }
         finally { importMutex.unlock() }
+    }
+    private fun textRulesFor(id: String): String? {
+        records().firstOrNull { it.id == id }?.let { return it.textImportRules }
+        return context.getSharedPreferences("import-options", Context.MODE_PRIVATE).getString("textRules", org.mewx.wenku8_flutter.TextImportRules().json())
     }
     private fun restoredRecord(book: Book): Book {
         val old = records().firstOrNull { it.id == book.id } ?: return book
@@ -317,7 +330,7 @@ class Library private constructor(private val context: Context) {
             val raw = withOriginal(provisional) { digest(it) }
             val id = archiveMemberId(raw, entry.name, parentDigest)
             books().firstOrNull { it.id == id }?.let { existing -> reference?.let(::releaseReference); return@withContext existing }
-            val identified = provisional.copy(id = id, sourceDigest = raw)
+            val identified = provisional.copy(id = id, sourceDigest = raw, textImportRules = if (entry.name.endsWith(".txt", true)) textRulesFor(id) else null)
             created = identified
             val publication = openPublication(identified)
             val book = try {
@@ -361,7 +374,7 @@ class Library private constructor(private val context: Context) {
             }
             val anchor = File(context.filesDir, "books/${UUID.randomUUID()}.${name.substringAfterLast('.').lowercase()}")
             anchor.parentFile?.mkdirs()
-            val provisional = Book(id, name.substringBeforeLast('.'), "", anchor.path, sourceReference = reference, sourceSize = size, sourceModified = modified, originalName = name)
+            val provisional = Book(id, name.substringBeforeLast('.'), "", anchor.path, sourceReference = reference, sourceSize = size, sourceModified = modified, originalName = name, textImportRules = if (name.endsWith(".txt", true)) textRulesFor(id) else null)
             created = provisional
             val publication = openPublication(provisional)
             val book = try {
@@ -476,7 +489,7 @@ class Library private constructor(private val context: Context) {
             file.inputStream().use { input -> val buf = ByteArray(8192); var n = input.read(buf); while (n > 0) { digest.update(buf, 0, n); n = input.read(buf) } }
             val id = digest.digest().joinToString("") { "%02x".format(it) }
             books().firstOrNull { it.id == id }?.let { file.delete(); return@withContext it }
-            val provisional = Book(id, name.substringBeforeLast('.'), "", file.path, originalName = name)
+            val provisional = Book(id, name.substringBeforeLast('.'), "", file.path, originalName = name, textImportRules = if (name.endsWith(".txt", true)) textRulesFor(id) else null)
             val reading = publicationFile(provisional)
             if (reading != file) generated = reading
             val publication = engine.open(reading)

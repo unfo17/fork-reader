@@ -14,6 +14,9 @@ internal class BookEpubWriter(private val work: File, var title: String) {
     var identifier = "urn:uuid:${java.util.UUID.randomUUID()}"
     var cover: String? = null
     private val chapters = mutableListOf<Pair<String, File>>()
+    private val chapterVolumes = mutableListOf<Pair<Int, String>?>()
+    private var currentVolume: Pair<Int, String>? = null
+    private var nextVolume = 0
     private val references = linkedMapOf<String, Int>()
     private val resources = mutableMapOf<Int, Pair<String, File>>()
     private val body = StringBuilder()
@@ -24,6 +27,7 @@ internal class BookEpubWriter(private val work: File, var title: String) {
         fun escape(text: String) = text.replace("&", "&amp;").replace("<", "&lt;")
             .replace(">", "&gt;").replace("\"", "&quot;")
     }
+    fun volume(value: String) { flush(); currentVolume = ++nextVolume to value; chapterTitle = value }
     fun heading(value: String) { flush(); chapterTitle = value.trim().take(2048).ifEmpty { title } }
     fun text(value: String) {
         if (value.isBlank()) return
@@ -87,6 +91,7 @@ internal class BookEpubWriter(private val work: File, var title: String) {
         expanded += file.length()
         require(expanded <= 1024L * 1024 * 1024) { "文档展开后超过 1 GiB" }
         chapters += chapterTitle to file
+        chapterVolumes += currentVolume
         body.setLength(0)
     }
     fun write(output: File) {
@@ -107,7 +112,19 @@ internal class BookEpubWriter(private val work: File, var title: String) {
                     "<item id=\"i$id\" href=\"image-$id.${item.first}\" media-type=\"image/${if (item.first == "jpg") "jpeg" else item.first}\"${if (id == coverId) " properties=\"cover-image\"" else ""}/>"
                 }
             entry("content.opf", """<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book-id">${escape(identifier)}</dc:identifier><dc:title>${escape(title)}</dc:title><dc:creator>${escape(author)}</dc:creator><dc:language>${escape(language)}</dc:language><dc:description>${escape(summary)}</dc:description>${tags.joinToString("") { "<dc:subject>${escape(it)}</dc:subject>" }}<meta property="dcterms:modified">2000-01-01T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>$manifest</manifest><spine>${chapters.indices.joinToString("") { "<itemref idref=\"c$it\"/>" }}</spine></package>""")
-            entry("nav.xhtml", """<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><meta charset="utf-8"/><title>目录</title></head><body><nav epub:type="toc"><ol>${chapters.mapIndexed { i, c -> "<li><a href=\"c$i.xhtml\">${escape(c.first)}</a></li>" }.joinToString("")}</ol></nav></body></html>""")
+            val navigation = buildString {
+                var index = 0
+                while (index < chapters.size) {
+                    val volume = chapterVolumes[index]
+                    if (volume == null) { append("<li><a href=\"c$index.xhtml\">${escape(chapters[index].first)}</a></li>"); index++ }
+                    else {
+                        append("<li><a href=\"c$index.xhtml\">${escape(volume.second)}</a><ol>")
+                        while (index < chapters.size && chapterVolumes[index]?.first == volume.first) { append("<li><a href=\"c$index.xhtml\">${escape(chapters[index].first)}</a></li>"); index++ }
+                        append("</ol></li>")
+                    }
+                }
+            }
+            entry("nav.xhtml", """<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><meta charset="utf-8"/><title>目录</title></head><body><nav epub:type="toc"><ol>$navigation</ol></nav></body></html>""")
             for ((i, chapter) in chapters.withIndex()) {
                 val html = chapter.second.readText().replace(Regex("href=\"#([^\"]+)\"")) { match ->
                     anchors[match.groupValues[1]]?.let { "href=\"c$it.xhtml#${match.groupValues[1]}\"" } ?: match.value

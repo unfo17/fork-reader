@@ -97,6 +97,7 @@ class MainActivity : ComponentActivity() {
     var copyImport by remember { mutableStateOf(context.getSharedPreferences("import-options", android.content.Context.MODE_PRIVATE).getBoolean("copy", false)) }
     var coverTarget by remember { mutableStateOf<Book?>(null) }
     var relinking by remember { mutableStateOf<Book?>(null) }
+    var textImportSettings by remember { mutableStateOf(false) }
     var importMenu by remember { mutableStateOf(false) }
     suspend fun reviewFiles(uris: List<Uri>) {
         busy = true
@@ -230,6 +231,7 @@ class MainActivity : ComponentActivity() {
                     item { OutlinedButton(enabled = !busy, onClick = { exportPicker.launch("本地书房备份.zip") }) { Text(if (books.any { it.archiveEntry != null }) "导出备份（含 ZIP 整个原包）" else "导出书库与阅读记录") } }
                     item { OutlinedButton(enabled = !busy, onClick = { restorePicker.launch(arrayOf("application/zip", "application/octet-stream")) }) { Text("从备份合并恢复") } }
                     item { TextButton(onClick = { annotations = true }) { Text("全部批注和摘录") } }
+                    item { TextButton(onClick = { textImportSettings = true }) { Text("TXT 导入设置") } }
                     item { TextButton(onClick = { appFonts = true }) { Text("应用字体与字体管理") } }
                     item { TextButton(onClick = { licenses = true }) { Text("开源许可") } }
                     item { ListItem(headlineContent = { Text("关于本地书房") }, supportingContent = { Text("0.2.0-dev · Compose / Readium\n基于 Wenku8_Flutter，遵循 GPL-2.0") }) }
@@ -238,6 +240,7 @@ class MainActivity : ComponentActivity() {
             item { Spacer(Modifier.height(90.dp)) }
         }
     }
+    if (textImportSettings) TextImportSettings { textImportSettings = false }
     if (annotations) AnnotationsPanel(library, onDismiss = { annotations = false })
     if (seriesManager) SeriesManager(library, editingSeries, selectedBooks, { seriesManager = false }, { books = library.collectionBooks(); selectedBooks = emptySet() })
     if (appFonts) FontManager(onDismiss = { appFonts = false }, selected = context.getSharedPreferences("appearance", android.content.Context.MODE_PRIVATE).getString("fontId", "").orEmpty(), onSelect = { id ->
@@ -298,7 +301,7 @@ class MainActivity : ComponentActivity() {
             }
         }) { Text("确定") } }, dismissButton = { TextButton(onClick = { batchAction = null }) { Text("取消") } })
     }
-    if (importMenu) AlertDialog(onDismissRequest = { importMenu = false }, title = { Text("导入书籍") }, text = { Text("选择文件或扫描目录。支持 EPUB、TXT、Kindle、FB2、PDF、DOC/DOCX、RTF、HTML、Markdown 和 ZIP。ZIP 会先展开书目供勾选。") }, confirmButton = { TextButton(onClick = { importMenu = false; importer.launch(arrayOf("*/*")) }) { Text("选择文件") } }, dismissButton = { TextButton(onClick = { importMenu = false; folderPicker.launch(null) }) { Text("扫描目录") } })
+    if (importMenu) AlertDialog(onDismissRequest = { importMenu = false }, title = { Text("导入书籍") }, text = { Column { Text("选择文件或扫描目录。支持 EPUB、TXT、Kindle、FB2、PDF、DOC/DOCX、RTF、HTML、Markdown 和 ZIP。ZIP 会先展开书目供勾选。"); TextButton(onClick = { importMenu = false; textImportSettings = true }) { Text("TXT 导入设置") } } }, confirmButton = { TextButton(onClick = { importMenu = false; importer.launch(arrayOf("*/*")) }) { Text("选择文件") } }, dismissButton = { TextButton(onClick = { importMenu = false; folderPicker.launch(null) }) { Text("扫描目录") } })
     if (pending.isNotEmpty()) {
         var selected by remember(pending) { mutableStateOf(pending.toSet()) }
         AlertDialog(onDismissRequest = { pending = emptyList() }, title = { Text("导入预览 · ${pending.size} 个文件") }, text = {
