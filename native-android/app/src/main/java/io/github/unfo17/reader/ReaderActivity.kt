@@ -41,7 +41,7 @@ class ReaderActivity : FragmentActivity() {
     private lateinit var library: Library
     private lateinit var book: Book
     private var publication: Publication? = null
-    private var navigator: EpubNavigatorFragment? = null
+    private var navigator by mutableStateOf<EpubNavigatorFragment?>(null)
     private var started = 0L
     private val containerId = View.generateViewId()
     private var loading by mutableStateOf(true)
