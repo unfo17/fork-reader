@@ -44,6 +44,13 @@ class ReadiumEngine(context: Context) {
     suspend fun open(url: AbsoluteUrl, font: File? = null): Publication {
         val asset = assets.retrieve(url).getOrElse { error("无法读取文件：$it") }
         return opener.open(asset, allowUserInteraction = false, onCreatePublication = {
+            val html = manifest.readingOrder.filter { it.mediaType?.isHtml == true }.associate { it.href.resolve() to it.mediaType!! }
+            val original = container
+            container = object : Container<Resource> by original {
+                override fun get(url: Url): Resource? = original[url]?.let { resource ->
+                    html[url]?.let { ReaderTypography.resource(resource, it) } ?: resource
+                }
+            }
             if (font != null) {
                 val original = container
                 val fontHref = Url.fromDecodedPath("__reader_fonts__/selected.${font.extension.lowercase()}")!!

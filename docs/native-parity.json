@@ -329,10 +329,13 @@
       "id": "reader.typography",
       "feature": "字体、字号、粗细、行高、字距和四边距，每书保存",
       "upstream": [
+        "lib/reader_preferences.dart",
         "lib/library_state.dart"
       ],
       "status": "partial",
-      "tests": []
+      "tests": [
+        "io.github.unfo17.reader.ReaderLayoutTest.independentPageEdgesAffectTheRealViewportAndSurviveChapterReopenAndBackup"
+      ]
     },
     {
       "id": "reader.fonts",

@@ -49,6 +49,7 @@ import org.readium.r2.shared.publication.Link
 import org.readium.r2.shared.publication.Locator
 import org.readium.r2.shared.publication.Publication
 import java.io.File
+import kotlin.math.roundToInt
 import org.readium.r2.shared.publication.services.positions
 import org.mewx.wenku8_flutter.SpeechLocalePolicy
 
@@ -192,16 +193,18 @@ class ReaderActivity : FragmentActivity() {
     }
     private fun readerPreferences() = EpubPreferences(
         fontSize = fontSize.toDouble(), theme = if (night) Theme.DARK else Theme.LIGHT, scroll = scroll,
-        lineHeight = options.lineHeight.toDouble(), letterSpacing = options.letterSpacing.toDouble(),
-        paragraphSpacing = options.paragraphGap.toDouble() / 16.0, pageMargins = options.margin.toDouble() / 26.0,
+        lineHeight = options.lineHeight.toDouble(), letterSpacing = ReaderTypography.letterSpacingPreference(options.letterSpacing),
+        paragraphSpacing = options.paragraphGap.toDouble() / 16.0, pageMargins = 0.0,
         paragraphIndent = if (options.indent) 2.0 else 0.0,
         textAlign = if (options.justify) TextAlign.JUSTIFY else TextAlign.START,
         publisherStyles = options.publisherStyles, verticalText = options.vertical,
         columnCount = if (options.twoPages) ColumnCount.TWO else ColumnCount.ONE,
         fontWeight = options.weight.toDouble(),
-        textColor = parseColor(options.textColor), backgroundColor = parseColor(options.backgroundColor),
+        textColor = parseColor(options.textColor), backgroundColor = Color(readerBackground()),
         fontFamily = options.fontId.takeIf { it.isNotEmpty() && selectedFontFile != null }?.let { FontFamily(it) }
     )
+    private fun readerBackground() = runCatching { android.graphics.Color.parseColor(options.backgroundColor) }.getOrNull()
+        ?: if (night) android.graphics.Color.rgb(18, 18, 18) else android.graphics.Color.WHITE
     private fun parseColor(value: String): Color? = runCatching { Color(android.graphics.Color.parseColor(value)) }.getOrNull()
     private fun applyWindowOptions() {
         if (options.keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -299,6 +302,10 @@ class ReaderActivity : FragmentActivity() {
                                 library.updateReading(book.id) { it.copy(locator = locator.toJSON().toString(), progress = progression, lastRead = System.currentTimeMillis()) }
                             } }
                         }
+                    }, update = { view ->
+                        val density = view.resources.displayMetrics.density
+                        view.setPadding((options.leftMargin * density).roundToInt(), (options.marginTop * density).roundToInt(), (options.rightMargin * density).roundToInt(), (options.marginBottom * density).roundToInt())
+                        view.setBackgroundColor(readerBackground())
                     }, modifier = Modifier.fillMaxSize())
                 }
             }
@@ -374,7 +381,7 @@ class ReaderActivity : FragmentActivity() {
                 Text("阅读设置", style = MaterialTheme.typography.titleLarge)
                 OutlinedButton(onClick = { settings = false; fonts = true }) { Text("字体管理与下载") }
                 Text("字号 ${(fontSize).toInt()}%")
-                Slider(fontSize, { fontSize = it; applySettings() }, valueRange = 75f..200f)
+                Slider(fontSize, { fontSize = it; applySettings() }, valueRange = 50f..300f)
                 Row { Text("夜间阅读", Modifier.weight(1f)); Switch(night, { night = it; applySettings() }) }
                 Row { Text("滚动阅读", Modifier.weight(1f)); Switch(scroll, { scroll = it; applySettings() }) }
                 @Composable fun toggle(label: String, value: Boolean, update: (Boolean) -> ReaderOptions) {
@@ -387,13 +394,17 @@ class ReaderActivity : FragmentActivity() {
                 toggle("保留原书样式", options.publisherStyles) { options.copy(publisherStyles = it) }
                 toggle("竖排", options.vertical) { options.copy(vertical = it) }
                 toggle("双页", options.twoPages) { options.copy(twoPages = it) }
-                toggle("首行缩进", options.indent) { options.copy(indent = it) }
-                toggle("两端对齐", options.justify) { options.copy(justify = it) }
-                control("行高", options.lineHeight, 1f..3f) { options.copy(lineHeight = it) }
-                control("字距", options.letterSpacing, 0f..3f) { options.copy(letterSpacing = it) }
-                control("段距", options.paragraphGap, 0f..32f) { options.copy(paragraphGap = it) }
-                control("页边距", options.margin, 0f..80f) { options.copy(margin = it) }
-                control("字重", options.weight, .5f..2f) { options.copy(weight = it) }
+                toggle("首行缩进", options.indent) { options.copy(indent = it, publisherStyles = false) }
+                toggle("两端对齐", options.justify) { options.copy(justify = it, publisherStyles = false) }
+                control("行高", options.lineHeight, 1f..3f) { options.copy(lineHeight = it, publisherStyles = false) }
+                control("字距", options.letterSpacing, -.5f..3f) { options.copy(letterSpacing = it, publisherStyles = false) }
+                control("段距", options.paragraphGap, 0f..32f) { options.copy(paragraphGap = it, publisherStyles = false) }
+                control("左边距", options.leftMargin, 0f..80f) { options.copy(marginLeft = it) }
+                control("右边距", options.rightMargin, 0f..80f) { options.copy(marginRight = it) }
+                control("上边距", options.marginTop, 0f..80f) { options.copy(marginTop = it) }
+                control("下边距", options.marginBottom, 0f..80f) { options.copy(marginBottom = it) }
+                val weights = listOf(1f to "常规", 1.25f to "适中", 1.5f to "加粗").let { presets -> if (presets.any { it.first == options.weight }) presets else presets + (options.weight to "自定义 ${ (options.weight * 400).toInt() }") }
+                ChoiceMenu("字重", options.weight, weights) { options = options.copy(weight = it, publisherStyles = false); applySettings() }
                 toggle("屏幕常亮", options.keepScreenOn) { options.copy(keepScreenOn = it) }
                 toggle("音量键翻页", options.volumePaging) { options.copy(volumePaging = it) }
                 toggle("沉浸阅读", options.hideSystemStatus) { options.copy(hideSystemStatus = it) }
