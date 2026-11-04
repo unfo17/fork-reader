@@ -1,5 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
   <queries>
     <intent>
       <action android:name="android.intent.action.TTS_SERVICE" />
@@ -10,6 +13,7 @@
       <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/share_paths" />
     </provider>
     <service android:name="org.mewx.wenku8_flutter.TextRuleService" android:exported="false" android:isolatedProcess="true" android:process=":toc_rules" />
+    <service android:name=".ListeningService" android:exported="false" android:foregroundServiceType="mediaPlayback" />
     <activity android:name=".ReaderActivity" android:exported="false" />
     <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask">
       <intent-filter>

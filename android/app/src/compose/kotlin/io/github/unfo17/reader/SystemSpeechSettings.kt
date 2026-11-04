@@ -18,15 +18,15 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import org.mewx.wenku8_flutter.SpeechLocalePolicy
 
-data class SystemSpeechSettings(val engine: String = "@default", val voice: String = "@default", val locale: String = "zh-CN", val speed: Float = 1f) {
+data class SystemSpeechSettings(val engine: String = "@default", val voice: String = "@default", val locale: String = "zh-CN", val speed: Float = 1f, val follow: Boolean = true) {
     fun save(context: Context) {
         require(SpeechLocalePolicy.supportsEngine(engine) && voice.isNotBlank() && voice.length <= 2048 && SpeechLocalePolicy.requestedLocale(locale) != null && speed.isFinite() && speed in .5f..3f) { "请检查语音引擎、语言和语速设置" }
-        check(context.getSharedPreferences("system-speech", Context.MODE_PRIVATE).edit().putString("engine", engine).putString("voice", voice).putString("locale", locale).putFloat("speed", speed).commit()) { "语音设置保存失败" }
+        check(context.getSharedPreferences("system-speech", Context.MODE_PRIVATE).edit().putString("engine", engine).putString("voice", voice).putString("locale", locale).putFloat("speed", speed).putBoolean("follow", follow).commit()) { "语音设置保存失败" }
     }
     companion object {
         fun load(context: Context): SystemSpeechSettings = context.getSharedPreferences("system-speech", Context.MODE_PRIVATE).let { prefs ->
             SystemSpeechSettings(prefs.getString("engine", "@default")!!, prefs.getString("voice", "@default")!!, prefs.getString("locale", "zh-CN")!!,
-                prefs.getFloat("speed", 1f).let { if (it.isFinite()) it.coerceIn(.5f, 3f) else 1f })
+                prefs.getFloat("speed", 1f).let { if (it.isFinite()) it.coerceIn(.5f, 3f) else 1f }, prefs.getBoolean("follow", true))
         }
     }
 }
@@ -67,6 +67,9 @@ data class SystemSpeechSettings(val engine: String = "@default", val voice: Stri
                 Text("音色：" + if (settings.voice == "@default") "系统默认音色" else selectedVoice?.let { voiceLabel(it) } ?: "上次选择的音色（当前不可用）")
             }
             OutlinedTextField(settings.locale, { settings = settings.copy(locale = it) }, label = { Text("朗读语言，例如 zh-CN") }, singleLine = true, enabled = !previewing)
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Text("朗读时跟随正文", Modifier.weight(1f)); Switch(settings.follow, { settings = settings.copy(follow = it) })
+            }
             Text("语速 ${"%.2f".format(settings.speed)} 倍")
             Slider(settings.speed, { settings = settings.copy(speed = it) }, valueRange = .5f..3f, enabled = !previewing)
             if (engines.isEmpty() && !loading) Text("没有检测到系统语音引擎，请先在系统设置中安装。")
@@ -74,6 +77,7 @@ data class SystemSpeechSettings(val engine: String = "@default", val voice: Stri
             Row {
                 TextButton(enabled = !loading && (previewing || engines.any { it.first == settings.engine }), onClick = {
                     if (previewing) stopPreview() else {
+                        if (ListeningSession.state.value.active) ListeningSession.command(context, ListeningSession.PAUSE)
                         val epoch = ++previewEpoch
                         previewing = true; error = null
                         preview = scope.launch {
@@ -96,7 +100,7 @@ data class SystemSpeechSettings(val engine: String = "@default", val voice: Stri
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             Button(onClick = { try {
                 voices.firstOrNull { it.id == settings.voice }?.let { voice -> require(SpeechLocalePolicy.requestedLocale(settings.locale)?.let { SpeechLocalePolicy.matches(it, java.util.Locale.forLanguageTag(voice.locale)) } == true) { "已选音色与朗读语言不一致，请重新选择" } }
-                settings.save(context); onDismiss() } catch (e: Exception) { error = e.message } }) { Text("保存语音设置") }
+                settings.save(context); if (ListeningSession.state.value.active) ListeningSession.speed(context, settings.speed); onDismiss() } catch (e: Exception) { error = e.message } }) { Text("保存语音设置") }
             TextButton(onClick = onDismiss) { Text("取消") }
         }
     }

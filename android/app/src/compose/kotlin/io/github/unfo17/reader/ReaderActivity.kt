@@ -81,12 +81,8 @@ class ReaderActivity : FragmentActivity() {
     private var fontSize by mutableFloatStateOf(100f)
     private var night by mutableStateOf(false)
     private var scroll by mutableStateOf(false)
-    private val speechClientSession = lazy { SystemSpeechClient(this) }
-    private val speechAudioSession = lazy { SpeechAudioOutput(this) { speechEpoch++; speechJob?.cancel(); speaking = false } }
-    private var speechJob: kotlinx.coroutines.Job? = null
-    private var speechEpoch = 0L
     private var speechSettings by mutableStateOf(false)
-    private var speaking by mutableStateOf(false)
+    private var listeningControls by mutableStateOf(false)
     private var search by mutableStateOf(false)
     private var searchOrigin by mutableStateOf<Locator?>(null)
     private var notice by mutableStateOf<String?>(null)
@@ -259,38 +255,14 @@ class ReaderActivity : FragmentActivity() {
     }
     private fun currentBook() = library.records().firstOrNull { it.id == book.id } ?: book
     private fun toggleSpeech() {
-        if (speaking) {
-            speechEpoch++; speechJob?.cancel()
-            if (speechAudioSession.isInitialized()) speechAudioSession.value.stop()
-            speaking = false; return
-        }
-        val epoch = ++speechEpoch
-        speaking = true
-        speechJob = lifecycleScope.launch {
-            try {
-                val iterator = withContext(Dispatchers.IO) { publication?.content(navigator?.currentLocator?.value)?.iterator() }
-                var any = false
-                while (true) {
-                    ensureActive()
-                    val element = withContext(Dispatchers.IO) { iterator?.nextOrNull() } ?: break
-                    if (element !is Content.TextualElement) continue
-                    for (segment in org.mewx.wenku8_flutter.SpeechSegments.split(element.text.orEmpty())) {
-                        ensureActive()
-                        val preferences = SystemSpeechSettings.load(this@ReaderActivity)
-                        val file = speechClientSession.value.synthesize(segment.text, preferences.engine, preferences.voice, preferences.locale)
-                        try { any = true; speechAudioSession.value.play(file, preferences.speed, keepFocus = true) }
-                        finally { file.delete() }
-                    }
-                }
-                if (!any) notice = "当前位置没有可朗读的文字"
-            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (e: Exception) { coroutineContext.ensureActive(); notice = e.message ?: "无法朗读，请检查系统语音设置" }
-            finally {
-                if (epoch == speechEpoch) {
-                    if (speechAudioSession.isInitialized()) speechAudioSession.value.stop()
-                    speaking = false
-                }
-            }
+        val state = ListeningSession.state.value
+        val matching = state.bookId == book.id || series?.id?.let { it == state.seriesId } == true
+        if (state.active && matching) {
+            ListeningSession.command(this, if (state.phase == ListeningPhase.PAUSED) ListeningSession.RESUME else ListeningSession.PAUSE)
+        } else lifecycleScope.launch {
+            try { ListeningSession.start(this@ReaderActivity, book.id, series?.id, captureSearchLocator()) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { notice = e.message ?: "无法开始听书" }
         }
     }
     internal suspend fun captureSearchLocator(): Locator? {
@@ -306,7 +278,7 @@ class ReaderActivity : FragmentActivity() {
                 var n=r.startContainer;if(n.nodeType!==3||!n.textContent.trim())continue;
                 var offset=Math.min(r.startOffset,n.length-1),probe=document.createRange();probe.setStart(n,offset);probe.setEnd(n,offset+1);
                 var b=probe.getBoundingClientRect();if(b.bottom<=0||b.top>=innerHeight||b.right<=0||b.left>=innerWidth)continue;
-                return {resource:location.href,cssSelector:path(n.parentElement),forkSourceRange:{start:{selector:path(n.parentElement),childNodeIndex:Array.prototype.indexOf.call(n.parentNode.childNodes,n),offset:offset,nodeType:3}}};
+                return {resource:location.href,cssSelector:path(n.parentElement.closest('p,div,h1,h2,h3,h4,h5,h6,li,blockquote,pre,section,article,body,td,th,dt,dd,figcaption,caption,header,footer,aside')||n.parentElement),forkSourceRange:{start:{selector:path(n.parentElement),childNodeIndex:Array.prototype.indexOf.call(n.parentNode.childNodes,n),offset:offset,nodeType:3}}};
               }
               return {resource:location.href};
             })()
@@ -344,10 +316,28 @@ class ReaderActivity : FragmentActivity() {
 
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable private fun ReaderScreen() {
+        val listening by ListeningSession.state.collectAsState()
+        var followRevision by remember { mutableIntStateOf(0) }
+        androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) { followRevision++ }
+        val matchingSpeech = listening.bookId == book.id || series?.id?.let { it == listening.seriesId } == true
+        val activeSpeech = listening.active && matchingSpeech
+        val canFollow = activeSpeech && listening.phase == ListeningPhase.PLAYING && annotationDraft == null && pendingRange == null && !settings && !speechSettings && !toc && !marks && !annotations && !search && !listeningControls
+        LaunchedEffect(listening.locator, listening.phase, navigator, canFollow, followRevision) {
+            if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) return@LaunchedEffect
+            val location = listening.locator?.let { runCatching { Locator.fromJSON(JSONObject(it)) }.getOrNull() }
+            val fragment = navigator
+            if (fragment?.isAdded == true) fragment.applyDecorations(
+                if (listening.active && listening.bookId == book.id && location != null) listOf(org.readium.r2.navigator.Decoration("speech-current", location, org.readium.r2.navigator.Decoration.Style.Highlight(0x6658A88A))) else emptyList(), "speech")
+            if (canFollow && SystemSpeechSettings.load(this@ReaderActivity).follow && location != null) {
+                if (listening.bookId == book.id) fragment?.go(location) else if (series?.id == listening.seriesId) openVolume(listening.bookId, location)
+            }
+        }
+        LaunchedEffect(listening.error, listening.bookId) { if (matchingSpeech && listening.error != null) notice = listening.error }
         val compactControls = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 400 || androidx.compose.ui.platform.LocalDensity.current.fontScale > 1.3f
         BackHandler(enabled = pendingRange != null) { cancelRangeAdjustment() }
         Scaffold(topBar = { TopAppBar(title = { Text(series?.let { "${it.title} · ${it.volumes.firstOrNull { part -> part.bookId == book.id }?.title ?: book.title}" } ?: book.title, maxLines = 1) }, navigationIcon = { IconButton(onClick = { if (pendingRange != null) cancelRangeAdjustment() else finish() }) { Icon(Icons.Outlined.ArrowBack, "返回") } }, actions = {
             IconButton(onClick = { mark() }, enabled = navigator != null && !loading && pendingRange == null) { Icon(Icons.Outlined.BookmarkAdd, "添加书签") }
+            if (activeSpeech) IconButton(onClick = { listeningControls = true }) { Icon(Icons.Outlined.Headphones, "听书控制") }
             IconButton(onClick = { settings = true }) { Icon(Icons.Outlined.Settings, "阅读设置") }
         }) }, bottomBar = { Column {
             pendingRange?.let { pending -> Surface(tonalElevation = 3.dp) {
@@ -368,7 +358,7 @@ class ReaderActivity : FragmentActivity() {
                 TextButton(onClick = { marks = true }, enabled = pendingRange == null) { Text("书签") }
             }
             IconButton(onClick = { openSearch() }, enabled = !loading && failure == null) { Icon(Icons.Outlined.Search, "全文搜索") }
-            IconButton(onClick = { toggleSpeech() }, enabled = !loading && failure == null) { Icon(if (speaking) Icons.Outlined.Stop else Icons.Outlined.VolumeUp, if (speaking) "停止朗读" else "朗读") }
+            IconButton(onClick = { toggleSpeech() }, enabled = !loading && failure == null) { Icon(if (!activeSpeech) Icons.Outlined.VolumeUp else if (listening.phase == ListeningPhase.PAUSED) Icons.Outlined.PlayArrow else Icons.Outlined.Pause, if (!activeSpeech) "朗读" else if (listening.phase == ListeningPhase.PAUSED) "继续朗读" else "暂停朗读") }
             Spacer(Modifier.weight(1f))
             Text("${(progression * 100).toInt()}%", Modifier.padding(12.dp))
             if (!compactControls) IconButton(onClick = { navigator?.goBackward() }, enabled = navigator != null) { Icon(Icons.Outlined.ChevronLeft, "上一页") }
@@ -483,6 +473,7 @@ class ReaderActivity : FragmentActivity() {
             fonts = false
             recreate()
         })
+        if (listeningControls) ListeningControls(onDismiss = { listeningControls = false }, onVoiceSettings = { listeningControls = false; speechSettings = true })
         if (speechSettings) SystemSpeechSettingsPanel { speechSettings = false }
         if (settings) ModalBottomSheet(onDismissRequest = { settings = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
             Column(Modifier.padding(24.dp).heightIn(max = 600.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -537,13 +528,10 @@ class ReaderActivity : FragmentActivity() {
         if (::book.isInitialized && !loading && failure == null) {
             library.updateReading(book.id) { current -> current.copy(progress = progression, lastRead = System.currentTimeMillis(), minutes = current.minutes + ((System.currentTimeMillis() - started) / 1000).coerceAtLeast(0)) }
         }
-        speechEpoch++; speechJob?.cancel(); if (speechAudioSession.isInitialized()) speechAudioSession.value.stop(); speaking = false
         super.onStop()
     }
     override fun onDestroy() {
         super.onDestroy()
-        if (speechAudioSession.isInitialized()) speechAudioSession.value.close()
-        if (speechClientSession.isInitialized()) speechClientSession.value.close()
         publication?.close()
     }
 }

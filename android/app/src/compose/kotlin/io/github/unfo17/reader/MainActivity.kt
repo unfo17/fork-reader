@@ -64,6 +64,7 @@ class MainActivity : ComponentActivity() {
     var appFonts by remember { mutableStateOf(false) }
     var appearance by remember { mutableStateOf(false) }
     var speechSettings by remember { mutableStateOf(false) }
+    var listeningControls by remember { mutableStateOf(false) }
     var licenses by remember { mutableStateOf(false) }
     var annotations by remember { mutableStateOf(false) }
     var history by remember { mutableStateOf(false) }
@@ -192,11 +193,13 @@ class MainActivity : ComponentActivity() {
     Scaffold(
         topBar = { TopAppBar(title = { Text(listOf("主页", "本地", "我的")[tab]) }, actions = { if (tab == 1) TextButton(onClick = { selectionMode = !selectionMode; selectedBooks = emptySet() }) { Text(if (selectionMode) "完成" else "批量管理") } }) },
         snackbarHost = { SnackbarHost(snackbar) },
-        bottomBar = { NavigationBar {
+        bottomBar = { Column {
+            ListeningMiniPlayer { listeningControls = true }
+            NavigationBar {
             listOf("主页" to Icons.Outlined.Home, "本地" to Icons.Outlined.LibraryBooks, "我的" to Icons.Outlined.Person).forEachIndexed { index, item ->
                 NavigationBarItem(selected = tab == index, onClick = { tab = index }, icon = { Icon(item.second, item.first) }, label = { Text(item.first) })
             }
-        } },
+        } } },
         floatingActionButton = { if (tab != 2) ExtendedFloatingActionButton(onClick = { if (!busy) importMenu = true }, icon = { Icon(Icons.Outlined.Add, null) }, text = { Text(if (busy) "正在导入…" else "导入书籍") }) }
     ) { padding ->
         LazyColumn(Modifier.padding(padding).fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -262,6 +265,7 @@ class MainActivity : ComponentActivity() {
     externalRequest?.let { request -> key(request.id) {
         ExternalOpenDialog(request, library, onLocate = { locatingExternal = request.id; importer.launch(arrayOf("*/*")) }, onChanged = { books = library.collectionBooks() }, onOpen = { open(it) })
     } }
+    if (listeningControls) ListeningControls({ listeningControls = false }, { listeningControls = false; speechSettings = true })
     if (speechSettings) SystemSpeechSettingsPanel { speechSettings = false }
     if (textImportSettings) TextImportSettings { textImportSettings = false }
     if (annotations) AnnotationsPanel(library, onDismiss = { annotations = false })

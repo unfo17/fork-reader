@@ -6,6 +6,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import androidx.core.content.ContextCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.core.app.ActivityScenario
+import android.net.Uri
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -14,6 +16,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.delay
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -21,6 +24,47 @@ import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class SystemSpeechTest {
+    @Test fun decodedSpeechPausesAtTheExactAudioPositionAndResumesWithoutRestartingTheClip() = runBlocking<Unit> {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext; val engine = instrumentation.context.packageName
+        val library = Library.get(context)
+        val source = File(context.cacheDir, "audio-position.txt").apply { writeText("第一章 音频\n精确暂停验收 ${System.nanoTime()}") }
+        val book = library.import(Uri.fromFile(source))
+        val client = SystemSpeechClient(context)
+        val audio = SpeechAudioOutput(context, pauseOnInterruption = true)
+        var file: File? = null
+        suspend fun readyWhen(predicate: (SpeechAudioOutput) -> Boolean) = withTimeout(8000) {
+            while (!withContext(Dispatchers.Main) { predicate(audio) }) delay(20)
+        }
+        try {
+            ActivityScenario.launch<ReaderActivity>(Intent(context, ReaderActivity::class.java).putExtra("book", book.id)).use {
+                file = client.synthesize("[test-audio-long] exact-position", engine, "test.en", "en-US")
+                val playback = async { audio.play(file!!, startPlaying = false) }
+                readyWhen { it.ready }
+                delay(150)
+                assertEquals(0L, withContext(Dispatchers.Main) { audio.positionMillis })
+                withContext(Dispatchers.Main) { audio.resume() }
+                readyWhen { it.positionMillis >= 200 }
+                val paused = withContext(Dispatchers.Main) { audio.pause(); audio.positionMillis }
+                withContext(Dispatchers.Main) { audio.setSpeed(2f) }
+                delay(300)
+                assertTrue(kotlin.math.abs(withContext(Dispatchers.Main) { audio.positionMillis } - paused) <= 40)
+                assertTrue(playback.isActive)
+                withContext(Dispatchers.Main) { audio.seekTo(audio.durationMillis - 300) }
+                readyWhen { it.positionMillis >= it.durationMillis - 400 }
+                withContext(Dispatchers.Main) { audio.resume() }
+                withTimeout(2000) { playback.await() }
+                withContext(Dispatchers.Main) {
+                    assertEquals(audio.durationMillis, audio.positionMillis)
+                    audio.resume() // Completion stays complete; it must not restart from the beginning.
+                    assertFalse(audio.ready)
+                }
+            }
+        } finally {
+            withContext(Dispatchers.Main) { audio.close(); client.close() }
+            file?.delete(); library.books().firstOrNull { it.id == book.id }?.let(library::remove); source.delete()
+        }
+    }
     @Test fun upstreamSpeechSegmentationKeepsOriginalOffsetsAndNeverCutsSurrogatePairs() {
         val text = "😀".repeat(119) + "AB。" + "一个长段落，包含 1,000,000 和 emoji 😀。".repeat(40) + "\u200b\u0001\uDBFF\uDFFF结尾」』”’"
         val clean = org.mewx.wenku8_flutter.SpeechSegments.clean(text)
