@@ -29,6 +29,10 @@ jobs:
           path: android/app/build/outputs/apk/debug/*.apk
       - name: Enable emulator acceleration
         run: sudo chmod a+rw /dev/kvm
+      - name: Make room for the Android userdata image
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          df -h "$HOME"
       - name: Device integration tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
