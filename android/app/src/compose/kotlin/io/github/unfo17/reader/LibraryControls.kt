@@ -26,7 +26,7 @@ import androidx.compose.ui.unit.dp
     }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 550.dp), contentPadding = PaddingValues(20.dp)) {
-            item { Text(if (onChoose == null) "管理分类" else "移至分类", style = MaterialTheme.typography.titleLarge) }
+            item { Row { Text(if (onChoose == null) "管理分类" else "移至分类", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge); TextButton(onClick = onDismiss) { Text("完成") } } }
             if (onChoose != null) item { ListItem(headlineContent = { Text("未分类") }, modifier = Modifier.clickable { onChoose(LibraryOrganization.UNFILED) }) }
             items(groups.entries.toList(), key = { it.key }) { (id, label) ->
                 ListItem(headlineContent = { Text(label) }, modifier = if (onChoose == null) Modifier else Modifier.clickable { onChoose(id) }, trailingContent = { Row {
@@ -59,7 +59,7 @@ import androidx.compose.ui.unit.dp
 @Composable fun LibraryDisplaySettings(filter: LibraryFilter, view: LibraryView, density: String, authors: List<String>, onFilter: (LibraryFilter) -> Unit, onView: (LibraryView) -> Unit, onDensity: (String) -> Unit, onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 650.dp), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            item { Text("书架与筛选", style = MaterialTheme.typography.titleLarge) }
+            item { Row { Text("书架与筛选", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge); TextButton(onClick = onDismiss) { Text("完成") } } }
             item { ChoiceMenu("展示", view, LibraryView.entries.map { it to it.label }, onSelect = onView) }
             item { ChoiceMenu("封面大小", density, listOf("auto" to "自动", "small" to "小", "medium" to "中", "large" to "大"), onSelect = onDensity) }
             item { ChoiceMenu("排序", filter.sort, LibrarySort.entries.map { it to it.label }) { onFilter(filter.copy(sort = it)) } }

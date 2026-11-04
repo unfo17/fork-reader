@@ -29,11 +29,13 @@ class LibraryUiTest {
             automation.rootInActiveWindow?.let { root -> descendants(root).firstOrNull(predicate)?.let { return it } }
             SystemClock.sleep(100)
         }
-        error("页面中没有找到预期控件")
+        val root = automation.rootInActiveWindow
+        val texts = root?.let { descendants(it).mapNotNull { node -> node.text?.toString() ?: node.contentDescription?.toString() }.filter { it.isNotBlank() }.toList() }
+        error("页面中没有找到预期控件；当前内容：$texts")
     }
     private fun text(value: String) = waitNode { it.text?.toString() == value }
     private fun click(value: String) {
-        var node: AccessibilityNodeInfo? = text(value)
+        var node: AccessibilityNodeInfo? = waitNode { it.text?.toString() == value || it.contentDescription?.toString() == value }
         while (node != null && !node.isClickable) node = node.parent
         assertNotNull("控件不可点击：$value", node)
         assertTrue(node!!.performAction(AccessibilityNodeInfo.ACTION_CLICK))
@@ -59,6 +61,14 @@ class LibraryUiTest {
                 text("界面合订本 · 第二卷")
                 click("书签"); click("跨卷书签")
                 text("界面合订本 · 第一卷")
+                click("全文搜索")
+                val input = waitNode { it.className?.toString() == "android.widget.EditText" }
+                assertTrue(input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "卷 2 的正文") }))
+                click("搜索")
+                var result: AccessibilityNodeInfo? = waitNode { node -> node.text?.toString()?.let { value -> value.contains("卷 2 的正文") && value != "卷 2 的正文" && !value.startsWith("“") } == true }
+                while (result != null && !result.isClickable) result = result.parent
+                assertTrue(result?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true)
+                text("界面合订本 · 第二卷")
                 automation.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
                 text("管理分类")
             }
@@ -93,12 +103,12 @@ class LibraryUiTest {
                 click("保存")
                 text(name)
                 group = library.organization.groups().entries.first { it.value == name }.key
-                automation.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
+                click("完成")
                 text("管理分类")
                 click("书架与筛选")
                 click("展示：立体书架 + 列表"); click("纯宫格")
                 text("展示：纯宫格")
-                automation.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
+                click("完成")
                 text("管理分类")
                 scenario.recreate()
                 text("管理分类") // The active local tab is restored, along with layout preferences.

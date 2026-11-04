@@ -290,7 +290,11 @@
         "lib/local_book_navigation.dart"
       ],
       "status": "partial",
-      "tests": []
+      "tests": [
+        "io.github.unfo17.reader.SearchTest.searchPagesEveryOccurrenceBeyondOneHundredAndLimitsCurrentChapter",
+        "io.github.unfo17.reader.SearchTest.seriesSearchResumesAcrossVolumeBoundariesAndSupportsUnicode",
+        "io.github.unfo17.reader.LibraryUiTest.seriesContentsAndBookmarksNavigateBetweenOriginalReadiumVolumes"
+      ]
     },
     {
       "id": "reader.typography",

@@ -40,4 +40,7 @@ jobs:
         if: always()
         with:
           name: android-reports
-          path: android/app/build/reports
+          path: |
+            android/app/build/reports
+            android/app/build/outputs/androidTest-results
+            android/app/build/outputs/connected_android_test_additional_output

@@ -261,6 +261,7 @@ class ReaderActivity : FragmentActivity() {
 
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable private fun ReaderScreen() {
+        val currentLocation = navigator?.currentLocator?.collectAsState()?.value
         Scaffold(topBar = { TopAppBar(title = { Text(series?.let { "${it.title} · ${it.volumes.firstOrNull { part -> part.bookId == book.id }?.title ?: book.title}" } ?: book.title, maxLines = 1) }, navigationIcon = { IconButton(onClick = { finish() }) { Icon(Icons.Outlined.ArrowBack, "返回") } }, actions = {
             IconButton(onClick = { mark() }, enabled = navigator != null && !loading) { Icon(Icons.Outlined.BookmarkAdd, "添加书签") }
             IconButton(onClick = { settings = true }) { Icon(Icons.Outlined.Settings, "阅读设置") }
@@ -325,34 +326,7 @@ class ReaderActivity : FragmentActivity() {
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Exception) { notice = e.message ?: "书签定位失败" }
         } })
-        if (search) ModalBottomSheet(onDismissRequest = { search = false }) {
-            var query by remember { mutableStateOf("") }
-            var results by remember { mutableStateOf<List<Pair<String, Locator?>>>(emptyList()) }
-            var searching by remember { mutableStateOf(false) }
-            val scope = rememberCoroutineScope()
-            Column(Modifier.padding(20.dp).verticalScroll(rememberScrollState())) {
-                OutlinedTextField(query, { query = it }, label = { Text("搜索书中内容") }, modifier = Modifier.fillMaxWidth())
-                TextButton(enabled = query.isNotBlank() && !searching, onClick = {
-                    scope.launch {
-                        searching = true
-                        try {
-                            results = withContext(Dispatchers.IO) {
-                                val matches = mutableListOf<Pair<String, Locator?>>()
-                                val iterator = publication?.content()?.iterator()
-                                while (matches.size < 100) {
-                                    ensureActive()
-                                    val element = iterator?.nextOrNull() ?: break
-                                    if (element is Content.TextualElement && element.text.orEmpty().contains(query, true)) matches += element.text.orEmpty().take(180) to element.locator
-                                }
-                                matches
-                            }
-                        } catch (e: Exception) { notice = e.message ?: "搜索失败" }
-                        finally { searching = false }
-                    }
-                }) { Text(if (searching) "搜索中…" else "搜索（最多 100 条）") }
-                results.forEach { (text, locator) -> TextButton(onClick = { locator?.let { navigator?.go(it) }; search = false }) { Text(text) } }
-            }
-        }
+        if (search) ReaderSearch(library, currentBook(), series, currentLocation?.href?.toString(), { search = false }, { hit -> openVolume(hit.bookId, hit.locator); search = false })
         if (toc) ModalBottomSheet(onDismissRequest = { toc = false }) {
             Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
                 Text("目录", style = MaterialTheme.typography.titleLarge)
