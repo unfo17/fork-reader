@@ -72,8 +72,11 @@
       "upstream": [
         "android/app/src/main/cpp/mobi_jni.c"
       ],
-      "status": "pending",
-      "tests": []
+      "status": "partial",
+      "tests": [
+        "io.github.unfo17.reader.DocumentImportTest.nativeMobiExporterParsesRealUncompressedHuffdicAndNcxSamples",
+        "io.github.unfo17.reader.DocumentImportTest.encryptedMobiIsRejectedWithoutChangingLibrary"
+      ]
     },
     {
       "id": "import.fb2",
@@ -81,8 +84,10 @@
       "upstream": [
         "lib/local_book_importer.dart"
       ],
-      "status": "pending",
-      "tests": []
+      "status": "partial",
+      "tests": [
+        "io.github.unfo17.reader.DocumentImportTest.markdownHtmlAndFictionBookPreserveTextStylesImagesAndNotes"
+      ]
     },
     {
       "id": "import.pdf",
@@ -90,8 +95,10 @@
       "upstream": [
         "lib/local_book_importer.dart"
       ],
-      "status": "pending",
-      "tests": []
+      "status": "partial",
+      "tests": [
+        "io.github.unfo17.reader.DocumentImportTest.pdfLayoutTextCoverAndPageContentsAreAvailableOffline"
+      ]
     },
     {
       "id": "import.office",
@@ -99,8 +106,12 @@
       "upstream": [
         "lib/local_book_importer.dart"
       ],
-      "status": "pending",
-      "tests": []
+      "status": "partial",
+      "tests": [
+        "io.github.unfo17.reader.DocumentImportTest.docxMetadataTablesBookmarksPicturesAndFootnotesBecomeReadableEpub",
+        "io.github.unfo17.reader.DocumentImportTest.rtfUnicodeFallbackAnsiStylesAndPicturesArePreserved",
+        "io.github.unfo17.reader.DocumentImportTest.legacyDocSamplesPreserveTextTablesPicturesAndNotes"
+      ]
     },
     {
       "id": "import.markup",
@@ -108,8 +119,10 @@
       "upstream": [
         "lib/local_markup_decode.dart"
       ],
-      "status": "pending",
-      "tests": []
+      "status": "partial",
+      "tests": [
+        "io.github.unfo17.reader.DocumentImportTest.markdownHtmlAndFictionBookPreserveTextStylesImagesAndNotes"
+      ]
     },
     {
       "id": "import.zip",
@@ -117,8 +130,13 @@
       "upstream": [
         "lib/local_book_archive.dart"
       ],
-      "status": "pending",
-      "tests": []
+      "status": "partial",
+      "tests": [
+        "io.github.unfo17.reader.ArchiveImportTest.selectedLinkedMembersKeepResourcesAndBackupOriginalArchiveOnce",
+        "io.github.unfo17.reader.ArchiveImportTest.explicitArchiveCopyIsSharedAndReleasedOnlyAfterLastBook",
+        "io.github.unfo17.reader.ArchiveImportTest.invalidArchivePreviewDoesNotChangeRecords",
+        "io.github.unfo17.reader.ArchiveImportTest.legacyChineseZipNamesRemainReadableAndSelectionIsExplicit"
+      ]
     },
     {
       "id": "library.metadata",

@@ -14,11 +14,13 @@ import java.util.zip.ZipException
 /** Reopen a granted descriptor, not the underlying scoped-storage path. Each
  * stream owns its duplicate and uses positional reads, including nested DOCX
  * image reads while the XML stream remains open. */
-internal class BookDocumentInput private constructor(val file: File?, val descriptor: Int?, val size: Long, private val base: Long = 0) {
+internal class BookDocumentInput private constructor(val file: File?, val descriptor: Int?, val size: Long, private val base: Long = 0, private val opener: (() -> InputStream)? = null, val relatedResource: ((String) -> InputStream?)? = null) {
     constructor(file: File) : this(file, null, file.length())
     constructor(descriptor: Int, size: Long, offset: Long = 0) : this(null, descriptor, size, offset)
+    constructor(size: Long, opener: () -> InputStream, related: ((String) -> InputStream?)? = null) : this(null, null, size, 0, opener, related)
     fun length() = size
     fun inputStream(): InputStream {
+        opener?.let { return it() }
         file?.let { return it.inputStream() }
         val owner = ParcelFileDescriptor.AutoCloseInputStream(ParcelFileDescriptor.fromFd(descriptor!!))
         return object : InputStream() {

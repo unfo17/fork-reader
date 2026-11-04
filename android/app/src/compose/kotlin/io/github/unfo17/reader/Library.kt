@@ -31,6 +31,8 @@ import android.content.Intent
 import org.mewx.wenku8_flutter.LocalTextPublication
 import org.mewx.wenku8_flutter.BookDocumentImportSession
 import org.mewx.wenku8_flutter.BookTextDecoder
+import org.mewx.wenku8_flutter.BookArchiveImport
+import org.mewx.wenku8_flutter.BookZipSources
 
 class ReadiumEngine(context: Context) {
     private val http = DefaultHttpClient()
@@ -66,12 +68,15 @@ data class Book(
     val sourceReference: String? = null, val sourceSize: Long = 0, val sourceModified: Long = 0,
     val removed: Boolean = false, val coverRevision: Long = 0,
     val summary: String = "", val tags: List<String> = emptyList(), val status: String = "auto",
-    val addedAt: Long = System.currentTimeMillis(), val readerOptions: String? = null
+    val addedAt: Long = System.currentTimeMillis(), val readerOptions: String? = null, val originalName: String = "", val warnings: List<String> = emptyList(),
+    val archiveEntry: String? = null, val archiveEntrySize: Long = 0, val archiveCharset: String = "UTF-8",
+    val bundleFile: String? = null, val bundleDigest: String? = null, val sourceDigest: String? = null
 ) {
     fun json() = JSONObject().put("id", id).put("title", title).put("author", author).put("file", file)
         .put("category", category).put("locator", locator).put("progress", progress).put("lastRead", lastRead)
         .put("bookmarks", JSONArray(bookmarks)).put("minutes", minutes)
-        .put("readerOptions", readerOptions).put("summary", summary).put("tags", JSONArray(tags)).put("status", status).put("addedAt", addedAt).put("coverRevision", coverRevision)
+        .put("archiveEntry", archiveEntry).put("archiveEntrySize", archiveEntrySize).put("archiveCharset", archiveCharset).put("bundleFile", bundleFile).put("bundleDigest", bundleDigest).put("sourceDigest", sourceDigest)
+        .put("originalName", originalName).put("warnings", JSONArray(warnings)).put("readerOptions", readerOptions).put("summary", summary).put("tags", JSONArray(tags)).put("status", status).put("addedAt", addedAt).put("coverRevision", coverRevision)
         .put("sourceReference", sourceReference).put("sourceSize", sourceSize).put("sourceModified", sourceModified).put("removed", removed)
     companion object {
         fun from(j: JSONObject) = Book(j.getString("id"), j.getString("title"), j.optString("author"), j.getString("file"),
@@ -80,7 +85,9 @@ data class Book(
             j.optJSONArray("bookmarks")?.let { a -> List(a.length()) { a.getString(it) } } ?: emptyList(), j.optLong("minutes"),
             j.optString("sourceReference").takeIf { it.isNotBlank() && it != "null" }, j.optLong("sourceSize"), j.optLong("sourceModified"), j.optBoolean("removed"), j.optLong("coverRevision"),
             j.optString("summary"), j.optJSONArray("tags")?.let { a -> List(a.length()) { a.getString(it) } } ?: emptyList(),
-            j.optString("status", "auto"), j.optLong("addedAt"), j.optString("readerOptions").takeIf { it.isNotEmpty() && it != "null" })
+            j.optString("status", "auto"), j.optLong("addedAt"), j.optString("readerOptions").takeIf { it.isNotEmpty() && it != "null" }, j.optString("originalName"), j.optJSONArray("warnings")?.let { a -> List(a.length()) { a.getString(it) } } ?: emptyList(),
+            j.optString("archiveEntry").takeUnless { it.isBlank() || it == "null" }, j.optLong("archiveEntrySize"), j.optString("archiveCharset", "UTF-8"),
+            j.optString("bundleFile").takeUnless { it.isBlank() || it == "null" }, j.optString("bundleDigest").takeUnless { it.isBlank() || it == "null" }, j.optString("sourceDigest").takeUnless { it.isBlank() || it == "null" })
     }
 }
 
@@ -107,26 +114,55 @@ class Library private constructor(private val context: Context) {
     }
     private val importMutex = kotlinx.coroutines.sync.Mutex()
     private val textMutex = kotlinx.coroutines.sync.Mutex()
-    internal fun <T> withOriginal(book: Book, action: (BookDocumentInput) -> T): T {
-        val reference = book.sourceReference ?: return action(BookDocumentInput(File(book.file)))
-        val lease = links.openDocument(reference, book.sourceSize, book.sourceModified, if (book.file.endsWith(".txt")) "text-index" else null)
+    internal fun <T> withArchive(book: Book, action: (BookDocumentInput) -> T): T {
+        val reference = book.sourceReference
+        if (reference == null) return action(BookDocumentInput(File(book.bundleFile ?: book.file)))
+        val lease = links.openDocument(reference, book.sourceSize, book.sourceModified, if (book.archiveEntry == null && book.file.endsWith(".txt")) "text-index" else null)
         return try { action(BookDocumentInput(lease.getValue("descriptor") as Int, lease.getValue("size") as Long, lease["offset"] as? Long ?: 0L)) }
         finally { links.closeDocument(lease.getValue("lease") as String) }
     }
+    internal fun <T> withOriginal(book: Book, action: (BookDocumentInput) -> T): T = withArchive(book) { original ->
+        if (book.archiveEntry == null) action(original)
+        else action(BookZipSources.document(original, BookZipSources.Entry(book.archiveEntry, book.archiveEntrySize), book.archiveCharset))
+    }
+    private fun releaseReference(reference: String) {
+        if (books().none { it.sourceReference == reference }) links.release(reference)
+    }
     suspend fun openPublication(book: Book, font: File? = null): Publication = withContext(Dispatchers.IO) {
         check(!book.removed) { "本机文件已删除，请重新导入原书；阅读记录仍保留" }
-        if (book.sourceReference != null && book.file.endsWith(".epub")) {
+        if (book.sourceReference != null && book.archiveEntry == null && book.file.endsWith(".epub")) {
             withOriginal(book) { Unit } // Validate the upstream descriptor lease before Readium opens its own resource.
             engine.open(AbsoluteUrl(links.source(book.sourceReference).toString()) ?: error("原文件位置无效"), font)
         } else engine.open(publicationFile(book), font)
     }
+    private fun publicationCache(book: Book): File = if (book.file.endsWith(".txt", true)) File(context.filesDir, "text-publications/${book.id}.v2.epub")
+        else File(context.filesDir, "document-publications/${book.id}.v1.epub")
+    private fun conversionWarnings(book: Book): List<String> = runCatching {
+        val file = File(publicationCache(book).path + ".warnings.json")
+        if (!file.isFile) emptyList() else JSONArray(file.readText()).let { array -> List(array.length()) { array.getString(it) } }
+    }.getOrDefault(emptyList())
     suspend fun publicationFile(book: Book): File = withContext(Dispatchers.IO) {
-        if (!book.file.endsWith(".txt", true)) return@withContext File(book.file)
-        val target = File(context.filesDir, "text-publications/${book.id}.v2.epub")
+        if (book.file.endsWith(".epub", true) && book.archiveEntry == null) return@withContext File(book.file)
+        val target = publicationCache(book)
         textMutex.lock()
         try {
             withOriginal(book) { source ->
-                if (!target.isFile) LocalTextPublication.prepare(source, target, book.title, File(context.noBackupFilesDir, "text-conversion"))
+                if (!target.isFile) {
+                    val warnings = if (book.archiveEntry != null && book.file.endsWith(".epub", true)) {
+                        target.parentFile?.mkdirs()
+                        val temporary = File(target.path + ".part")
+                        try { source.inputStream().use { input -> temporary.outputStream().use { input.copyTo(it, 65536) } }; check(temporary.renameTo(target)) { "无法保存压缩包阅读缓存" } }
+                        finally { temporary.delete() }
+                        emptyList()
+                    } else if (book.file.endsWith(".txt", true)) {
+                        LocalTextPublication.prepare(source, target, book.title, File(context.noBackupFilesDir, "text-conversion")); emptyList()
+                    } else {
+                        val root = File(context.noBackupFilesDir, "format-conversion").apply { mkdirs() }
+                        BookArchiveImport(root).apply { documents = org.mewx.wenku8_flutter.BookMarkupImport(root, org.mewx.wenku8_flutter.BookPdfImport(context, root)::read) }
+                            .convert(book.originalName.ifBlank { book.title + "." + File(book.file).extension }, source, target)
+                    }
+                    File(target.path + ".warnings.json").writeText(JSONArray(warnings).toString())
+                }
             }
             target
         } finally { textMutex.unlock() }
@@ -139,10 +175,13 @@ class Library private constructor(private val context: Context) {
     @Synchronized fun remove(book: Book) {
         // Match upstream local_book_removal.dart: delete local content, retain history and bookmarks.
         File(book.file).takeIf { book.sourceReference == null }?.let { check(!it.exists() || it.delete()) { "本机文件删除失败，书籍和记录已保留" } }
-        update(book.copy(removed = true, sourceReference = null, sourceSize = 0, sourceModified = 0))
-        book.sourceReference?.let(links::release)
+        update(book.copy(removed = true, sourceReference = null, sourceSize = 0, sourceModified = 0, bundleFile = null))
+        book.sourceReference?.let(::releaseReference)
+        book.bundleFile?.takeIf { path -> books().none { it.bundleFile == path } }?.let { File(it).delete() }
         File(book.file + ".jpg").delete()
-        File(context.filesDir, "text-publications/${book.id}.v2.epub").delete()
+        File(context.filesDir, "text-publications/${book.id}.epub").delete()
+        publicationCache(book).delete()
+        File(publicationCache(book).path + ".warnings.json").delete()
     }
     suspend fun import(uri: Uri, copy: Boolean = true, treeGrant: Uri? = null): Book {
         importMutex.lock()
@@ -151,7 +190,86 @@ class Library private constructor(private val context: Context) {
     }
     private fun restoredRecord(book: Book): Book {
         val old = records().firstOrNull { it.id == book.id } ?: return book
-        return old.copy(file = book.file, removed = false, sourceReference = book.sourceReference, sourceSize = book.sourceSize, sourceModified = book.sourceModified)
+        return old.copy(file = book.file, removed = false, sourceReference = book.sourceReference, sourceSize = book.sourceSize, sourceModified = book.sourceModified, originalName = book.originalName, warnings = book.warnings, archiveEntry = book.archiveEntry, archiveEntrySize = book.archiveEntrySize, archiveCharset = book.archiveCharset, bundleFile = book.bundleFile, bundleDigest = book.bundleDigest, sourceDigest = book.sourceDigest)
+    }
+    internal suspend fun preview(uri: Uri): List<ImportCandidate> = withContext(Dispatchers.IO) {
+        val name = displayName(uri)
+        if (!name.endsWith(".zip", true)) { require(BookArchiveImport.supported(name)) { "不支持的书籍格式：$name" }; return@withContext listOf(ImportCandidate(uri, name)) }
+        val hash = context.contentResolver.openInputStream(uri)?.use { stream ->
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            val buffer = ByteArray(65536)
+            var count = 0L
+            while (true) { ensureActive(); val n = stream.read(buffer); if (n < 0) break; count += n; require(count <= BookArchiveImport.MAX_ARCHIVE) { "ZIP 原包超过 512MiB" }; digest.update(buffer, 0, n) }
+            digest.digest().joinToString("") { "%02x".format(it) }
+        } ?: error("无法读取压缩包")
+        val inspection = BookZipSources.inspect { context.contentResolver.openInputStream(uri) ?: error("无法读取压缩包") }
+        require(inspection.entries.isNotEmpty()) { "压缩包中没有支持的电子书；嵌套 ZIP 需先单独解压" }
+        inspection.entries.map { ImportCandidate(uri, name, it, inspection.charset, hash) }
+    }
+    internal suspend fun importCandidate(candidate: ImportCandidate, copy: Boolean, tree: Uri?): Book {
+        if (candidate.entry == null) return import(candidate.uri, copy, tree)
+        importMutex.lock()
+        try { return importArchiveMember(candidate, copy, tree) } finally { importMutex.unlock() }
+    }
+    internal fun archiveMemberId(raw: String, name: String, parentDigest: String): String = if (name.substringAfterLast('.').lowercase() in listOf("html", "htm", "xhtml", "md", "markdown")) {
+        java.security.MessageDigest.getInstance("SHA-256").digest((raw + ":" + parentDigest).toByteArray()).joinToString("") { "%02x".format(it) }
+    } else raw
+    private suspend fun importArchiveMember(candidate: ImportCandidate, copy: Boolean, tree: Uri?): Book = withContext(Dispatchers.IO) {
+        val entry = checkNotNull(candidate.entry)
+        val parentDigest = checkNotNull(candidate.archiveDigest)
+        var reference: String? = null
+        var bundle: File? = null
+        var created: Book? = null
+        try {
+            val size: Long
+            val modified: Long
+            if (copy) {
+                val root = File(context.filesDir, "managed-archives").apply { mkdirs() }
+                bundle = File(root, "$parentDigest.zip")
+                if (!bundle!!.isFile) {
+                    val temporary = File(bundle!!.path + ".part")
+                    try {
+                        context.contentResolver.openInputStream(candidate.uri)?.use { input -> temporary.outputStream().use { output ->
+                            val bytes = ByteArray(65536); var total = 0L
+                            while (true) { ensureActive(); val n = input.read(bytes); if (n < 0) break; total += n; require(total <= BookArchiveImport.MAX_ARCHIVE) { "ZIP 原包超过大小限制" }; output.write(bytes, 0, n) }
+                        } } ?: error("无法读取压缩包")
+                        require(digest(BookDocumentInput(temporary)) == parentDigest) { "压缩包在预览后发生变化，请重新选择" }
+                        check(temporary.renameTo(bundle!!)) { "无法保存 ZIP 原包" }
+                    } finally { temporary.delete() }
+                }
+                size = bundle!!.length(); modified = bundle!!.lastModified()
+            } else {
+                reference = links.remember(candidate.uri, retainGrant(candidate.uri, tree))
+                val lease = links.openDocument(reference!!)
+                try {
+                    size = lease.getValue("size") as Long; modified = lease.getValue("modified") as Long
+                    require(digest(BookDocumentInput(lease.getValue("descriptor") as Int, size)) == parentDigest) { "压缩包在预览后发生变化，请重新选择" }
+                } finally { links.closeDocument(lease.getValue("lease") as String) }
+            }
+            val anchor = File(context.filesDir, "books/${UUID.randomUUID()}.${entry.name.substringAfterLast('.').lowercase()}").apply { parentFile?.mkdirs() }
+            val provisional = Book("", entry.name.substringAfterLast('/').substringBeforeLast('.'), "", anchor.path,
+                sourceReference = reference, sourceSize = size, sourceModified = modified, originalName = entry.name,
+                archiveEntry = entry.name, archiveEntrySize = entry.size, archiveCharset = candidate.charset, bundleFile = bundle?.path, bundleDigest = parentDigest)
+            val raw = withOriginal(provisional) { digest(it) }
+            val id = archiveMemberId(raw, entry.name, parentDigest)
+            books().firstOrNull { it.id == id }?.let { existing -> reference?.let(::releaseReference); return@withContext existing }
+            val identified = provisional.copy(id = id, sourceDigest = raw)
+            created = identified
+            val publication = openPublication(identified)
+            val book = try {
+                publication.coverFitting(Size(240, 360))?.let { cover -> File(anchor.path + ".jpg").outputStream().use { cover.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, it) }; cover.recycle() }
+                restoredRecord(identified.copy(title = publication.metadata.title ?: identified.title, author = publication.metadata.authors.joinToString { it.name.toString() },
+                    summary = publication.metadata.description.orEmpty(), tags = publication.metadata.subjects.map { it.name }, warnings = conversionWarnings(identified)))
+            } finally { publication.close() }
+            update(book)
+            book
+        } catch (error: Exception) {
+            created?.let { File(it.file + ".jpg").delete(); publicationCache(it).delete() }
+            reference?.let(::releaseReference)
+            throw error
+        } finally {
+            bundle?.takeIf { file -> books().none { it.bundleFile == file.path } }?.delete()
+        }
     }
     private fun retainGrant(uri: Uri, tree: Uri?): Uri? {
         if (uri.scheme == "file") return null
@@ -164,7 +282,7 @@ class Library private constructor(private val context: Context) {
     }
     private suspend fun importLinked(uri: Uri, tree: Uri?): Book = withContext(Dispatchers.IO) {
         val name = displayName(uri)
-        require(name.endsWith(".epub", true) || name.endsWith(".txt", true)) { "当前支持 EPUB 和 TXT" }
+        require(BookArchiveImport.supported(name)) { "暂不支持所选文档格式" }
         val reference = links.remember(uri, retainGrant(uri, tree))
         var created: Book? = null
         try {
@@ -174,22 +292,22 @@ class Library private constructor(private val context: Context) {
             val id = try { digest(BookDocumentInput(lease.getValue("descriptor") as Int, size, lease["offset"] as? Long ?: 0L)) }
             finally { links.closeDocument(lease.getValue("lease") as String) }
             books().firstOrNull { it.id == id }?.let {
-                if (it.sourceReference != reference) links.release(reference)
+                if (it.sourceReference != reference) releaseReference(reference)
                 return@withContext it
             }
             val anchor = File(context.filesDir, "books/${UUID.randomUUID()}.${name.substringAfterLast('.').lowercase()}")
             anchor.parentFile?.mkdirs()
-            val provisional = Book(id, name.substringBeforeLast('.'), "", anchor.path, sourceReference = reference, sourceSize = size, sourceModified = modified)
+            val provisional = Book(id, name.substringBeforeLast('.'), "", anchor.path, sourceReference = reference, sourceSize = size, sourceModified = modified, originalName = name)
             created = provisional
             val publication = openPublication(provisional)
             val book = try {
                 publication.coverFitting(Size(240, 360))?.let { cover -> File(anchor.path + ".jpg").outputStream().use { cover.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, it) }; cover.recycle() }
-                restoredRecord(provisional.copy(title = publication.metadata.title ?: provisional.title, author = publication.metadata.authors.joinToString { it.name.toString() }))
+                restoredRecord(provisional.copy(title = publication.metadata.title ?: provisional.title, author = publication.metadata.authors.joinToString { it.name.toString() }, summary = publication.metadata.description.orEmpty(), tags = publication.metadata.subjects.map { it.name }, warnings = conversionWarnings(provisional)))
             } finally { publication.close() }
             update(book)
             book
         } catch (error: Exception) {
-            created?.let { File(it.file + ".jpg").delete(); File(context.filesDir, "text-publications/${it.id}.v2.epub").delete() }
+            created?.let { File(it.file + ".jpg").delete(); publicationCache(it).delete() }
             if (books().none { it.sourceReference == reference }) links.release(reference)
             throw error
         }
@@ -202,12 +320,24 @@ class Library private constructor(private val context: Context) {
                 val lease = links.openDocument(reference, purpose = if (book.file.endsWith(".txt")) "text-index" else null)
                 val size = lease.getValue("size") as Long
                 val modified = lease.getValue("modified") as Long
-                val id = try { digest(BookDocumentInput(lease.getValue("descriptor") as Int, size, lease["offset"] as? Long ?: 0L)) }
-                finally { links.closeDocument(lease.getValue("lease") as String) }
+                var raw = ""
+                var parentDigest: String? = null
+                val id = try {
+                    val original = BookDocumentInput(lease.getValue("descriptor") as Int, size, lease["offset"] as? Long ?: 0L)
+                    if (book.archiveEntry == null) digest(original)
+                    else {
+                        parentDigest = digest(original)
+                        raw = digest(BookZipSources.document(original, BookZipSources.Entry(book.archiveEntry, book.archiveEntrySize), book.archiveCharset))
+                        archiveMemberId(raw, book.archiveEntry, parentDigest!!)
+                    }
+                } finally { links.closeDocument(lease.getValue("lease") as String) }
                 require(id == book.id) { "所选文件与原书内容不一致，请选择原来的文件；现有进度与书签已保留" }
-                val replacement = book.copy(sourceReference = reference, sourceSize = size, sourceModified = modified, removed = false)
+                val replacement = book.copy(sourceReference = reference, sourceSize = size, sourceModified = modified, removed = false,
+                    bundleFile = null, bundleDigest = parentDigest ?: book.bundleDigest, sourceDigest = raw.takeIf { it.isNotEmpty() } ?: book.sourceDigest)
                 update(replacement)
-                if (book.sourceReference != reference) book.sourceReference?.let(links::release)
+                if (book.sourceReference != reference) book.sourceReference?.let(::releaseReference)
+                if (book.sourceReference == null && book.bundleFile == null) File(book.file).delete()
+                book.bundleFile?.takeIf { path -> books().none { it.bundleFile == path } }?.let { File(it).delete() }
                 replacement
             } catch (error: Exception) {
                 if (records().none { it.sourceReference == reference }) links.release(reference)
@@ -267,8 +397,8 @@ class Library private constructor(private val context: Context) {
         val name = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
             if (it.moveToFirst()) it.getString(0) else null
         } ?: uri.lastPathSegment ?: "导入的书籍"
-        require(name.endsWith(".epub", true) || name.endsWith(".txt", true)) { "当前版本支持 EPUB 和 TXT" }
-        val extension = if (name.endsWith(".epub", true)) "epub" else "txt"
+        require(BookArchiveImport.supported(name)) { "暂不支持所选文档格式" }
+        val extension = name.substringAfterLast('.').lowercase()
         val dir = File(context.filesDir, "books").apply { mkdirs() }
         val file = File(dir, "${UUID.randomUUID()}.$extension")
         var generated: File? = null
@@ -282,17 +412,15 @@ class Library private constructor(private val context: Context) {
             file.inputStream().use { input -> val buf = ByteArray(8192); var n = input.read(buf); while (n > 0) { digest.update(buf, 0, n); n = input.read(buf) } }
             val id = digest.digest().joinToString("") { "%02x".format(it) }
             books().firstOrNull { it.id == id }?.let { file.delete(); return@withContext it }
-            val book = restoredRecord(if (extension == "epub") {
-                val publication = engine.open(file)
-                try {
-                    publication.coverFitting(Size(240, 360))?.let { cover -> File(file.path + ".jpg").outputStream().use { cover.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, it) }; cover.recycle() }
-                    Book(id, publication.metadata.title ?: name.removeSuffix(".epub"), publication.metadata.authors.joinToString { it.name.toString() }, file.path) }
-                finally { publication.close() }
-            } else Book(id, name.substringBeforeLast('.'), "", file.path))
-            if (extension == "txt") {
-                val publication = engine.open(publicationFile(book).also { generated = it })
-                publication.close()
-            }
+            val provisional = Book(id, name.substringBeforeLast('.'), "", file.path, originalName = name)
+            val reading = publicationFile(provisional)
+            if (reading != file) generated = reading
+            val publication = engine.open(reading)
+            val book = try {
+                publication.coverFitting(Size(240, 360))?.let { cover -> File(file.path + ".jpg").outputStream().use { cover.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, it) }; cover.recycle() }
+                restoredRecord(provisional.copy(title = publication.metadata.title ?: provisional.title,
+                    author = publication.metadata.authors.joinToString { it.name.toString() }, summary = publication.metadata.description.orEmpty(), tags = publication.metadata.subjects.map { it.name }, warnings = conversionWarnings(provisional)))
+            } finally { publication.close() }
             update(book)
             book
         } catch (e: Exception) { file.delete(); File(file.path + ".jpg").delete(); generated?.delete(); throw e }
@@ -316,7 +444,7 @@ suspend fun scanFolder(context: Context, tree: Uri): List<Uri> = withContext(Dis
             while (cursor.moveToNext()) {
                 val child = cursor.getString(0)
                 if (cursor.getString(2) == android.provider.DocumentsContract.Document.MIME_TYPE_DIR) visit(child)
-                else if (cursor.getString(1).let { it.endsWith(".epub", true) || it.endsWith(".txt", true) }) result += android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, child)
+                else if (cursor.getString(1).let { (BookArchiveImport.supported(it) || it.endsWith(".zip", true)) }) result += android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, child)
             }
         }
     }

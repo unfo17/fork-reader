@@ -6,7 +6,9 @@ plugins {
 android {
     namespace = "io.github.unfo17.reader"
     compileSdk = 35
-    defaultConfig { applicationId = "io.github.unfo17.reader"; minSdk = 26; targetSdk = 35; versionCode = 2; versionName = "0.2.0-dev"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    ndkVersion = "27.0.12077973"
+    externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
+    defaultConfig { applicationId = "io.github.unfo17.reader"; minSdk = 26; targetSdk = 35; versionCode = 2; versionName = "0.2.0-dev"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"; externalNativeBuild.cmake.targets.addAll(listOf("mobi", "wenku_mobi")); ndk.abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a", "x86_64")) }
     sourceSets {
         getByName("main") {
             manifest.srcFile("src/compose/AndroidManifest.xml")
@@ -25,6 +27,10 @@ android {
     packaging { resources.excludes += setOf("META-INF/AL2.0", "META-INF/LGPL2.1") }
 }
 dependencies {
+    implementation("org.apache.poi:poi-scratchpad:5.5.1")
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+    implementation("org.jsoup:jsoup:1.23.2")
+    implementation("org.commonmark:commonmark:0.30.1")
     implementation("androidx.core:core-ktx:1.16.0")
     implementation(platform("androidx.compose:compose-bom:2025.04.01"))
     implementation("androidx.activity:activity-compose:1.10.1")

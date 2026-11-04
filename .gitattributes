@@ -1,0 +1,2 @@
+# Preserve the upstream license notices verbatim, including their line endings.
+android/app/src/compose/assets/font-licenses/** -whitespace

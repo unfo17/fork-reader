@@ -8,12 +8,16 @@ import java.util.zip.ZipOutputStream
 /** Bounded chapters and disk-backed resources; no whole-book image byte array. */
 internal class BookEpubWriter(private val work: File, var title: String) {
     var author = ""
+    var language = "zh"
+    var summary = ""
+    var tags = emptyList<String>()
     var identifier = "urn:uuid:${java.util.UUID.randomUUID()}"
     var cover: String? = null
     private val chapters = mutableListOf<Pair<String, File>>()
     private val references = linkedMapOf<String, Int>()
     private val resources = mutableMapOf<Int, Pair<String, File>>()
     private val body = StringBuilder()
+    private val anchors = mutableMapOf<String, Int>()
     private var chapterTitle = title
     private var expanded = 0L
     companion object {
@@ -40,6 +44,12 @@ internal class BookEpubWriter(private val work: File, var title: String) {
     fun inlineResourceKey() = "inline-${references.size}"
     fun image(key: String, style: String = "") {
         append("<img src=\"resource:${reference(key)}\"${if (style.isEmpty()) "" else " style=\"${escape(style)}\""}/>")
+    }
+    fun resourceHref(key: String): String = "resource:${reference(key)}"
+    fun markup(value: String) {
+        require(value.length <= 1024 * 1024) { "单个文档段落过大" }
+        append(value)
+        Regex("\\bid=\"([^\"]+)\"").findAll(value).forEach { anchors.putIfAbsent(it.groupValues[1], chapters.size) }
     }
     fun resource(key: String, type: String, input: InputStream) {
         val ext = when (type.lowercase().substringBefore(';')) {
@@ -96,14 +106,16 @@ internal class BookEpubWriter(private val work: File, var title: String) {
                 resources.entries.sortedBy { it.key }.joinToString("") { (id, item) ->
                     "<item id=\"i$id\" href=\"image-$id.${item.first}\" media-type=\"image/${if (item.first == "jpg") "jpeg" else item.first}\"${if (id == coverId) " properties=\"cover-image\"" else ""}/>"
                 }
-            entry("content.opf", """<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book-id">${escape(identifier)}</dc:identifier><dc:title>${escape(title)}</dc:title><dc:creator>${escape(author)}</dc:creator><dc:language>zh</dc:language><meta property="dcterms:modified">2000-01-01T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>$manifest</manifest><spine>${chapters.indices.joinToString("") { "<itemref idref=\"c$it\"/>" }}</spine></package>""")
+            entry("content.opf", """<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book-id">${escape(identifier)}</dc:identifier><dc:title>${escape(title)}</dc:title><dc:creator>${escape(author)}</dc:creator><dc:language>${escape(language)}</dc:language><dc:description>${escape(summary)}</dc:description>${tags.joinToString("") { "<dc:subject>${escape(it)}</dc:subject>" }}<meta property="dcterms:modified">2000-01-01T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>$manifest</manifest><spine>${chapters.indices.joinToString("") { "<itemref idref=\"c$it\"/>" }}</spine></package>""")
             entry("nav.xhtml", """<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><meta charset="utf-8"/><title>目录</title></head><body><nav epub:type="toc"><ol>${chapters.mapIndexed { i, c -> "<li><a href=\"c$i.xhtml\">${escape(c.first)}</a></li>" }.joinToString("")}</ol></nav></body></html>""")
             for ((i, chapter) in chapters.withIndex()) {
-                val html = chapter.second.readText().replace(Regex("resource:(\\d+)")) { match ->
+                val html = chapter.second.readText().replace(Regex("href=\"#([^\"]+)\"")) { match ->
+                    anchors[match.groupValues[1]]?.let { "href=\"c$it.xhtml#${match.groupValues[1]}\"" } ?: match.value
+                }.replace(Regex("resource:(\\d+)")) { match ->
                     val id = match.groupValues[1].toInt()
                     resources[id]?.let { "image-$id.${it.first}" } ?: ""
                 }
-                entry("c$i.xhtml", "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><meta charset=\"utf-8\"/><title>${escape(chapter.first)}</title></head><body>$html</body></html>")
+                entry("c$i.xhtml", "<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><meta charset=\"utf-8\"/><title>${escape(chapter.first)}</title></head><body>$html</body></html>")
             }
             for ((id, item) in resources.toSortedMap()) {
                 zip.putNextEntry(ZipEntry("image-$id.${item.first}").apply { time = 0 })
