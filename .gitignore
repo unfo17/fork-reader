@@ -170,3 +170,11 @@ key.properties
 !android/gradlew
 !android/gradlew.bat
 !android/gradle/wrapper/gradle-wrapper.jar
+
+# Native Compose application
+/native-android/.gradle/
+/native-android/**/build/
+/native-android/local.properties
+!native-android/gradlew
+!native-android/gradle/wrapper/gradle-wrapper.jar
+/native-android/.kotlin/

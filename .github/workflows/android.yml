@@ -1,0 +1,36 @@
+name: Native Android
+on:
+  push:
+    branches: [master, compose-readium]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew assembleDebug lintDebug
+        working-directory: native-android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fork-reader-debug
+          path: native-android/app/build/outputs/apk/debug/*.apk
+      - name: Device integration tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          working-directory: native-android
+          script: ./gradlew connectedDebugAndroidTest
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-reports
+          path: native-android/app/build/reports
