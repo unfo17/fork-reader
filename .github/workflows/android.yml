@@ -16,6 +16,7 @@ jobs:
           java-version: '17'
       - uses: android-actions/setup-android@v3
       - uses: gradle/actions/setup-gradle@v4
+      - run: python3 -m unittest discover -s tools/tests -v
       - run: ./gradlew assembleDebug lintDebug
         working-directory: android
       - uses: actions/upload-artifact@v4

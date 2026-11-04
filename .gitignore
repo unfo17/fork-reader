@@ -184,3 +184,4 @@ key.properties
 !tools/check_native_release.py
 !tools/tests/
 !tools/tests/**
+/tools/tests/__pycache__/
