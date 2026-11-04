@@ -284,7 +284,8 @@
       "status": "partial",
       "tests": [
         "io.github.unfo17.reader.AnnotationTest.exactSelectionOutlineSurvivesReopenAndTypographyChanges",
-        "io.github.unfo17.reader.AnnotationTest.independentAnnotationFieldsMergeWithoutRestoringDeletedMarks"
+        "io.github.unfo17.reader.AnnotationTest.independentAnnotationFieldsMergeWithoutRestoringDeletedMarks",
+        "io.github.unfo17.reader.AnnotationTest.adjustingSourceRangeKeepsDraftMetadataAcrossRotationAndRejectsStaleSave"
       ]
     },
     {
@@ -296,7 +297,8 @@
       "status": "partial",
       "tests": [
         "io.github.unfo17.reader.AnnotationTest.exactSelectionOutlineSurvivesReopenAndTypographyChanges",
-        "io.github.unfo17.reader.AnnotationTest.independentAnnotationFieldsMergeWithoutRestoringDeletedMarks"
+        "io.github.unfo17.reader.AnnotationTest.independentAnnotationFieldsMergeWithoutRestoringDeletedMarks",
+        "io.github.unfo17.reader.AnnotationTest.adjustingSourceRangeKeepsDraftMetadataAcrossRotationAndRejectsStaleSave"
       ]
     },
     {

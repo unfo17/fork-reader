@@ -8,6 +8,8 @@ import android.view.Menu
 import android.view.MenuItem
 import org.readium.r2.navigator.DecorableNavigator
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -63,8 +65,14 @@ class ReaderActivity : FragmentActivity() {
     private val containerId = View.generateViewId()
     private var loading by mutableStateOf(true)
     private var failure by mutableStateOf<String?>(null)
-    private var annotationDraft by mutableStateOf<ReadingMark?>(null)
-    private var annotationExpected: Long? = null
+    private val annotationSession by viewModels<AnnotationDraftSession>()
+    private var annotationDraft: ReadingMark?
+        get() = annotationSession.mark.takeUnless { annotationSession.selectingRange }
+        set(value) { annotationSession.mark = value }
+    private var annotationExpected: Long?
+        get() = annotationSession.expectedRevision
+        set(value) { annotationSession.expectedRevision = value }
+    private val pendingRange get() = annotationSession.mark.takeIf { annotationSession.selectingRange }
     private var annotations by mutableStateOf(false)
     private var decorationJob: kotlinx.coroutines.Job? = null
     private var toc by mutableStateOf(false)
@@ -141,11 +149,15 @@ class ReaderActivity : FragmentActivity() {
     }
 
     private fun annotationSelectionMenu() = object : ActionMode.Callback {
-        private fun add(menu: Menu) { listOf(MarkStyle.UNDERLINE, MarkStyle.HIGHLIGHT, MarkStyle.OUTLINE, MarkStyle.NONE).forEachIndexed { index, style -> if (menu.findItem(0x46524b00 + index) == null) menu.add(Menu.NONE, 0x46524b00 + index, index, if (style == MarkStyle.NONE) "批注" else style.label) } }
+        private fun add(menu: Menu) {
+            (0..4).forEach { menu.removeItem(0x46524b00 + it) }
+            if (pendingRange != null) { menu.add(Menu.NONE, 0x46524b04, 0, "使用此范围"); return }
+            listOf(MarkStyle.UNDERLINE, MarkStyle.HIGHLIGHT, MarkStyle.OUTLINE, MarkStyle.NONE).forEachIndexed { index, style -> if (menu.findItem(0x46524b00 + index) == null) menu.add(Menu.NONE, 0x46524b00 + index, index, if (style == MarkStyle.NONE) "批注" else style.label) } }
         override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean { add(menu); return true }
         override fun onPrepareActionMode(mode: ActionMode, menu: Menu): Boolean { add(menu); return false }
         override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
             val index = item.itemId - 0x46524b00
+            if (index == 4 && pendingRange != null) { annotateSelection(pendingRange!!.style) { mode.finish() }; return true }
             if (index !in 0..3) return false
             annotateSelection(listOf(MarkStyle.UNDERLINE, MarkStyle.HIGHLIGHT, MarkStyle.OUTLINE, MarkStyle.NONE)[index]) { mode.finish() }
             return true
@@ -155,7 +167,8 @@ class ReaderActivity : FragmentActivity() {
     internal fun annotateSelection(style: MarkStyle, captured: () -> Unit = {}) {
         lifecycleScope.launch {
             try {
-                val selection = navigator?.currentSelection() ?: return@launch
+                val selection = navigator?.currentSelection() ?: run { notice = "请先长按正文选择文字"; return@launch }
+                require(selection.locator.text.highlight.orEmpty().length in 1..12000) { "请选择 1 到 12000 字的原文" }
                 val anchor = navigator?.evaluateJavascript("""
                     (function(){var s=window.getSelection();if(!s||!s.rangeCount)return null;var r=s.getRangeAt(0);
                     function path(e){var p=[];while(e&&e.nodeType===1){var n=1,t=e.previousElementSibling;while(t){if(t.tagName===e.tagName)n++;t=t.previousElementSibling;}p.unshift(e.tagName.toLowerCase()+':nth-of-type('+n+')');e=e.parentElement;}return p.join(' > ');}
@@ -169,13 +182,34 @@ class ReaderActivity : FragmentActivity() {
                     anchor.keys().forEach { locations.put(it, anchor.get(it)) }
                 }
                 val draft = ReadingMark.create(Locator.fromJSON(json) ?: selection.locator, style)
-                val existing = currentBook().annotations.firstOrNull { !it.deleted && it.sameAnchor(draft) }
-                annotationExpected = existing?.revision
-                annotationDraft = existing ?: draft
+                val pending = pendingRange
+                if (pending != null) {
+                    require(library.books().any { it.id == book.id }) { "原书已移除，请重新导入后调整范围" }
+                    val revised = pending.copy(locator = draft.locator, quote = draft.quote,
+                        rangeUpdatedAt = if (pending.sameAnchor(draft)) pending.rangeUpdatedAt else maxOf(System.currentTimeMillis(), pending.revision + 1))
+                    annotationSession.selectingRange = false
+                    annotationDraft = revised
+                } else {
+                    val existing = currentBook().annotations.firstOrNull { !it.deleted && it.sameAnchor(draft) }
+                    annotationExpected = existing?.revision
+                    annotationDraft = existing ?: draft
+                }
                 captured(); navigator?.clearSelection()
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Exception) { notice = e.message ?: "无法获取选区" }
         }
+    }
+    private fun adjustAnnotationRange(draft: ReadingMark) {
+        require(library.books().any { it.id == book.id }) { "原书已移除，请重新导入后调整范围" }
+        annotationSession.mark = draft
+        annotationSession.selectingRange = true
+        annotations = false; marks = false
+        navigator?.clearSelection()
+        Locator.fromJSON(JSONObject(draft.locator))?.let { navigator?.go(it) }
+    }
+    private fun cancelRangeAdjustment() {
+        navigator?.clearSelection()
+        annotationSession.selectingRange = false
     }
     private fun refreshDecorations() {
         val fragment = navigator ?: return
@@ -185,6 +219,7 @@ class ReaderActivity : FragmentActivity() {
         decorationJob = lifecycleScope.launch { fragment.applyDecorations(decorations, "annotations") }
     }
     private fun openVolume(bookId: String, locator: Locator? = null) {
+        if (bookId != book.id && pendingRange != null) { notice = "请先完成或取消当前原书的范围调整"; return }
         if (bookId == book.id) { locator?.let { navigator?.go(it) }; toc = false; marks = false; return }
         val collection = series ?: return
         if (library.books().none { it.id == bookId }) { notice = "该卷原书已移除，请重新导入"; return }
@@ -265,19 +300,30 @@ class ReaderActivity : FragmentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable private fun ReaderScreen() {
         val currentLocation = navigator?.currentLocator?.collectAsState()?.value
-        Scaffold(topBar = { TopAppBar(title = { Text(series?.let { "${it.title} · ${it.volumes.firstOrNull { part -> part.bookId == book.id }?.title ?: book.title}" } ?: book.title, maxLines = 1) }, navigationIcon = { IconButton(onClick = { finish() }) { Icon(Icons.Outlined.ArrowBack, "返回") } }, actions = {
-            IconButton(onClick = { mark() }, enabled = navigator != null && !loading) { Icon(Icons.Outlined.BookmarkAdd, "添加书签") }
+        BackHandler(enabled = pendingRange != null) { cancelRangeAdjustment() }
+        Scaffold(topBar = { TopAppBar(title = { Text(series?.let { "${it.title} · ${it.volumes.firstOrNull { part -> part.bookId == book.id }?.title ?: book.title}" } ?: book.title, maxLines = 1) }, navigationIcon = { IconButton(onClick = { if (pendingRange != null) cancelRangeAdjustment() else finish() }) { Icon(Icons.Outlined.ArrowBack, "返回") } }, actions = {
+            IconButton(onClick = { mark() }, enabled = navigator != null && !loading && pendingRange == null) { Icon(Icons.Outlined.BookmarkAdd, "添加书签") }
             IconButton(onClick = { settings = true }) { Icon(Icons.Outlined.Settings, "阅读设置") }
-        }) }, bottomBar = { BottomAppBar {
+        }) }, bottomBar = { Column {
+            pendingRange?.let { pending -> Surface(tonalElevation = 3.dp) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                    Text("长按原文重新选择批注范围", style = MaterialTheme.typography.labelLarge)
+                    Row {
+                        TextButton(onClick = { annotateSelection(pending.style) }) { Text("使用此范围") }
+                        TextButton(onClick = { cancelRangeAdjustment() }) { Text("取消调整") }
+                    }
+                }
+            } }
+            BottomAppBar {
             TextButton(onClick = { toc = true }, enabled = publication != null) { Text("目录") }
-            TextButton(onClick = { marks = true }) { Text("书签") }
+            TextButton(onClick = { marks = true }, enabled = pendingRange == null) { Text("书签") }
             IconButton(onClick = { search = true }, enabled = !loading && failure == null) { Icon(Icons.Outlined.Search, "全文搜索") }
             IconButton(onClick = { toggleSpeech() }, enabled = !loading && failure == null) { Icon(if (speaking) Icons.Outlined.Stop else Icons.Outlined.VolumeUp, if (speaking) "停止朗读" else "朗读") }
             Spacer(Modifier.weight(1f))
             Text("${(progression * 100).toInt()}%", Modifier.padding(12.dp))
             IconButton(onClick = { navigator?.goBackward() }, enabled = navigator != null) { Icon(Icons.Outlined.ChevronLeft, "上一页") }
             IconButton(onClick = { navigator?.goForward() }, enabled = navigator != null) { Icon(Icons.Outlined.ChevronRight, "下一页") }
-        } }) { padding ->
+        } } }) { padding ->
             Box(Modifier.padding(padding).fillMaxSize()) {
                 when {
                     loading -> CircularProgressIndicator(Modifier.padding(24.dp))
@@ -292,7 +338,8 @@ class ReaderActivity : FragmentActivity() {
                                 fragment.addDecorationListener("annotations", object : DecorableNavigator.Listener {
                                     override fun onDecorationActivated(event: DecorableNavigator.OnActivatedEvent): Boolean {
                                         val mark = currentBook().annotations.firstOrNull { !it.deleted && it.id == event.decoration.id } ?: return false
-                                        annotationExpected = mark.revision; annotationDraft = mark; return true
+                                        if (pendingRange != null) return false
+                                        annotationSession.open(mark, mark.revision); return true
                                     }
                                 })
                                 refreshDecorations()
@@ -311,10 +358,13 @@ class ReaderActivity : FragmentActivity() {
             }
         }
         notice?.let { message -> AlertDialog(onDismissRequest = { notice = null }, text = { Text(message) }, confirmButton = { TextButton(onClick = { notice = null }) { Text("确定") } }) }
-        annotationDraft?.let { draft -> AnnotationEditor(draft, { annotationDraft = null }, { updated ->
-            library.saveAnnotation(book.id, updated, annotationExpected); annotationDraft = null; refreshDecorations()
-        }, onDelete = annotationExpected?.let { expected -> { library.deleteAnnotation(book.id, draft.id, expected); annotationDraft = null; refreshDecorations() } }, book = currentBook()) }
-        if (annotations || marks) AnnotationsPanel(library, series?.volumes?.map { it.bookId }?.toSet() ?: setOf(book.id), { annotations = false; marks = false }, { refreshDecorations() }, onNavigate = { original, mark ->
+        annotationDraft?.let { draft -> AnnotationEditor(draft, { annotationSession.clear() }, { updated ->
+            library.saveAnnotation(book.id, updated, annotationExpected); annotationSession.clear(); refreshDecorations()
+        }, onDelete = annotationExpected?.let { expected -> { library.deleteAnnotation(book.id, draft.id, expected); annotationSession.clear(); refreshDecorations() } }, book = currentBook(),
+            onAdjustRange = { adjustAnnotationRange(it) }, onDraftChange = { annotationSession.mark = it }) }
+        if (annotations || marks) AnnotationsPanel(library, series?.volumes?.map { it.bookId }?.toSet() ?: setOf(book.id), { annotations = false; marks = false }, { refreshDecorations() }, rangeBookId = book.id, onAdjustRange = { draft, expected ->
+            annotationExpected = expected; adjustAnnotationRange(draft)
+        }, onNavigate = { original, mark ->
             Locator.fromJSON(JSONObject(mark.locator))?.let { openVolume(original.id, it) }; annotations = false; marks = false
         }, onNavigateLegacy = { original, raw -> lifecycleScope.launch {
             try {

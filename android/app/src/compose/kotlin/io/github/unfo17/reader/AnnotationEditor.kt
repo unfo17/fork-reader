@@ -9,7 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 
-@Composable fun AnnotationEditor(mark: ReadingMark, onDismiss: () -> Unit, onSave: (ReadingMark) -> Unit, onDelete: (() -> Unit)? = null, book: Book? = null) {
+@Composable fun AnnotationEditor(mark: ReadingMark, onDismiss: () -> Unit, onSave: (ReadingMark) -> Unit, onDelete: (() -> Unit)? = null, book: Book? = null, onAdjustRange: ((ReadingMark) -> Unit)? = null, onDraftChange: ((ReadingMark) -> Unit)? = null) {
     var style by remember(mark.id) { mutableStateOf(mark.style) }
     var color by remember(mark.id) { mutableStateOf(mark.color) }
     var category by remember(mark.id) { mutableStateOf(mark.category) }
@@ -17,13 +17,23 @@ import androidx.compose.ui.unit.dp
     var error by remember { mutableStateOf<String?>(null) }
     var quoteImage by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    fun draft(): ReadingMark {
+        val now = maxOf(System.currentTimeMillis(), mark.revision + 1)
+        return mark.copy(style = style, color = color, category = category.trim(), note = note,
+            updatedAt = if (style != mark.style || color != mark.color || note != mark.note) now else mark.updatedAt,
+            categoryAt = if (category.trim() != mark.category) now else mark.categoryAt).also { ReadingMark.from(it.json()) }
+    }
+    fun changed() { try { onDraftChange?.invoke(draft()); error = null } catch (e: Exception) { error = e.message } }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("批注与摘录") }, text = {
         Column(Modifier.heightIn(max = 550.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(mark.quote.ifBlank { "位置书签" }, style = MaterialTheme.typography.bodyLarge)
-            ChoiceMenu("样式", style, MarkStyle.entries.map { it to it.label }) { style = it }
-            ChoiceMenu("颜色", color, MarkColor.entries.map { it to it.label }) { color = it }
-            OutlinedTextField(category, { category = it }, label = { Text("批注分类") })
-            OutlinedTextField(note, { note = it }, label = { Text("笔记") }, minLines = 3)
+            if (onAdjustRange != null && book?.removed != true) TextButton(onClick = {
+                try { onAdjustRange(draft()) } catch (e: Exception) { error = e.message }
+            }) { Text("调整原文范围") }
+            ChoiceMenu("样式", style, MarkStyle.entries.map { it to it.label }) { style = it; changed() }
+            ChoiceMenu("颜色", color, MarkColor.entries.map { it to it.label }) { color = it; changed() }
+            OutlinedTextField(category, { category = it; changed() }, label = { Text("批注分类") })
+            OutlinedTextField(note, { note = it; changed() }, label = { Text("笔记") }, minLines = 3)
             val date = java.time.Instant.ofEpochMilli(mark.createdAt).atOffset(java.time.ZoneOffset.ofTotalSeconds(mark.createdOffsetMinutes * 60))
             Text(date.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm XXX")), style = MaterialTheme.typography.labelSmall)
             if (book != null && mark.quote.isNotBlank()) TextButton(onClick = { quoteImage = true }) { Text("生成摘录图片") }
@@ -39,18 +49,14 @@ import androidx.compose.ui.unit.dp
         }
     }, confirmButton = { TextButton(onClick = {
         try {
-            val now = maxOf(System.currentTimeMillis(), mark.revision + 1)
-            val changed = mark.copy(style = style, color = color, category = category.trim(), note = note,
-                updatedAt = if (style != mark.style || color != mark.color || note != mark.note) now else mark.updatedAt,
-                categoryAt = if (category.trim() != mark.category) now else mark.categoryAt)
-            ReadingMark.from(changed.json()); onSave(changed)
+            onSave(draft())
         } catch (e: Exception) { error = e.message ?: "批注保存失败" }
     }) { Text("保存批注") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
     if (quoteImage && book != null) QuotePreview(book, mark, { quoteImage = false })
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable fun AnnotationsPanel(library: Library, bookIds: Set<String>? = null, onDismiss: () -> Unit, onChanged: () -> Unit = {}, onNavigate: ((Book, ReadingMark) -> Unit)? = null, onNavigateLegacy: ((Book, String) -> Unit)? = null) {
+@Composable fun AnnotationsPanel(library: Library, bookIds: Set<String>? = null, onDismiss: () -> Unit, onChanged: () -> Unit = {}, onNavigate: ((Book, ReadingMark) -> Unit)? = null, onNavigateLegacy: ((Book, String) -> Unit)? = null, rangeBookId: String? = null, onAdjustRange: ((ReadingMark, Long) -> Unit)? = null) {
     var revision by remember { mutableIntStateOf(0) }
     var query by remember { mutableStateOf("") }
     var category by remember { mutableStateOf<String?>(null) }
@@ -94,5 +100,5 @@ import androidx.compose.ui.unit.dp
     }
     editing?.let { (book, mark) -> AnnotationEditor(mark, { editing = null }, { updated ->
         library.saveAnnotation(book.id, updated, mark.revision); editing = null; revision++; onChanged()
-    }, onDelete = { library.deleteAnnotation(book.id, mark.id, mark.revision); editing = null; revision++; onChanged() }, book = book) }
+    }, onDelete = { library.deleteAnnotation(book.id, mark.id, mark.revision); editing = null; revision++; onChanged() }, book = book, onAdjustRange = onAdjustRange?.takeIf { book.id == rangeBookId && !book.removed }?.let { callback -> { draft -> editing = null; callback(draft, mark.revision) } }) }
 }

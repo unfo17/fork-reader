@@ -31,7 +31,8 @@ class AnnotationTest {
             instrumentation.uiAutomation.rootInActiveWindow?.let { root -> nodes(root).filter(predicate).toList().takeIf { it.isNotEmpty() }?.let { return it } }
             SystemClock.sleep(100)
         }
-        error("没有找到批注编辑控件")
+        val visible = instrumentation.uiAutomation.rootInActiveWindow?.let { root -> nodes(root).mapNotNull { it.text?.toString() }.toList() }
+        error("没有找到批注编辑控件：$visible")
     }
     private fun click(text: String) {
         var node: AccessibilityNodeInfo? = waitNodes { it.text?.toString() == text }.first()
@@ -50,6 +51,72 @@ class AnnotationTest {
             SystemClock.sleep(100)
         }
         error("正文标记未按预期显示：$last")
+    }
+    @Test fun adjustingSourceRangeKeepsDraftMetadataAcrossRotationAndRejectsStaleSave() = runBlocking<Unit> {
+        val context = instrumentation.targetContext; val library = Library.get(context)
+        val source = File(context.cacheDir, "annotation-range.txt").apply { writeText("第一章 调整\n最初的批注文字，后面是调整后的选区。\n不会被修改的旁文。${System.nanoTime()}") }
+        val book = library.import(Uri.fromFile(source)); val backup = File(context.cacheDir, "annotation-range-backup.zip")
+        suspend fun select(scenario: ActivityScenario<ReaderActivity>, text: String) {
+            val literal = JSONObject.quote(text)
+            waitJavascript(scenario, """(function(){var text=$literal,w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT),n;while(n=w.nextNode()){if(n.parentElement.closest('script,style'))continue;var i=n.textContent.indexOf(text);if(i>=0){var r=document.createRange();r.setStart(n,i);r.setEnd(n,i+text.length);var s=window.getSelection();s.removeAllRanges();s.addRange(r);return s.toString()===text;}}return false;})()""")
+        }
+        fun setNote(value: String) {
+            val end = SystemClock.uptimeMillis() + 10000
+            while (SystemClock.uptimeMillis() < end) {
+                val root = instrumentation.uiAutomation.rootInActiveWindow
+                val inputs = root?.let { nodes(it).filter { n -> n.className?.toString() == "android.widget.EditText" && n.isEditable }.toList() }.orEmpty()
+                inputs.lastOrNull()?.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value) })
+                instrumentation.waitForIdleSync()
+                val current = instrumentation.uiAutomation.rootInActiveWindow
+                if (current != null && nodes(current).any { it.text?.toString() == value }) return
+                SystemClock.sleep(100)
+            }
+            error("笔记输入没有生效：$value")
+        }
+        try {
+            ActivityScenario.launch<ReaderActivity>(Intent(context, ReaderActivity::class.java).putExtra("book", book.id)).use { scenario ->
+                select(scenario, "最初的批注文字")
+                scenario.onActivity { it.annotateSelection(MarkStyle.OUTLINE) }
+                waitNodes { it.text?.toString() == "保存批注" }; setNote("最初的笔记")
+                scenario.recreate(); waitNodes { it.text?.toString() == "最初的笔记" }
+                click("保存批注")
+                val first = library.records().first { it.id == book.id }.annotations.single { !it.deleted }
+                click("书签"); click("编辑批注"); setNote("调整时保留的草稿")
+                click("调整原文范围")
+                waitNodes { it.text?.toString() == "取消调整" }
+                assertEquals(first, library.records().first { it.id == book.id }.annotations.single { !it.deleted })
+                scenario.recreate()
+                waitNodes { it.text?.toString() == "取消调整" }
+                click("取消调整")
+                waitNodes { it.text?.toString() == "调整时保留的草稿" }
+                assertEquals(first, library.records().first { it.id == book.id }.annotations.single { !it.deleted })
+                click("调整原文范围"); select(scenario, "调整后的选区")
+                click("使用此范围")
+                waitNodes { it.text?.toString() == "保存批注" }
+                click("保存批注")
+                val changed = library.records().first { it.id == book.id }.annotations.single { !it.deleted }
+                assertEquals(first.id, changed.id); assertEquals(first.createdAt, changed.createdAt)
+                assertEquals(first.createdOffsetMinutes, changed.createdOffsetMinutes)
+                assertEquals(first.style, changed.style); assertEquals(first.color, changed.color)
+                assertEquals("调整时保留的草稿", changed.note); assertEquals("调整后的选区", changed.quote)
+                assertTrue(changed.rangeUpdatedAt > first.rangeUpdatedAt)
+                assertFalse(changed.sameAnchor(first))
+                waitJavascript(scenario, "document.querySelectorAll('[data-group=\"annotations\"] .fork-reader-outline').length>0")
+                exportLibrary(context, Uri.fromFile(backup))
+                click("书签"); click("编辑批注"); click("调整原文范围")
+                select(scenario, "不会被修改的旁文")
+                click("使用此范围")
+                waitNodes { it.text?.toString() == "保存批注" }
+                val newer = changed.copy(note = "另一处新笔记", updatedAt = changed.revision + 100)
+                library.saveAnnotation(book.id, newer, changed.revision)
+                click("保存批注"); waitNodes { it.text?.toString() == "批注已变化，请重新打开" }
+                assertEquals(newer, library.records().first { it.id == book.id }.annotations.single { !it.deleted })
+                click("取消")
+                restoreLibrary(context, Uri.fromFile(backup))
+                val restored = library.records().first { it.id == book.id }.annotations.single { !it.deleted }
+                assertEquals(changed.quote, restored.quote); assertEquals(newer.note, restored.note)
+            }
+        } finally { library.books().firstOrNull { it.id == book.id }?.let(library::remove); source.delete(); backup.delete() }
     }
     @Test fun exactSelectionOutlineSurvivesReopenAndTypographyChanges() = runBlocking<Unit> {
         val context = instrumentation.targetContext
