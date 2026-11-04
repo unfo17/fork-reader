@@ -431,7 +431,10 @@
       "tests": [
         "io.github.unfo17.reader.SystemSpeechTest.upstreamSpeechSegmentationKeepsOriginalOffsetsAndNeverCutsSurrogatePairs",
         "io.github.unfo17.reader.SystemSpeechUiTest.selectedSystemVoiceIsSavedPreviewedAndReadsPastTheOldThreeThousandCharacterLimit",
-        "io.github.unfo17.reader.ListeningServiceTest.seriesPlaybackContinuesBetweenOriginalVolumesAndLeavesTheirBytesUnchanged"
+        "io.github.unfo17.reader.ListeningServiceTest.seriesPlaybackContinuesBetweenOriginalVolumesAndLeavesTheirBytesUnchanged",
+        "io.github.unfo17.reader.ListeningCursorTest.cursorSurvivesServiceRecreationAndChangedVoiceRestartsOnlyItsSavedSentence",
+        "io.github.unfo17.reader.ListeningCursorTest.invalidResumeDoesNotReplaceItsSavedAnchorAndDamagedRecordsStayIsolated",
+        "io.github.unfo17.reader.ListeningUiTest.savedListeningHistoryRestartsTheServiceFromItsPersistedPosition"
       ]
     },
     {
@@ -453,8 +456,11 @@
       "upstream": [
         "lib/listening/widgets.dart"
       ],
-      "status": "pending",
-      "tests": []
+      "status": "partial",
+      "tests": [
+        "io.github.unfo17.reader.ListeningServiceTest.foregroundSessionSurvivesReaderDestructionAndMediaControlsPreserveAudioPosition",
+        "io.github.unfo17.reader.ListeningUiTest.libraryMiniPlayerAndSleepControlsOperateTheSameBackgroundSession"
+      ]
     },
     {
       "id": "speech.online",

@@ -65,6 +65,7 @@ class MainActivity : ComponentActivity() {
     var appearance by remember { mutableStateOf(false) }
     var speechSettings by remember { mutableStateOf(false) }
     var listeningControls by remember { mutableStateOf(false) }
+    var listeningHistory by remember { mutableStateOf(false) }
     var licenses by remember { mutableStateOf(false) }
     var annotations by remember { mutableStateOf(false) }
     var history by remember { mutableStateOf(false) }
@@ -252,6 +253,7 @@ class MainActivity : ComponentActivity() {
                     item { OutlinedButton(enabled = !busy, onClick = { exportPicker.launch("本地书房备份.zip") }) { Text(if (books.any { it.archiveEntry != null }) "导出备份（含 ZIP 整个原包）" else "导出书库与阅读记录") } }
                     item { OutlinedButton(enabled = !busy, onClick = { restorePicker.launch(arrayOf("application/zip", "application/octet-stream")) }) { Text("从备份合并恢复") } }
                     item { TextButton(onClick = { annotations = true }) { Text("全部批注和摘录") } }
+                    item { TextButton(onClick = { listeningHistory = true }) { Text("听书记录与续听") } }
                     item { TextButton(onClick = { speechSettings = true }) { Text("系统语音与音色") } }
                     item { TextButton(onClick = { textImportSettings = true }) { Text("TXT 导入设置") } }
                     item { TextButton(onClick = { appFonts = true }) { Text("应用字体与字体管理") } }
@@ -265,6 +267,7 @@ class MainActivity : ComponentActivity() {
     externalRequest?.let { request -> key(request.id) {
         ExternalOpenDialog(request, library, onLocate = { locatingExternal = request.id; importer.launch(arrayOf("*/*")) }, onChanged = { books = library.collectionBooks() }, onOpen = { open(it) })
     } }
+    if (listeningHistory) ListeningHistory({ listeningHistory = false }, { listeningHistory = false; listeningControls = true })
     if (listeningControls) ListeningControls({ listeningControls = false }, { listeningControls = false; speechSettings = true })
     if (speechSettings) SystemSpeechSettingsPanel { speechSettings = false }
     if (textImportSettings) TextImportSettings { textImportSettings = false }

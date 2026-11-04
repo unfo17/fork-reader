@@ -44,7 +44,7 @@ class SpeechAudioOutput(context: Context, private val pauseOnInterruption: Boole
     private val noisy = object : BroadcastReceiver() { override fun onReceive(context: Context, intent: Intent) { interrupt() } }
     init { ContextCompat.registerReceiver(this.context, noisy, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY), ContextCompat.RECEIVER_NOT_EXPORTED) }
 
-    suspend fun play(file: File, speed: Float = 1f, keepFocus: Boolean = false, startPlaying: Boolean = true): Unit = withContext(Dispatchers.Main.immediate) {
+    suspend fun play(file: File, speed: Float = 1f, keepFocus: Boolean = false, startPlaying: Boolean = true, initialPositionMillis: Long = 0): Unit = withContext(Dispatchers.Main.immediate) {
         check(!closed) { "音频播放器已关闭" }
         require(speed.isFinite() && speed in .5f..3f)
         val previous = completion
@@ -59,9 +59,22 @@ class SpeechAudioOutput(context: Context, private val pauseOnInterruption: Boole
             local.setWakeMode(context, android.os.PowerManager.PARTIAL_WAKE_LOCK)
             local.setOnPreparedListener {
                 if (player !== local || !continuation.isActive) return@setOnPreparedListener
-                prepared = true
                 try {
-                    if (requested) startPrepared(local)
+                    lastDuration = local.duration.toLong().coerceAtLeast(0)
+                    if (initialPositionMillis > 0 && initialPositionMillis >= lastDuration) {
+                        prepared = true; finish(local, null, keepFocus)
+                    } else if (initialPositionMillis > 0) {
+                        local.setOnSeekCompleteListener {
+                            if (player === local && continuation.isActive) {
+                                local.setOnSeekCompleteListener(null); prepared = true
+                                try { if (requested) startPrepared(local) } catch (e: Exception) { finish(local, e, keepFocus) }
+                            }
+                        }
+                        local.seekTo(initialPositionMillis, MediaPlayer.SEEK_CLOSEST)
+                    } else {
+                        prepared = true
+                        if (requested) startPrepared(local)
+                    }
                 } catch (e: Exception) { finish(local, e, keepFocus) }
             }
             local.setOnCompletionListener { finish(local, null, keepFocus) }
@@ -82,7 +95,7 @@ class SpeechAudioOutput(context: Context, private val pauseOnInterruption: Boole
         lastPosition = positionMillis; lastDuration = durationMillis
         val previous = player; player = null; completion = null
         prepared = false
-        previous?.setOnPreparedListener(null); previous?.setOnCompletionListener(null); previous?.setOnErrorListener(null)
+        previous?.setOnPreparedListener(null); previous?.setOnCompletionListener(null); previous?.setOnErrorListener(null); previous?.setOnSeekCompleteListener(null)
         previous?.release()
         if (focused && abandonFocus) { focused = false; manager.abandonAudioFocusRequest(focus) }
     }

@@ -9,6 +9,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Stop
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -19,16 +21,17 @@ import androidx.compose.ui.unit.dp
 @Composable fun ListeningMiniPlayer(onOpen: () -> Unit) {
     val state by ListeningSession.state.collectAsState()
     val context = LocalContext.current
-    if (state.active) Surface(tonalElevation = 3.dp) {
+    if (state.active || state.phase == ListeningPhase.FAILED) Surface(tonalElevation = 3.dp) {
         Row(Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(start = 16.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(state.title.ifBlank { "正在准备听书" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(if (state.phase == ListeningPhase.PAUSED) "听书已暂停" else "正在听书", style = MaterialTheme.typography.labelSmall)
+                Text(state.title.ifBlank { if (state.phase == ListeningPhase.FAILED) "听书失败" else "正在准备听书" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(if (state.phase == ListeningPhase.FAILED) state.error ?: "听书失败" else if (state.phase == ListeningPhase.PAUSED) "听书已暂停" else "正在听书", style = MaterialTheme.typography.labelSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            IconButton(onClick = { ListeningSession.command(context, if (state.phase == ListeningPhase.PAUSED) ListeningSession.RESUME else ListeningSession.PAUSE) }) {
+            if (state.phase == ListeningPhase.FAILED) IconButton(onClick = onOpen) { Icon(Icons.Outlined.Info, "查看听书错误") }
+            else IconButton(onClick = { ListeningSession.command(context, if (state.phase == ListeningPhase.PAUSED) ListeningSession.RESUME else ListeningSession.PAUSE) }) {
                 Icon(if (state.phase == ListeningPhase.PAUSED) Icons.Outlined.PlayArrow else Icons.Outlined.Pause, if (state.phase == ListeningPhase.PAUSED) "继续听书" else "暂停听书")
             }
-            IconButton(onClick = { ListeningSession.command(context, ListeningSession.STOP) }) { Icon(Icons.Outlined.Stop, "停止听书") }
+            IconButton(onClick = { if (state.phase == ListeningPhase.FAILED) ListeningSession.dismissError() else ListeningSession.command(context, ListeningSession.STOP) }) { Icon(if (state.phase == ListeningPhase.FAILED) Icons.Outlined.Close else Icons.Outlined.Stop, if (state.phase == ListeningPhase.FAILED) "关闭听书提示" else "停止听书") }
         }
     }
 }

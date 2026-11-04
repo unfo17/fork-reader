@@ -37,7 +37,7 @@ public final class TestSpeechService extends TextToSpeechService {
             while (!stopped && android.os.SystemClock.uptimeMillis() < end) android.os.SystemClock.sleep(10);
         }
         if (stopped) { callback.error(TextToSpeech.STOPPED); return; }
-        int blocks = request.getCharSequenceText().toString().startsWith("[test-audio-session]") ? 750 : request.getCharSequenceText().toString().startsWith("[test-audio-long]") ? 150 : 1;
+        int blocks = request.getCharSequenceText().toString().startsWith("[test-process-session]") ? 3000 : request.getCharSequenceText().toString().startsWith("[test-audio-session]") ? 750 : request.getCharSequenceText().toString().startsWith("[test-audio-long]") ? 150 : 1;
         for (int i = 0; i < blocks && !stopped; i++) callback.audioAvailable(new byte[640], 0, 640);
         callback.done();
     }

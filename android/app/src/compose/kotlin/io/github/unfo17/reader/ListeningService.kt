@@ -42,6 +42,9 @@ class ListeningService : Service() {
     private var decoding = false
     private var lastNotification = 0L
     private var lastWakeRenewal = 0L
+    private lateinit var store: ListeningStore
+    private var currentCursor: ListeningCursor? = null
+    private var lastSave = 0L
     private val resumes = Channel<Unit>(Channel.CONFLATED)
     private var snapshot: ListeningSnapshot
         get() = ListeningSession.mutable.value
@@ -50,6 +53,7 @@ class ListeningService : Service() {
     override fun onCreate() {
         super.onCreate()
         client = SystemSpeechClient(this)
+        store = ListeningStore(this)
         audio = SpeechAudioOutput(this, pauseOnInterruption = true) { pause() }
         notifications = getSystemService(NotificationManager::class.java)
         notifications.createNotificationChannel(NotificationChannel(CHANNEL, "听书播放", NotificationManager.IMPORTANCE_LOW))
@@ -92,10 +96,12 @@ class ListeningService : Service() {
         return START_NOT_STICKY
     }
     private fun start(intent: Intent) {
+        saveCursor(force = true)
         val epoch = ++generation
-        playback?.cancel(); audio.stop(); timer?.cancel(); paused = false
-        val bookId = intent.getStringExtra("book").orEmpty()
-        val seriesId = intent.getStringExtra("series")
+        playback?.cancel(); audio.stop(); timer?.cancel(); paused = false; decoding = false; currentCursor = null
+        val saved = intent.getStringExtra("resumeOwner")?.let { store.cursor(it) }
+        val bookId = intent.getStringExtra("book") ?: saved?.bookId.orEmpty()
+        val seriesId = intent.getStringExtra("series") ?: saved?.seriesId
         val initial = intent.getStringExtra("locator")?.let { runCatching { Locator.fromJSON(JSONObject(it)) }.getOrNull() }
         snapshot = ListeningSnapshot(ListeningPhase.PREPARING, bookId, seriesId)
         media.isActive = true
@@ -103,6 +109,8 @@ class ListeningService : Service() {
         foreground = true; acquireWake()
         playback = scope.launch {
             try {
+                require(intent.getStringExtra("resumeOwner") == null || saved != null) { "续听记录不可用，请从阅读页重新开始" }
+                if (saved?.completed == true) { snapshot = snapshot.copy(title = saved.title, locator = saved.locator); finish(ListeningPhase.COMPLETED); return@launch }
                 val library = Library.get(this@ListeningService)
                 val series = seriesId?.let { library.series.get(it) }?.takeIf { !it.deleted && it.volumes.any { part -> part.bookId == bookId } }
                 val originals = series?.volumes?.map { it.bookId }?.dropWhile { it != bookId } ?: listOf(bookId)
@@ -114,14 +122,31 @@ class ListeningService : Service() {
                     try {
                         // Assign ownership inside IO before returning across a cancellable boundary.
                         withContext(Dispatchers.IO) { library.openPublication(book).also { publication = it } }
-                        val iterator = withContext(Dispatchers.IO) { publication!!.content(if (index == 0) initial else null)?.iterator() }
+                        val resume = saved?.takeIf { index == 0 }
+                        var matchedParagraph = resume == null
+                        var resumedSegment = resume == null
+                        val begin = if (resume != null) {
+                            val link = publication!!.readingOrder.firstOrNull { ChapterSearchWindow.resource(it.href.toString()) == ChapterSearchWindow.resource(resume.href) }
+                                ?: error("续听章节已变化，请从阅读页重新开始")
+                            publication!!.locatorFromLink(link)
+                        } else if (index == 0) initial else null
+                        val iterator = withContext(Dispatchers.IO) { publication!!.content(begin)?.iterator() }
                             ?: error("这本书没有可提取的朗读正文")
                         while (true) {
                             ensureActive()
                             val paragraph = withContext(Dispatchers.IO) { iterator.nextOrNull() } ?: break
+                            if (!matchedParagraph && resume != null && ChapterSearchWindow.resource(paragraph.locator.href.toString()) != ChapterSearchWindow.resource(resume.href)) error("续听原文已变化，请从阅读页重新开始")
                             if (paragraph !is Content.TextualElement) continue
                             val text = paragraph.text.orEmpty()
+                            val paragraphKey = withContext(Dispatchers.Default) { ListeningCursor.paragraphKey(paragraph) }
+                            if (!matchedParagraph && resume != null) {
+                                if (paragraphKey != resume.paragraphKey) continue
+                                matchedParagraph = true
+                            }
                             for (segment in SpeechSegments.split(text)) {
+                                if (!resumedSegment && resume != null && segment.end <= resume.start) continue
+                                val restoring = resume?.takeUnless { resumedSegment }
+                                resumedSegment = true
                                 while (paused) resumes.receive()
                                 ensureActive()
                                 val preferences = SystemSpeechSettings.load(this@ListeningService)
@@ -133,12 +158,23 @@ class ListeningService : Service() {
                                 decoding = false
                                 val file = client.synthesize(segment.text, preferences.engine, preferences.voice, preferences.locale)
                                 try {
+                                    val audioHash = withContext(Dispatchers.IO) { ListeningCursor.audioHash(file) }
+                                    val speechHash = ListeningCursor.speechHash(preferences, segment.text)
+                                    val position = restoring?.takeIf { it.start == segment.start && it.speechHash == speechHash && it.audioHash == audioHash }?.positionMillis ?: 0L
+                                    currentCursor = ListeningCursor(book.id, series?.id, textPrefix(snapshot.title, 512), paragraph.locator.href.toString(), paragraphKey,
+                                        segment.start, speechHash, audioHash, position, locator.toJSON().toString(), System.currentTimeMillis())
                                     any = true; decoding = true
-                                    audio.play(file, preferences.speed, keepFocus = true, startPlaying = !paused)
-                                    snapshot = snapshot.copy(positionMillis = audio.positionMillis, durationMillis = audio.durationMillis)
-                                } finally { decoding = false; file.delete() }
+                                    audio.play(file, preferences.speed, keepFocus = true, startPlaying = !paused, initialPositionMillis = position)
+                                    if (epoch == generation) {
+                                        currentCursor = currentCursor?.copy(positionMillis = audio.positionMillis)
+                                        snapshot = snapshot.copy(positionMillis = audio.positionMillis, durationMillis = audio.durationMillis)
+                                        saveCursor(force = true)
+                                    }
+                                } finally { if (epoch == generation) decoding = false; file.delete() }
                             }
+                            require(resumedSegment) { "续听文字范围已变化，请从阅读页重新开始" }
                         }
+                        require(matchedParagraph && resumedSegment) { "续听原文已变化，请从阅读页重新开始" }
                     } finally { withContext(NonCancellable + Dispatchers.IO) { publication?.close() } }
                 }
                 if (!any) error("当前位置没有可朗读的文字")
@@ -150,6 +186,7 @@ class ListeningService : Service() {
     private fun pause() {
         if (!snapshot.active) return
         paused = true; audio.pause(); releaseWake()
+        saveCursor(force = true)
         snapshot = snapshot.copy(phase = ListeningPhase.PAUSED,
             positionMillis = if (decoding) audio.positionMillis else snapshot.positionMillis,
             durationMillis = if (decoding) audio.durationMillis else snapshot.durationMillis)
@@ -174,11 +211,21 @@ class ListeningService : Service() {
     private fun updateProgress() {
         val nextPhase = if (paused) ListeningPhase.PAUSED else if (decoding && audio.ready) ListeningPhase.PLAYING else ListeningPhase.PREPARING
         snapshot = snapshot.copy(phase = nextPhase, positionMillis = if (decoding) audio.positionMillis else snapshot.positionMillis, durationMillis = if (decoding) audio.durationMillis else snapshot.durationMillis)
+        saveCursor()
         publish()
+    }
+    private fun saveCursor(force: Boolean = false, completed: Boolean = false) {
+        val cursor = currentCursor ?: return
+        if (!force && (!decoding || !audio.ready || SystemClock.elapsedRealtime() - lastSave < 5000)) return
+        val position = if (decoding && audio.ready) audio.positionMillis else cursor.positionMillis
+        val updated = cursor.copy(positionMillis = position, completed = completed || cursor.completed, updatedAt = System.currentTimeMillis())
+        try { store.save(updated); currentCursor = updated; lastSave = SystemClock.elapsedRealtime() }
+        catch (_: Exception) { /* Playback remains usable if optional progress persistence fails. */ }
     }
     private fun acquireWake() { wake.acquire(10 * 60 * 1000L); lastWakeRenewal = SystemClock.elapsedRealtime() }
     private fun releaseWake() { if (wake.isHeld) wake.release() }
     private fun finish(phase: ListeningPhase, error: String? = null) {
+        saveCursor(force = true, completed = phase == ListeningPhase.COMPLETED)
         generation++; playback?.cancel(); audio.stop(); timer?.cancel(); releaseWake()
         snapshot = snapshot.copy(phase = phase, error = error, sleepUntil = null)
         media.isActive = false
@@ -218,6 +265,7 @@ class ListeningService : Service() {
         super.onTaskRemoved(rootIntent)
     }
     override fun onDestroy() {
+        if (snapshot.active) saveCursor(force = true)
         generation++; scope.cancel(); audio.close(); client.close(); releaseWake(); media.release()
         if (snapshot.active) snapshot = snapshot.copy(phase = ListeningPhase.STOPPED, sleepUntil = null)
         super.onDestroy()

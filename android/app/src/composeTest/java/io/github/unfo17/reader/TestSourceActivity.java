@@ -22,7 +22,11 @@ public class TestSourceActivity extends Activity {
             if ("revoke".equals(operation)) { revokeUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION); return; }
             if (!"regrant".equals(operation)) {
                 File file = TestDocumentsProvider.file(this, id); file.getParentFile().mkdirs();
-                try (FileOutputStream output = new FileOutputStream(file)) { output.write(getIntent().getByteArrayExtra("bytes")); }
+                try (FileOutputStream output = new FileOutputStream(file)) {
+                    byte[] bytes = getIntent().getByteArrayExtra("bytes");
+                    if (bytes == null) bytes = getIntent().getStringExtra("text").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    output.write(bytes);
+                }
                 getSharedPreferences("test-documents", 0).edit().putString(id + ".name", getIntent().getStringExtra("name")).putString(id + ".mime", getIntent().getStringExtra("mime")).putBoolean(id + ".delete", getIntent().getBooleanExtra("deletable", false)).commit();
             }
             int flags = Intent.FLAG_GRANT_READ_URI_PERMISSION;

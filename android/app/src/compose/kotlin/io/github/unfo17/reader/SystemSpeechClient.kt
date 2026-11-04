@@ -50,7 +50,7 @@ class SystemSpeechClient(private val context: Context) : AutoCloseable {
     }.orEmpty()
     suspend fun synthesize(text: String, engine: String, voice: String, locale: String?): File {
         val requestId = UUID.randomUUID().toString().replace("-", "")
-        val directory = File(context.cacheDir, "system-speech").apply { mkdirs() }
+        val directory = SpeechTemporaryFiles.directory(context)
         val name = java.security.MessageDigest.getInstance("SHA-256").digest(requestId.toByteArray()).joinToString("") { "%02x".format(it) }
         val file = File(directory, "$name.wav.part")
         try {

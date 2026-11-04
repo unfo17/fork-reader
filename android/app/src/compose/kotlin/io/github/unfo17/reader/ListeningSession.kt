@@ -31,6 +31,10 @@ object ListeningSession {
         ContextCompat.startForegroundService(context, Intent(context, ListeningService::class.java).setAction(START)
             .putExtra("book", bookId).putExtra("series", seriesId).putExtra("locator", locator?.toJSON()?.toString()))
     }
+    fun continueFromRecord(context: Context, ownerId: String) {
+        ContextCompat.startForegroundService(context, Intent(context, ListeningService::class.java).setAction(START).putExtra("resumeOwner", ownerId))
+    }
+    fun dismissError() { if (mutable.value.phase == ListeningPhase.FAILED) mutable.value = mutable.value.copy(phase = ListeningPhase.STOPPED, error = null) }
     fun command(context: Context, action: String) { context.startService(Intent(context, ListeningService::class.java).setAction(action)) }
     fun sleep(context: Context, minutes: Int) {
         require(minutes in 0..120)
