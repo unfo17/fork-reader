@@ -413,16 +413,25 @@
         "android/app/src/main/kotlin/org/mewx/wenku8_flutter/SystemSpeechPlugin.kt"
       ],
       "status": "partial",
-      "tests": []
+      "tests": [
+        "io.github.unfo17.reader.SystemSpeechTest.originalNativeCoreDiscoversRealEngineVoicesAndSynthesizesWavWithLanguageValidation",
+        "io.github.unfo17.reader.SystemSpeechTest.cancellingPendingNativeSynthesisDoesNotBlockUiOrLeaveAnUnusableSession",
+        "io.github.unfo17.reader.SystemSpeechUiTest.selectedSystemVoiceIsSavedPreviewedAndReadsPastTheOldThreeThousandCharacterLimit"
+      ]
     },
     {
       "id": "speech.continuous",
       "feature": "全书连续朗读、段落跟随和进度",
       "upstream": [
+        "lib/listening/models.dart",
+        "lib/listening/controller.dart",
         "lib/reader_speech_highlight.dart"
       ],
-      "status": "pending",
-      "tests": []
+      "status": "partial",
+      "tests": [
+        "io.github.unfo17.reader.SystemSpeechTest.upstreamSpeechSegmentationKeepsOriginalOffsetsAndNeverCutsSurrogatePairs",
+        "io.github.unfo17.reader.SystemSpeechUiTest.selectedSystemVoiceIsSavedPreviewedAndReadsPastTheOldThreeThousandCharacterLimit"
+      ]
     },
     {
       "id": "speech.background",

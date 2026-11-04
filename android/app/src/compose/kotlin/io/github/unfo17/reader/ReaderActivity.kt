@@ -28,8 +28,6 @@ import androidx.core.view.doOnAttach
 import kotlinx.coroutines.ensureActive
 import org.readium.r2.shared.publication.services.content.content
 import org.readium.r2.shared.publication.services.content.Content
-import android.speech.tts.TextToSpeech
-import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -53,7 +51,6 @@ import org.readium.r2.shared.publication.Publication
 import java.io.File
 import kotlin.math.roundToInt
 import org.readium.r2.shared.publication.services.positions
-import org.mewx.wenku8_flutter.SpeechLocalePolicy
 
 class ReaderActivity : FragmentActivity() {
     private lateinit var library: Library
@@ -84,8 +81,11 @@ class ReaderActivity : FragmentActivity() {
     private var fontSize by mutableFloatStateOf(100f)
     private var night by mutableStateOf(false)
     private var scroll by mutableStateOf(false)
-    private var speech: TextToSpeech? = null
-    private var speechReady = false
+    private val speechClientSession = lazy { SystemSpeechClient(this) }
+    private val speechAudioSession = lazy { SpeechAudioOutput(this) { speechEpoch++; speechJob?.cancel(); speaking = false } }
+    private var speechJob: kotlinx.coroutines.Job? = null
+    private var speechEpoch = 0L
+    private var speechSettings by mutableStateOf(false)
     private var speaking by mutableStateOf(false)
     private var search by mutableStateOf(false)
     private var searchOrigin by mutableStateOf<Locator?>(null)
@@ -100,17 +100,6 @@ class ReaderActivity : FragmentActivity() {
         if (found == null) { finish(); return }
         book = found
         series = library.series.get(intent.getStringExtra("series").orEmpty())?.takeIf { !it.deleted && it.volumes.any { part -> part.bookId == book.id } }
-        speech = TextToSpeech(this) { status ->
-            speechReady = status == TextToSpeech.SUCCESS
-            if (speechReady) {
-                speech?.language = SpeechLocalePolicy.requestedLocale("zh-CN") ?: Locale.SIMPLIFIED_CHINESE
-                speech?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
-                    override fun onStart(id: String?) { }
-                    override fun onDone(id: String?) { runOnUiThread { speaking = false } }
-                    @Deprecated("Legacy TTS callback") override fun onError(id: String?) { runOnUiThread { speaking = false; notice = "朗读失败，请检查系统语音引擎" } }
-                })
-            }
-        }
         progression = book.progress
         val preferences = getSharedPreferences("reader-${book.id}", MODE_PRIVATE)
         fontSize = preferences.getFloat("fontSize", 100f)
@@ -270,23 +259,38 @@ class ReaderActivity : FragmentActivity() {
     }
     private fun currentBook() = library.records().firstOrNull { it.id == book.id } ?: book
     private fun toggleSpeech() {
-        if (speaking) { speech?.stop(); speaking = false; return }
-        if (!speechReady) { notice = "系统朗读引擎未就绪，请安装中文语音"; return }
-        lifecycleScope.launch {
+        if (speaking) {
+            speechEpoch++; speechJob?.cancel()
+            if (speechAudioSession.isInitialized()) speechAudioSession.value.stop()
+            speaking = false; return
+        }
+        val epoch = ++speechEpoch
+        speaking = true
+        speechJob = lifecycleScope.launch {
             try {
-                val text = withContext(Dispatchers.IO) {
-                    val iterator = publication?.content(navigator?.currentLocator?.value)?.iterator()
-                    buildString {
-                        while (length < 3000) {
-                            ensureActive()
-                            val element = iterator?.nextOrNull() ?: break
-                            if (element is Content.TextualElement) append(element.text.orEmpty()).append("\n")
-                        }
-                    }.take(3000)
+                val iterator = withContext(Dispatchers.IO) { publication?.content(navigator?.currentLocator?.value)?.iterator() }
+                var any = false
+                while (true) {
+                    ensureActive()
+                    val element = withContext(Dispatchers.IO) { iterator?.nextOrNull() } ?: break
+                    if (element !is Content.TextualElement) continue
+                    for (segment in org.mewx.wenku8_flutter.SpeechSegments.split(element.text.orEmpty())) {
+                        ensureActive()
+                        val preferences = SystemSpeechSettings.load(this@ReaderActivity)
+                        val file = speechClientSession.value.synthesize(segment.text, preferences.engine, preferences.voice, preferences.locale)
+                        try { any = true; speechAudioSession.value.play(file, preferences.speed, keepFocus = true) }
+                        finally { file.delete() }
+                    }
                 }
-                if (text.isBlank()) { notice = "当前位置没有可朗读的文字"; return@launch }
-                speaking = speech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "reading") == TextToSpeech.SUCCESS
-            } catch (e: Exception) { notice = e.message ?: "无法朗读" }
+                if (!any) notice = "当前位置没有可朗读的文字"
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { coroutineContext.ensureActive(); notice = e.message ?: "无法朗读，请检查系统语音设置" }
+            finally {
+                if (epoch == speechEpoch) {
+                    if (speechAudioSession.isInitialized()) speechAudioSession.value.stop()
+                    speaking = false
+                }
+            }
         }
     }
     internal suspend fun captureSearchLocator(): Locator? {
@@ -340,6 +344,7 @@ class ReaderActivity : FragmentActivity() {
 
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable private fun ReaderScreen() {
+        val compactControls = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 400 || androidx.compose.ui.platform.LocalDensity.current.fontScale > 1.3f
         BackHandler(enabled = pendingRange != null) { cancelRangeAdjustment() }
         Scaffold(topBar = { TopAppBar(title = { Text(series?.let { "${it.title} · ${it.volumes.firstOrNull { part -> part.bookId == book.id }?.title ?: book.title}" } ?: book.title, maxLines = 1) }, navigationIcon = { IconButton(onClick = { if (pendingRange != null) cancelRangeAdjustment() else finish() }) { Icon(Icons.Outlined.ArrowBack, "返回") } }, actions = {
             IconButton(onClick = { mark() }, enabled = navigator != null && !loading && pendingRange == null) { Icon(Icons.Outlined.BookmarkAdd, "添加书签") }
@@ -354,16 +359,28 @@ class ReaderActivity : FragmentActivity() {
                     }
                 }
             } }
-            BottomAppBar {
-            TextButton(onClick = { toc = true }, enabled = publication != null) { Text("目录") }
-            TextButton(onClick = { marks = true }, enabled = pendingRange == null) { Text("书签") }
+            BottomAppBar(windowInsets = if (compactControls) WindowInsets(0, 0, 0, 0) else BottomAppBarDefaults.windowInsets) {
+            if (compactControls) {
+                IconButton(onClick = { toc = true }, enabled = publication != null) { Icon(Icons.Outlined.FormatListBulleted, "目录") }
+                IconButton(onClick = { marks = true }, enabled = pendingRange == null) { Icon(Icons.Outlined.Bookmarks, "书签") }
+            } else {
+                TextButton(onClick = { toc = true }, enabled = publication != null) { Text("目录") }
+                TextButton(onClick = { marks = true }, enabled = pendingRange == null) { Text("书签") }
+            }
             IconButton(onClick = { openSearch() }, enabled = !loading && failure == null) { Icon(Icons.Outlined.Search, "全文搜索") }
             IconButton(onClick = { toggleSpeech() }, enabled = !loading && failure == null) { Icon(if (speaking) Icons.Outlined.Stop else Icons.Outlined.VolumeUp, if (speaking) "停止朗读" else "朗读") }
             Spacer(Modifier.weight(1f))
             Text("${(progression * 100).toInt()}%", Modifier.padding(12.dp))
-            IconButton(onClick = { navigator?.goBackward() }, enabled = navigator != null) { Icon(Icons.Outlined.ChevronLeft, "上一页") }
-            IconButton(onClick = { navigator?.goForward() }, enabled = navigator != null) { Icon(Icons.Outlined.ChevronRight, "下一页") }
-        } } }) { padding ->
+            if (!compactControls) IconButton(onClick = { navigator?.goBackward() }, enabled = navigator != null) { Icon(Icons.Outlined.ChevronLeft, "上一页") }
+            if (!compactControls) IconButton(onClick = { navigator?.goForward() }, enabled = navigator != null) { Icon(Icons.Outlined.ChevronRight, "下一页") }
+        }
+        if (compactControls) Surface(tonalElevation = 3.dp) {
+            Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                TextButton(onClick = { navigator?.goBackward() }, enabled = navigator != null) { Text("上一页") }
+                TextButton(onClick = { navigator?.goForward() }, enabled = navigator != null) { Text("下一页") }
+            }
+        }
+        } }) { padding ->
             Box(Modifier.padding(padding).fillMaxSize()) {
                 when {
                     loading -> CircularProgressIndicator(Modifier.padding(24.dp))
@@ -423,7 +440,7 @@ class ReaderActivity : FragmentActivity() {
             catch (e: Exception) { notice = e.message ?: "书签定位失败" }
         } })
         if (search) ReaderSearch(library, currentBook(), series, searchOrigin, { search = false }, { hit -> openVolume(hit.bookId, hit.locator); search = false })
-        if (toc) ModalBottomSheet(onDismissRequest = { toc = false }) {
+        if (toc) ModalBottomSheet(onDismissRequest = { toc = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
             Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
                 Text("目录", style = MaterialTheme.typography.titleLarge)
                 @Composable fun entries(links: List<Link>, depth: Int = 0) {
@@ -466,9 +483,11 @@ class ReaderActivity : FragmentActivity() {
             fonts = false
             recreate()
         })
-        if (settings) ModalBottomSheet(onDismissRequest = { settings = false }) {
+        if (speechSettings) SystemSpeechSettingsPanel { speechSettings = false }
+        if (settings) ModalBottomSheet(onDismissRequest = { settings = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
             Column(Modifier.padding(24.dp).heightIn(max = 600.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("阅读设置", style = MaterialTheme.typography.titleLarge)
+                OutlinedButton(onClick = { settings = false; speechSettings = true }) { Text("系统语音与音色") }
                 OutlinedButton(onClick = { settings = false; fonts = true }) { Text("字体管理与下载") }
                 Text("字号 ${(fontSize).toInt()}%")
                 Slider(fontSize, { fontSize = it; applySettings() }, valueRange = 50f..300f)
@@ -518,8 +537,13 @@ class ReaderActivity : FragmentActivity() {
         if (::book.isInitialized && !loading && failure == null) {
             library.updateReading(book.id) { current -> current.copy(progress = progression, lastRead = System.currentTimeMillis(), minutes = current.minutes + ((System.currentTimeMillis() - started) / 1000).coerceAtLeast(0)) }
         }
-        speech?.stop(); speaking = false
+        speechEpoch++; speechJob?.cancel(); if (speechAudioSession.isInitialized()) speechAudioSession.value.stop(); speaking = false
         super.onStop()
     }
-    override fun onDestroy() { super.onDestroy(); speech?.shutdown(); publication?.close() }
+    override fun onDestroy() {
+        super.onDestroy()
+        if (speechAudioSession.isInitialized()) speechAudioSession.value.close()
+        if (speechClientSession.isInitialized()) speechClientSession.value.close()
+        publication?.close()
+    }
 }

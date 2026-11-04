@@ -23,12 +23,13 @@ class LibraryUiTest {
         yield(node)
         for (index in 0 until node.childCount) node.getChild(index)?.let { yieldAll(descendants(it)) }
     }
-    private fun waitNode(scroll: Boolean = false, predicate: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo {
+    private fun waitNode(scroll: Boolean = true, predicate: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo {
         val deadline = SystemClock.uptimeMillis() + 10000
+        var direction = AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
         while (SystemClock.uptimeMillis() < deadline) {
             automation.rootInActiveWindow?.let { root ->
                 descendants(root).firstOrNull(predicate)?.let { return it }
-                if (scroll) descendants(root).firstOrNull { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+                if (scroll) descendants(root).firstOrNull { it.isScrollable }?.let { if (!it.performAction(direction)) direction = if (direction == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD else AccessibilityNodeInfo.ACTION_SCROLL_FORWARD }
             }
             SystemClock.sleep(100)
         }

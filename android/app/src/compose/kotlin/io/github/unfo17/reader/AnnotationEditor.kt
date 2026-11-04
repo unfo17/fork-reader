@@ -17,6 +17,8 @@ import androidx.compose.ui.unit.dp
     var error by remember { mutableStateOf<String?>(null) }
     var quoteImage by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val focus = androidx.compose.ui.platform.LocalFocusManager.current
     fun draft(): ReadingMark {
         val now = maxOf(System.currentTimeMillis(), mark.revision + 1)
         return mark.copy(style = style, color = color, category = category.trim(), note = note,
@@ -25,10 +27,11 @@ import androidx.compose.ui.unit.dp
     }
     fun changed() { try { onDraftChange?.invoke(draft()); error = null } catch (e: Exception) { error = e.message } }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("批注与摘录") }, text = {
-        Column(Modifier.heightIn(max = 550.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.heightIn(max = 550.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(mark.quote.ifBlank { "位置书签" }, style = MaterialTheme.typography.bodyLarge)
             if (onAdjustRange != null && book?.removed != true) TextButton(onClick = {
-                try { onAdjustRange(draft()) } catch (e: Exception) { error = e.message }
+                try { val edited = draft(); keyboard?.hide(); focus.clearFocus(); onAdjustRange(edited) } catch (e: Exception) { error = e.message }
             }) { Text("调整原文范围") }
             ChoiceMenu("样式", style, MarkStyle.entries.map { it to it.label }) { style = it; changed() }
             ChoiceMenu("颜色", color, MarkColor.entries.map { it to it.label }) { color = it; changed() }
@@ -45,11 +48,12 @@ import androidx.compose.ui.unit.dp
                 TextButton(onClick = { context.startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain").putExtra(android.content.Intent.EXTRA_TEXT, mark.quote + if (note.isBlank()) "" else "\n\n$note"), "分享摘录")) }) { Text("分享") }
                 if (onDelete != null) TextButton(onClick = { try { onDelete() } catch (e: Exception) { error = e.message } }) { Text("删除") }
             }
+            }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }
     }, confirmButton = { TextButton(onClick = {
         try {
-            onSave(draft())
+            val edited = draft(); keyboard?.hide(); focus.clearFocus(); onSave(edited)
         } catch (e: Exception) { error = e.message ?: "批注保存失败" }
     }) { Text("保存批注") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
     if (quoteImage && book != null) QuotePreview(book, mark, { quoteImage = false })
@@ -63,7 +67,7 @@ import androidx.compose.ui.unit.dp
     var editing by remember { mutableStateOf<Pair<Book, ReadingMark>?>(null) }
     val legacy = remember(revision) { library.records().filter { bookIds == null || it.id in bookIds }.flatMap { book -> book.bookmarks.map { book to it } } }
     val marks = remember(revision) { library.records().filter { bookIds == null || it.id in bookIds }.flatMap { book -> book.annotations.filterNot { it.deleted }.map { book to it } }.sortedByDescending { it.second.createdAt } }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxWidth().heightIn(max = 650.dp), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             item { Text("书签、批注和摘录", style = MaterialTheme.typography.titleLarge) }
             item { OutlinedTextField(query, { query = it }, label = { Text("搜索摘录、笔记或书名") }, modifier = Modifier.fillMaxWidth()) }

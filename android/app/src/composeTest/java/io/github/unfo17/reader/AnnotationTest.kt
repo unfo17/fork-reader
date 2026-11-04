@@ -25,17 +25,21 @@ import java.io.File
 class AnnotationTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private fun nodes(node: AccessibilityNodeInfo): Sequence<AccessibilityNodeInfo> = sequence { yield(node); for (i in 0 until node.childCount) node.getChild(i)?.let { yieldAll(nodes(it)) } }
-    private fun waitNodes(predicate: (AccessibilityNodeInfo) -> Boolean): List<AccessibilityNodeInfo> {
+    private fun waitNodes(scroll: Boolean = false, predicate: (AccessibilityNodeInfo) -> Boolean): List<AccessibilityNodeInfo> {
         val end = SystemClock.uptimeMillis() + 12000
+        var direction = AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
         while (SystemClock.uptimeMillis() < end) {
-            instrumentation.uiAutomation.rootInActiveWindow?.let { root -> nodes(root).filter(predicate).toList().takeIf { it.isNotEmpty() }?.let { return it } }
+            instrumentation.uiAutomation.rootInActiveWindow?.let { root ->
+                nodes(root).filter(predicate).toList().takeIf { it.isNotEmpty() }?.let { return it }
+                if (scroll) nodes(root).firstOrNull { it.isScrollable }?.let { if (!it.performAction(direction)) direction = if (direction == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD else AccessibilityNodeInfo.ACTION_SCROLL_FORWARD }
+            }
             SystemClock.sleep(100)
         }
         val visible = instrumentation.uiAutomation.rootInActiveWindow?.let { root -> nodes(root).mapNotNull { it.text?.toString() }.toList() }
         error("没有找到批注编辑控件：$visible")
     }
     private fun click(text: String) {
-        var node: AccessibilityNodeInfo? = waitNodes { it.text?.toString() == text }.first()
+        var node: AccessibilityNodeInfo? = waitNodes(scroll = true) { it.text?.toString() == text || it.contentDescription?.toString() == text }.first()
         while (node != null && !node.isClickable) node = node.parent
         assertTrue(node?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true)
         instrumentation.waitForIdleSync()
