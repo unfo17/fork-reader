@@ -94,6 +94,8 @@ data class Book(
 /** A single process-wide store prevents reader and library edits from overwriting one another. */
 class Library private constructor(private val context: Context) {
     private val prefs = context.getSharedPreferences("library", Context.MODE_PRIVATE)
+    val organization = LibraryOrganization({ prefs.getString("organization", null) }, { prefs.edit().putString("organization", it).commit() })
+    init { organization.migrateLegacy(JSONArray(prefs.getString("books", "[]")).let { a -> List(a.length()) { Book.from(a.getJSONObject(it)) } }) }
     val engine = ReadiumEngine(context)
     private val links = BookTextLinks(context)
     private val importSession = BookDocumentImportSession<Uri>(File(context.noBackupFilesDir, "book-import-staging")) { uri, target, limit ->
@@ -167,10 +169,18 @@ class Library private constructor(private val context: Context) {
             target
         } finally { textMutex.unlock() }
     }
-    @Synchronized fun records(): List<Book> = JSONArray(prefs.getString("books", "[]")).let { a -> List(a.length()) { Book.from(a.getJSONObject(it)) } }
+    @Synchronized fun records(): List<Book> {
+        val assignments = organization.resolvedGroups(); val groups = organization.groups()
+        return JSONArray(prefs.getString("books", "[]")).let { a -> List(a.length()) { Book.from(a.getJSONObject(it)).let { book -> book.copy(category = groups[assignments[book.id]] ?: "未分类") } } }
+    }
     fun books(): List<Book> = records().filterNot { it.removed }
     @Synchronized fun update(book: Book) { save(records().filterNot { it.id == book.id } + book) }
-    @Synchronized fun replaceRecords(books: List<Book>) { save(books) }
+    @Synchronized fun replaceRecords(books: List<Book>, organizationState: String? = null) {
+        val edit = prefs.edit().putString("books", JSONArray(books.map { it.json() }).toString())
+        if (organizationState != null) edit.putString("organization", organization.merged(organizationState))
+        check(edit.commit()) { "书库保存失败" }
+        if (organizationState != null) organization.invalidateAssignments()
+    }
     private fun save(books: List<Book>) { check(prefs.edit().putString("books", JSONArray(books.map { it.json() }).toString()).commit()) }
     @Synchronized fun remove(book: Book) {
         // Match upstream local_book_removal.dart: delete local content, retain history and bookmarks.

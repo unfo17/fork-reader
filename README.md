@@ -11,7 +11,10 @@
 - TXT 复用原项目的编码检测、流式规范化和 EPUB 打包器，支持 UTF-8、UTF-16、GB18030、Big5；原书保留，章节规则按上游行为迁移，交由 Readium 阅读。
 - MOBI/AZW/AZW3/PRC 使用原项目 libmobi；FB2、PDF、DOC/DOCX、RTF、HTML、Markdown 转为 Readium 可读 EPUB，保留常见样式、图片与目录。
 - ZIP 先预览再选择，支持中文文件名及同包相对图片；关联或复制整包，兄弟书籍共享来源，备份可离线恢复。
-- 书名／作者搜索、分类过滤、按书名／最近阅读排序、编辑元数据、批量分类和删除。
+- 分类创建、改名、删除和批量移动；稳定 ID、删除记录和延迟编辑保护随备份保留。
+- 多词搜索、#标签、全角归一化、字段选择；分类／作者／阅读状态／来源组合筛选；最近添加、最近阅读和书名排序。
+- 列表、宫格、立体书架加列表／宫格四种布局及封面大小设置；布局、筛选和排序按设备保存。
+- 编辑元数据、封面、标签和阅读状态；批量管理。
 - 阅读进度恢复、目录跳转、书签增删与跳转、全文搜索（最多 100 条）、字号、夜间与滚动设置。
 - 系统 TTS 朗读当前位置最多 3000 字；需已安装对应语言的系统语音引擎。
 - 最近阅读、累计阅读时间；导出 ZIP 书库备份及合并恢复（原书、封面、分类、进度、书签）。
@@ -30,7 +33,7 @@ cd android
 ./gradlew connectedDebugAndroidTest
 ```
 
-测试需要 Android 26+ 模拟器或设备。APK 位于 `android/app/build/outputs/apk/debug/app-debug.apk`。GitHub Actions 构建 APK、执行静态检查并在 API 35 模拟器执行21 项导入、渲染、关联、ZIP、字体及备份测试。
+测试需要 Android 26+ 模拟器或设备。APK 位于 `android/app/build/outputs/apk/debug/app-debug.apk`。GitHub Actions 构建 APK、执行静态检查并在 API 35 模拟器执行导入、渲染、关联、ZIP、字体、分类、筛选、备份及实际 Compose 页面操作测试。
 
 ## 项目来源
 

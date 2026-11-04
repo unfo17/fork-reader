@@ -3,6 +3,13 @@ package io.github.unfo17.reader
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import kotlinx.coroutines.Dispatchers
@@ -22,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -36,7 +44,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable fun LibraryApp() {
     val context = LocalContext.current
     val library = remember { Library.get(context) }
@@ -45,10 +53,28 @@ class MainActivity : ComponentActivity() {
     var appearance by remember { mutableStateOf(false) }
     var licenses by remember { mutableStateOf(false) }
     var history by remember { mutableStateOf(false) }
-    var tab by remember { mutableIntStateOf(0) }
-    var query by remember { mutableStateOf("") }
-    var category by remember { mutableStateOf("全部") }
-    var sort by remember { mutableStateOf(false) }
+    var tab by rememberSaveable { mutableIntStateOf(0) }
+    var query by rememberSaveable { mutableStateOf("") }
+    val shelfPrefs = remember { context.getSharedPreferences("library-display", android.content.Context.MODE_PRIVATE) }
+    fun <T : Enum<T>> enumValue(name: String?, values: List<T>, fallback: T) = values.firstOrNull { it.name == name } ?: fallback
+    var filter by remember { mutableStateOf(LibraryFilter(
+        category = shelfPrefs.getString("category", LibraryOrganization.ALL)!!,
+        field = enumValue(shelfPrefs.getString("field", null), BookSearchField.entries, BookSearchField.ALL),
+        reading = shelfPrefs.getString("reading", "all")!!, source = shelfPrefs.getString("source", "all")!!,
+        author = shelfPrefs.getString("author", null), sort = enumValue(shelfPrefs.getString("sort", null), LibrarySort.entries, LibrarySort.RECENT_ADDED))) }
+    var view by remember { mutableStateOf(enumValue(shelfPrefs.getString("view", null), LibraryView.entries, LibraryView.SHELF)) }
+    var density by remember { mutableStateOf(shelfPrefs.getString("density", "auto")!!) }
+    var displaySettings by remember { mutableStateOf(false) }
+    var categories by remember { mutableStateOf(false) }
+    var organizationRevision by remember { mutableIntStateOf(0) }
+    val groups = remember(organizationRevision) { library.organization.groups() }
+    val category = filter.category.takeIf { it == LibraryOrganization.ALL || it == LibraryOrganization.UNFILED || it in groups } ?: LibraryOrganization.ALL
+    val filtered = filter.copy(query = query, category = category).apply(books, library.organization)
+    LaunchedEffect(filter, view, density) { shelfPrefs.edit().putString("category", filter.category).putString("field", filter.field.name).putString("reading", filter.reading).putString("source", filter.source).putString("author", filter.author).putString("sort", filter.sort.name).putString("view", view.name).putString("density", density).apply() }
+    val availableWidth = LocalConfiguration.current.screenWidthDp - 40
+    val textScale = LocalDensity.current.fontScale.coerceAtLeast(1f)
+    val tileWidth = (when (density) { "small" -> 104; "large" -> 184; else -> 142 } * textScale).toInt()
+    val columns = (availableWidth / (tileWidth + 16)).coerceIn(1, 8)
     var busy by remember { mutableStateOf(false) }
     var selectionMode by remember { mutableStateOf(false) }
     var selectedBooks by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -132,7 +158,7 @@ class MainActivity : ComponentActivity() {
     } }
     val restorePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) scope.launch {
         busy = true
-        try { val count = restoreLibrary(context, uri); books = library.books(); snackbar.showSnackbar("已恢复 $count 本书及阅读记录") }
+        try { val count = restoreLibrary(context, uri); organizationRevision++; books = library.books(); snackbar.showSnackbar("已恢复 $count 本书及阅读记录") }
         catch (e: Exception) { snackbar.showSnackbar(e.message ?: "恢复失败") }
         finally { busy = false }
     } }
@@ -158,24 +184,34 @@ class MainActivity : ComponentActivity() {
                     items(recent.take(5), key = { it.id }) { book -> BookCard(book, { open(book) }, { editing = book }) }
                 }
                 1 -> {
-                    item { OutlinedTextField(value = query, onValueChange = { query = it }, label = { Text("搜索书名、作者") }, leadingIcon = { Icon(Icons.Outlined.Search, null) }, modifier = Modifier.fillMaxWidth(), singleLine = true) }
-                    item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        var expanded by remember { mutableStateOf(false) }
-                        Box {
-                            OutlinedButton(onClick = { expanded = true }) { Text(category) }
-                            DropdownMenu(expanded, { expanded = false }) { (listOf("全部", "未分类") + books.map { it.category }).distinct().forEach { c -> DropdownMenuItem(text = { Text(c) }, onClick = { category = c; expanded = false }) } }
-                        }
-                        FilterChip(selected = sort, onClick = { sort = !sort }, label = { Text(if (sort) "按书名" else "最近阅读") })
+                    item { OutlinedTextField(value = query, onValueChange = { query = it }, label = { Text("搜索书名、作者、标签（#标签）") }, leadingIcon = { Icon(Icons.Outlined.Search, null) }, modifier = Modifier.fillMaxWidth(), singleLine = true) }
+                    item { FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ChoiceMenu("分类", category, listOf(LibraryOrganization.ALL to "全部书籍", LibraryOrganization.UNFILED to "未分类") + groups.entries.map { it.key to it.value }) { filter = filter.copy(category = it) }
+                        OutlinedButton(onClick = { categories = true }) { Text("管理分类") }
+                        OutlinedButton(onClick = { displaySettings = true }) { Text("书架与筛选") }
                     } }
+                    item { Text("共 ${filtered.size} 本 · ${filter.sort.label}", style = MaterialTheme.typography.labelLarge) }
                     if (selectionMode) item { Row {
-                        TextButton(onClick = { selectedBooks = books.map { it.id }.toSet() }) { Text("全选") }
+                        TextButton(onClick = { selectedBooks = filtered.map { it.id }.toSet() }) { Text("全选") }
                         TextButton(enabled = selectedBooks.isNotEmpty(), onClick = { batchAction = "分类" }) { Text("移动分类 (${selectedBooks.size})") }
                         TextButton(enabled = selectedBooks.isNotEmpty(), onClick = { batchAction = "删除" }) { Text("删除") }
                     } }
-                    val filtered = books.filter { (category == "全部" || it.category == category) && (it.title.contains(query, true) || it.author.contains(query, true)) }
-                        .let { if (sort) it.sortedBy { b -> b.title } else it.sortedByDescending { b -> b.lastRead } }
-                    if (filtered.isEmpty()) item { Text(if (books.isEmpty()) "书架还是空的\n点击“导入书籍”添加 EPUB 或 TXT。" else "没有符合条件的书籍") }
-                    items(filtered, key = { it.id }) { book -> BookCard(book, { if (selectionMode) selectedBooks = if (book.id in selectedBooks) selectedBooks - book.id else selectedBooks + book.id else open(book) }, { editing = book }, if (selectionMode) book.id in selectedBooks else null) }
+                    if (filtered.isEmpty()) item { Text(if (books.isEmpty()) "书架还是空的\n点击“导入书籍”添加电子书。" else "没有符合条件的书籍") }
+                    if (view.shelf && filtered.isNotEmpty()) item {
+                        Text("立体书架", style = MaterialTheme.typography.titleMedium)
+                        LazyRow(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+                            items(filtered.take(10), key = { it.id }) { book ->
+                                BookTile(book, { if (selectionMode) selectedBooks = if (book.id in selectedBooks) selectedBooks - book.id else selectedBooks + book.id else open(book) }, { editing = book }, if (selectionMode) book.id in selectedBooks else null, Modifier.width(tileWidth.dp), dimensional = true)
+                            }
+                        }
+                    }
+                    if (view.grid) items(filtered.chunked(columns), key = { it.first().id }) { row ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                            row.forEach { book -> BookTile(book, { if (selectionMode) selectedBooks = if (book.id in selectedBooks) selectedBooks - book.id else selectedBooks + book.id else open(book) }, { editing = book }, if (selectionMode) book.id in selectedBooks else null, Modifier.weight(1f)) }
+                            repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
+                        }
+                    } else items(filtered, key = { it.id }) { book -> BookCard(book, { if (selectionMode) selectedBooks = if (book.id in selectedBooks) selectedBooks - book.id else selectedBooks + book.id else open(book) }, { editing = book }, if (selectionMode) book.id in selectedBooks else null) }
+
                 }
                 2 -> {
                     item { Text("我的书房", style = MaterialTheme.typography.headlineMedium) }
@@ -220,11 +256,20 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    batchAction?.let { action ->
-        var group by remember { mutableStateOf("") }
+    if (categories) CategoryManager(library.organization, { categories = false }, { organizationRevision++; books = library.books() })
+    if (displaySettings) LibraryDisplaySettings(filter, view, density, books.map { BookQuery.author(it.author) }.distinct().sorted(), { filter = it }, { view = it }, { density = it }, { displaySettings = false })
+    if (batchAction == "分类") {
+        val expected = remember(selectedBooks) { selectedBooks.associateWith { library.organization.revisionOf(it) } }
+        CategoryManager(library.organization, { batchAction = null }, { organizationRevision++; books = library.books() }, onChoose = { group ->
+            scope.launch {
+                try { val changed = library.organization.assign(selectedBooks, group, expected); organizationRevision++; books = library.books(); selectedBooks = selectedBooks - changed; batchAction = null; snackbar.showSnackbar("已移动 ${changed.size} 本书，已更新的分类保持不变") }
+                catch (e: Exception) { snackbar.showSnackbar(e.message ?: "移动失败，已保留选择") }
+            }
+        })
+    }
+    batchAction?.takeIf { it == "删除" }?.let { action ->
         AlertDialog(onDismissRequest = { batchAction = null }, title = { Text("$action ${selectedBooks.size} 本书") }, text = {
-            if (action == "删除") Text("仅删除应用内文件并移出书架。外部原文件、阅读进度和书签保留。")
-            else OutlinedTextField(group, { group = it }, label = { Text("目标分类") })
+            Text("仅删除应用内文件并移出书架。外部原文件、阅读进度和书签保留。")
         }, confirmButton = { TextButton(onClick = {
             val targets = books.filter { it.id in selectedBooks }
             batchAction = null
@@ -233,7 +278,7 @@ class MainActivity : ComponentActivity() {
                 val failed = mutableSetOf<String>()
                 val errors = mutableListOf<String>()
                 withContext(Dispatchers.IO) { targets.forEach { target ->
-                    try { if (action == "删除") library.remove(target) else library.update(target.copy(category = group.trim().ifBlank { "未分类" })) }
+                    try { library.remove(target) }
                     catch (e: Exception) { failed += target.id; errors += e.message ?: "操作失败" }
                 } }
                 books = library.books(); selectedBooks = failed; busy = false
@@ -257,7 +302,9 @@ class MainActivity : ComponentActivity() {
     editing?.let { book ->
         var title by remember(book.id) { mutableStateOf(book.title) }
         var author by remember(book.id) { mutableStateOf(book.author) }
-        var group by remember(book.id) { mutableStateOf(book.category) }
+        var group by remember(book.id) { mutableStateOf(library.organization.groupOf(book.id)) }
+        val categoryRevision = remember(book.id) { library.organization.revisionOf(book.id) }
+        var editError by remember(book.id) { mutableStateOf<String?>(null) }
         var summary by remember(book.id) { mutableStateOf(book.summary) }
         var tags by remember(book.id) { mutableStateOf(book.tags.joinToString("，")) }
         var status by remember(book.id) { mutableStateOf(book.status) }
@@ -269,7 +316,8 @@ class MainActivity : ComponentActivity() {
         else AlertDialog(onDismissRequest = { editing = null }, title = { Text("编辑书籍") }, text = { Column(Modifier.heightIn(max = 500.dp).verticalScroll(androidx.compose.foundation.rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(title, { title = it }, label = { Text("书名") })
             OutlinedTextField(author, { author = it }, label = { Text("作者") })
-            OutlinedTextField(group, { group = it }, label = { Text("分类") })
+            ChoiceMenu("分类", group, listOf(LibraryOrganization.UNFILED to "未分类") + groups.entries.map { it.key to it.value }) { group = it }
+            editError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             OutlinedTextField(summary, { summary = it }, label = { Text("简介") })
             OutlinedTextField(tags, { tags = it }, label = { Text("标签（逗号分隔）") })
             var statusesExpanded by remember { mutableStateOf(false) }
@@ -290,7 +338,11 @@ class MainActivity : ComponentActivity() {
             Text(if (book.sourceReference != null) "已关联原文件" else "应用内副本", style = MaterialTheme.typography.labelMedium)
             TextButton(onClick = { relinking = book; editing = null; relinker.launch(arrayOf("*/*")) }) { Text("重新关联原文件") }
             TextButton(onClick = { deleting = true }) { Text("删除书籍", color = MaterialTheme.colorScheme.error) }
-        } }, confirmButton = { TextButton(enabled = title.isNotBlank(), onClick = { library.update(book.copy(title = title.trim(), author = author.trim(), category = group.trim().ifBlank { "未分类" }, summary = summary.trim(), tags = tags.split(',', '，').map { it.trim() }.filter { it.isNotEmpty() }.distinct(), status = status)); books = library.books(); editing = null }) { Text("保存") } }, dismissButton = { TextButton(onClick = { editing = null }) { Text("取消") } })
+        } }, confirmButton = { TextButton(enabled = title.isNotBlank(), onClick = { try {
+            library.organization.assign(setOf(book.id), group, mapOf(book.id to categoryRevision))
+            val current = library.records().firstOrNull { it.id == book.id } ?: book
+            library.update(current.copy(title = title.trim(), author = author.trim(), summary = summary.trim(), tags = tags.split(',', '，').map { it.trim() }.filter { it.isNotEmpty() }.distinct(), status = status)); books = library.books(); editing = null
+        } catch (e: Exception) { editError = e.message ?: "保存失败" } }) { Text("保存") } }, dismissButton = { TextButton(onClick = { editing = null }) { Text("取消") } })
     }
 }
 
@@ -311,5 +363,24 @@ class MainActivity : ComponentActivity() {
             }
             IconButton(onClick = edit) { Icon(Icons.Outlined.MoreVert, "编辑书籍") }
         }
+    }
+}
+
+@Composable private fun BookTile(book: Book, open: () -> Unit, edit: () -> Unit, selected: Boolean?, modifier: Modifier, dimensional: Boolean = false) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        val cover by produceState<android.graphics.Bitmap?>(null, book.file, book.coverRevision) { value = loadCover(book) }
+        Surface(onClick = open, shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.secondaryContainer, shadowElevation = if (dimensional) 12.dp else 2.dp,
+            modifier = Modifier.fillMaxWidth().aspectRatio(30f / 41f).graphicsLayer { if (dimensional) { rotationY = -16f; cameraDistance = 16 * density } }) {
+            if (cover != null) Image(cover!!.asImageBitmap(), "${book.title}封面", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            else Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.Center) { Icon(Icons.Outlined.MenuBook, null); Text(book.title, style = MaterialTheme.typography.titleSmall, maxLines = 5, overflow = TextOverflow.Ellipsis) }
+        }
+        Row {
+            if (selected != null) Checkbox(selected, { open() }, Modifier.size(32.dp))
+            Text(book.title, Modifier.weight(1f).clickable(onClick = open), style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            IconButton(onClick = edit, modifier = Modifier.size(32.dp)) { Icon(Icons.Outlined.MoreVert, "编辑 ${book.title}") }
+        }
+        Text(book.author.ifBlank { "未知作者" }, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        LinearProgressIndicator(progress = { book.progress.toFloat().coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+        Text("${(book.progress * 100).toInt()}% · ${readingStateLabel(effectiveReadingState(book))}", style = MaterialTheme.typography.labelSmall)
     }
 }

@@ -163,7 +163,13 @@
         "lib/book_categories.dart"
       ],
       "status": "partial",
-      "tests": []
+      "tests": [
+        "io.github.unfo17.reader.OrganizationTest.categoryIdentityDeletionAndDelayedEditsMatchUpstream",
+        "io.github.unfo17.reader.OrganizationTest.failedBatchAssignmentLeavesAllBooksAndRevisionsUnchanged",
+        "io.github.unfo17.reader.OrganizationTest.legacyLabelMigrationIsIdempotentAndPreservesNewerAssignments",
+        "io.github.unfo17.reader.OrganizationTest.categoryBackupRestoresEmptyGroupsAndNeverResurrectsDeletedOnes",
+        "io.github.unfo17.reader.LibraryUiTest.composeCategoryManagerAndGridPreferencesSurviveActivityRecreation"
+      ]
     },
     {
       "id": "library.filter",
@@ -172,7 +178,10 @@
         "lib/local_library_preferences.dart"
       ],
       "status": "partial",
-      "tests": []
+      "tests": [
+        "io.github.unfo17.reader.OrganizationTest.metadataSearchNormalizesWidthAndRequiresEveryTerm",
+        "io.github.unfo17.reader.OrganizationTest.libraryFiltersCombineCategoryAuthorStateSourceAndStableSort"
+      ]
     },
     {
       "id": "library.views",
@@ -180,8 +189,10 @@
       "upstream": [
         "lib/local_library_preferences.dart"
       ],
-      "status": "pending",
-      "tests": []
+      "status": "partial",
+      "tests": [
+        "io.github.unfo17.reader.LibraryUiTest.composeCategoryManagerAndGridPreferencesSurviveActivityRecreation"
+      ]
     },
     {
       "id": "library.series",

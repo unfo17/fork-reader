@@ -32,6 +32,7 @@ suspend fun exportLibrary(context: Context, uri: Uri) = withContext(Dispatchers.
         val manifest = records.map { book -> book.copy(file = "${book.id}.${File(book.file).extension}", sourceReference = null, sourceSize = 0, sourceModified = 0,
             bundleFile = if (book.archiveEntry != null && !book.removed) "archive-${book.bundleDigest}.zip" else null).json() }
         zip.write(JSONArray(manifest).toString().toByteArray()); zip.closeEntry()
+        zip.putNextEntry(ZipEntry("organization.json")); zip.write(library.organization.snapshot().toByteArray()); zip.closeEntry()
         val archives = mutableSetOf<String>()
         records.filterNot { it.removed }.forEach { book ->
             ensureActive()
@@ -76,7 +77,7 @@ suspend fun restoreLibrary(context: Context, uri: Uri): Int = withContext(Dispat
                     while (true) {
                         val n = zip.read(buffer); if (n < 0) break
                         total += n; require(total <= 1024L * 1024 * 1024) { "备份超过 1GB，请分批导入原书" }
-                        if (name == "library.json") require(out.channel.position() + n <= 10 * 1024 * 1024) { "备份索引过大" }
+                        if (name == "library.json" || name == "organization.json") require(out.channel.position() + n <= 10 * 1024 * 1024) { "备份索引过大" }
                         out.write(buffer, 0, n)
                     }
                 }
@@ -87,6 +88,7 @@ suspend fun restoreLibrary(context: Context, uri: Uri): Int = withContext(Dispat
         val incoming = List(manifest.length()) { Book.from(manifest.getJSONObject(it)) }
         require(incoming.map { it.id }.distinct().size == incoming.size) { "备份包含重复的书籍编号" }
         val library = Library.get(context)
+        val organizationState = File(stage, "organization.json").takeIf { it.exists() }?.let { library.organization.merged(it.readText()) } ?: library.organization.mergedLegacy(incoming)
         val checkedArchives = mutableSetOf<String>()
         incoming.forEach { book ->
             require(book.id.matches(Regex("[a-f0-9]{64}")) && book.file == File(book.file).name && BookArchiveImport.supported(book.file)) { "备份中的书籍信息不正确" }
@@ -134,7 +136,7 @@ suspend fun restoreLibrary(context: Context, uri: Uri): Int = withContext(Dispat
                 archiveEntry = content.archiveEntry, archiveEntrySize = content.archiveEntrySize, archiveCharset = content.archiveCharset, sourceDigest = content.sourceDigest,
                 bookmarks = (existing?.bookmarks.orEmpty() + book.bookmarks).distinct())
         }
-        library.replaceRecords(merged.values.toList())
+        library.replaceRecords(merged.values.toList(), organizationState)
         committed = true
         incoming.size
     } finally {

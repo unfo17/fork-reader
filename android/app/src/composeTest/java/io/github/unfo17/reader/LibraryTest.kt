@@ -43,7 +43,9 @@ class LibraryTest {
         assertTrue(library.books().first { it.id == first.id }.lastRead > 0)
         val backup = File(context.cacheDir, "library-backup.zip")
         val current = library.books().first { it.id == first.id }
-        library.update(current.copy(bookmarks = listOf("test-mark"), category = "测试分类"))
+        library.update(current.copy(bookmarks = listOf("test-mark")))
+        val group = library.organization.groups().entries.firstOrNull { it.value == "测试分类" }?.key ?: library.organization.create("测试分类")
+        library.organization.assign(setOf(current.id), group)
         exportLibrary(context, Uri.fromFile(backup))
         library.remove(library.books().first { it.id == first.id })
         assertFalse(File(first.file).exists())
