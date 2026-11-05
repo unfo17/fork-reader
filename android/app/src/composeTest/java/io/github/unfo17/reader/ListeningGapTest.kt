@@ -43,6 +43,19 @@ class ListeningGapTest {
                 assertTrue("同一段落的分句不应各停顿 1.2 秒", parts.last().second - parts.first().second < 2000)
                 val end = requests.single { it.first.startsWith("GAP_END_") }
                 assertTrue("新段落未保留配置的停顿", end.second - parts.last().second >= 1200)
+                requests.clear()
+                settings.copy(paragraphGapMillis = 3000).save(context)
+                ListeningSession.start(context, book.id, null, null)
+                withTimeout(10000) { while (requests.isEmpty()) delay(25) }
+                withTimeout(2500) { while (!ListeningSession.state.value.let { state -> state.phase == ListeningPhase.PREPARING && state.durationMillis > 0 && state.positionMillis >= state.durationMillis }) delay(25) }
+                val disabled = SystemClock.elapsedRealtime()
+                settings.copy(paragraphGapMillis = 0).save(context)
+                withTimeout(2000) { while (requests.none { it.first.all { char -> char == 'A' } }) delay(25) }
+                val resumed = requests.first { it.first.all { char -> char == 'A' } }.second
+                assertTrue("关闭段落间隔后仍等待旧定时", resumed - disabled < 1500)
+                ListeningSession.command(context, ListeningSession.STOP)
+                withTimeout(5000) { while (ListeningSession.state.value.active) delay(25) }
+                withTimeout(5000) { while (File(context.cacheDir, "system-speech").listFiles().orEmpty().isNotEmpty()) delay(25) }
             }
         } finally {
             if (ListeningSession.state.value.active) ListeningSession.command(context, ListeningSession.STOP)

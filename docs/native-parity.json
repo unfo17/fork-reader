@@ -458,7 +458,7 @@
         "lib/listening/controller.dart",
         "lib/listening/widgets.dart"
       ],
-      "status": "partial",
+      "status": "verified",
       "tests": [
         "io.github.unfo17.reader.ListeningGapTest.paragraphGapPersistsAndDoesNotRepeatForEverySentenceOfOneParagraph",
         "io.github.unfo17.reader.SystemSpeechUiTest.selectedSystemVoiceIsSavedPreviewedAndReadsPastTheOldThreeThousandCharacterLimit"
