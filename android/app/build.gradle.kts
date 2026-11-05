@@ -24,10 +24,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
-    }
-
     defaultConfig {
         // Public source previews must not replace an installed distribution.
         applicationId = "org.mewx.wenku8_flutter.source_preview"
@@ -85,6 +81,12 @@ android {
             ndk.abiFilters.clear()
             ndk.abiFilters.addAll(targetAbis)
         }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 
