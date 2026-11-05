@@ -17,16 +17,19 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import org.mewx.wenku8_flutter.SpeechLocalePolicy
+import kotlin.math.roundToInt
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 
-data class SystemSpeechSettings(val engine: String = "@default", val voice: String = "@default", val locale: String = "zh-CN", val speed: Float = 1f, val follow: Boolean = true) {
+data class SystemSpeechSettings(val engine: String = "@default", val voice: String = "@default", val locale: String = "zh-CN", val speed: Float = 1f, val follow: Boolean = true, val paragraphGapMillis: Int = 0) {
     fun save(context: Context) {
-        require(SpeechLocalePolicy.supportsEngine(engine) && voice.isNotBlank() && voice.length <= 2048 && SpeechLocalePolicy.requestedLocale(locale) != null && speed.isFinite() && speed in .5f..3f) { "请检查语音引擎、语言和语速设置" }
-        check(context.getSharedPreferences("system-speech", Context.MODE_PRIVATE).edit().putString("engine", engine).putString("voice", voice).putString("locale", locale).putFloat("speed", speed).putBoolean("follow", follow).commit()) { "语音设置保存失败" }
+        require(SpeechLocalePolicy.supportsEngine(engine) && voice.isNotBlank() && voice.length <= 2048 && SpeechLocalePolicy.requestedLocale(locale) != null && speed.isFinite() && speed in .5f..3f && paragraphGapMillis in 0..3000 && paragraphGapMillis % 100 == 0) { "请检查语音引擎、语言和语速设置" }
+        check(context.getSharedPreferences("system-speech", Context.MODE_PRIVATE).edit().putString("engine", engine).putString("voice", voice).putString("locale", locale).putFloat("speed", speed).putBoolean("follow", follow).putInt("paragraphGapMillis", paragraphGapMillis).commit()) { "语音设置保存失败" }
     }
     companion object {
         fun load(context: Context): SystemSpeechSettings = context.getSharedPreferences("system-speech", Context.MODE_PRIVATE).let { prefs ->
             SystemSpeechSettings(prefs.getString("engine", "@default")!!, prefs.getString("voice", "@default")!!, prefs.getString("locale", "zh-CN")!!,
-                prefs.getFloat("speed", 1f).let { if (it.isFinite()) it.coerceIn(.5f, 3f) else 1f }, prefs.getBoolean("follow", true))
+                prefs.getFloat("speed", 1f).let { if (it.isFinite()) it.coerceIn(.5f, 3f) else 1f }, prefs.getBoolean("follow", true), ((prefs.getInt("paragraphGapMillis", 0).coerceIn(0, 3000) + 50) / 100) * 100)
         }
     }
 }
@@ -62,6 +65,8 @@ data class SystemSpeechSettings(val engine: String = "@default", val voice: Stri
             Text("系统语音与音色", style = MaterialTheme.typography.titleLarge)
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             ChoiceMenu("引擎", settings.engine, engines, enabled = !loading && !previewing) { settings = settings.copy(engine = it, voice = "@default") }
+            Text("段落间隔：" + if (settings.paragraphGapMillis == 0) "不额外停顿" else "${settings.paragraphGapMillis / 1000f} 秒")
+            Slider(modifier = Modifier.semantics { contentDescription = "段落间隔" }, value = settings.paragraphGapMillis.toFloat(), onValueChange = { settings = settings.copy(paragraphGapMillis = ((it / 100).roundToInt() * 100).coerceIn(0, 3000)) }, valueRange = 0f..3000f, steps = 29)
             val selectedVoice = voices.firstOrNull { it.id == settings.voice }
             OutlinedButton(enabled = !loading && !previewing, onClick = { voicePicker = true }) {
                 Text("音色：" + if (settings.voice == "@default") "系统默认音色" else selectedVoice?.let { voiceLabel(it) } ?: "上次选择的音色（当前不可用）")

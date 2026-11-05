@@ -125,6 +125,8 @@ class ListeningService : Service() {
                 val series = seriesId?.let { library.series.get(it) }?.takeIf { !it.deleted && it.volumes.any { part -> part.bookId == bookId } }
                 val originals = series?.volumes?.map { it.bookId }?.dropWhile { it != bookId } ?: listOf(bookId)
                 var any = false
+                var previousParagraph: String? = null
+                var previousChapter: String? = null
                 originals.forEachIndexed { index, originalId ->
                     ensureActive()
                     val book = library.books().firstOrNull { it.id == originalId } ?: error("分卷原书已移除，请重新导入后继续听书")
@@ -177,6 +179,14 @@ class ListeningService : Service() {
                                 while (paused) resumes.receive()
                                 ensureActive()
                                 val preferences = SystemSpeechSettings.load(this@ListeningService)
+                                if (previousParagraph != null && (previousParagraph != paragraphKey || previousChapter != chapter)) {
+                                    val until = SystemClock.elapsedRealtime() + preferences.paragraphGapMillis
+                                    // Like the upstream timer, pausing does not restart the gap countdown.
+                                    // Turning the gap off applies immediately, including while waiting here.
+                                    while (SystemClock.elapsedRealtime() < until && SystemSpeechSettings.load(this@ListeningService).paragraphGapMillis > 0) delay(minOf(50L, until - SystemClock.elapsedRealtime()).coerceAtLeast(1))
+                                    while (paused) resumes.receive()
+                                }
+                                previousParagraph = paragraphKey; previousChapter = chapter
                                 val locator = paragraph.locator.copy(text = Locator.Text(textSuffix(text.substring((segment.start - 81).coerceAtLeast(0), segment.start), 80), text.substring(segment.start, segment.end), textPrefix(text.substring(segment.end, minOf(text.length, segment.end + 101)), 100)))
                                 snapshot = snapshot.copy(phase = ListeningPhase.PREPARING, bookId = book.id, seriesId = series?.id,
                                     title = series?.let { "${it.title} · ${it.volumes.first { volume -> volume.bookId == book.id }.title}" } ?: book.title,

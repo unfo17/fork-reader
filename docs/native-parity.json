@@ -451,6 +451,20 @@
       ]
     },
     {
+      "id": "speech.paragraphGap",
+      "feature": "0–3秒段落间隔、0.1秒步长、设置持久化与运行中取消",
+      "upstream": [
+        "lib/listening/models.dart",
+        "lib/listening/controller.dart",
+        "lib/listening/widgets.dart"
+      ],
+      "status": "partial",
+      "tests": [
+        "io.github.unfo17.reader.ListeningGapTest.paragraphGapPersistsAndDoesNotRepeatForEverySentenceOfOneParagraph",
+        "io.github.unfo17.reader.SystemSpeechUiTest.selectedSystemVoiceIsSavedPreviewedAndReadsPastTheOldThreeThousandCharacterLimit"
+      ]
+    },
+    {
       "id": "speech.timer",
       "feature": "睡眠定时、暂停恢复与章节结束",
       "upstream": [

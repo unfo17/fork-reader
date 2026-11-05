@@ -24,9 +24,12 @@ class SystemSpeechUiTest {
     private fun nodes(node: AccessibilityNodeInfo): Sequence<AccessibilityNodeInfo> = sequence { yield(node); for (i in 0 until node.childCount) node.getChild(i)?.let { yieldAll(nodes(it)) } }
     private fun waitFor(description: String, timeout: Long = 15000, condition: () -> Boolean) {
         val end = SystemClock.uptimeMillis() + timeout
-        while (SystemClock.uptimeMillis() < end) { if (condition()) return; SystemClock.sleep(100) }
+        while (SystemClock.uptimeMillis() < end) {
+            if (android.os.Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.clearCache()
+            if (condition()) return; SystemClock.sleep(100)
+        }
         val visible = instrumentation.uiAutomation.rootInActiveWindow?.let { nodes(it).mapNotNull { n -> n.text?.toString() ?: n.contentDescription?.toString() }.toList() }
-        error("$description：$visible")
+        error("$description：${ListeningSession.state.value}；$visible")
     }
     private fun click(label: String) {
         waitFor("找不到 $label") {
@@ -53,6 +56,12 @@ class SystemSpeechUiTest {
         try {
             ActivityScenario.launch<ReaderActivity>(Intent(context, ReaderActivity::class.java).putExtra("book", book.id)).use {
                 click("阅读设置"); click("系统语音与音色")
+                waitFor("无法设置段落间隔") {
+                    val root = instrumentation.uiAutomation.rootInActiveWindow
+                    val slider = root?.let { node -> nodes(node).firstOrNull { it.contentDescription?.toString() == "段落间隔" } }
+                    slider?.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id, android.os.Bundle().apply { putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, 1300f) }) == true
+                }
+                instrumentation.waitForIdleSync()
                 click("音色：系统默认音色"); click("test.en · en-US")
                 click("试听")
                 waitFor("未收到实际试听请求") { requests.isNotEmpty() }
@@ -60,7 +69,7 @@ class SystemSpeechUiTest {
                 click("保存语音设置")
                 val saved = SystemSpeechSettings.load(context)
                 assertEquals(engine, saved.engine); assertEquals("test.en", saved.voice)
-                assertEquals("en-US", saved.locale); assertEquals(1.25f, saved.speed)
+                assertEquals("en-US", saved.locale); assertEquals(1.25f, saved.speed); assertEquals(1300, saved.paragraphGapMillis)
                 click("朗读")
                 waitFor("长正文没有读到结尾", 60000) { synchronized(requests) { requests.any { pair -> pair.first.contains(endMarker) } } }
                 waitFor("朗读未完成", 10000) { instrumentation.uiAutomation.rootInActiveWindow?.let { root -> nodes(root).any { n -> n.contentDescription?.toString() == "朗读" } } == true }

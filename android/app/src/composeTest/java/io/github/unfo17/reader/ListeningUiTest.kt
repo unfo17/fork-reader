@@ -22,6 +22,7 @@ class ListeningUiTest {
         val end = SystemClock.uptimeMillis() + 12000
         var direction = AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
         while (SystemClock.uptimeMillis() < end) {
+            if (android.os.Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.clearCache()
             val root = instrumentation.uiAutomation.rootInActiveWindow
             var node = root?.let { nodes(it).firstOrNull { candidate -> candidate.text?.toString() == label || candidate.contentDescription?.toString() == label } }
             while (node != null && !node.isClickable) node = node.parent
