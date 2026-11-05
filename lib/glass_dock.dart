@@ -50,9 +50,8 @@ class GlassDock extends StatefulWidget {
     this.animateInactiveIcons = false,
     this.itemWidth = DockLayout.itemWidth,
     this.items = const [
-      GlassDockItem(CupertinoIcons.house, '发现'),
-      GlassDockItem(CupertinoIcons.book, '书架', symbol: ArchiveSymbol.shelf),
-      GlassDockItem(CupertinoIcons.settings, '设置'),
+      GlassDockItem(CupertinoIcons.folder, '本地'),
+      GlassDockItem(CupertinoIcons.person_crop_circle, '我的'),
     ],
   }) : assert(items.length >= 2 && items.length <= 5),
        assert(itemWidth >= 48);

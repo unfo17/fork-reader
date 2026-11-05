@@ -15,7 +15,7 @@ val readerPreview = providers.gradleProperty("wenkuReaderPreview").orNull == "tr
 
 android {
     namespace = "org.mewx.wenku8_flutter"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -31,7 +31,7 @@ android {
     defaultConfig {
         // Public source previews must not replace an installed distribution.
         applicationId = "org.mewx.wenku8_flutter.source_preview"
-        minSdk = flutter.minSdkVersion
+        minSdk = 24
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

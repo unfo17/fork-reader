@@ -14,6 +14,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:xml/xml.dart';
 
 import 'catalog.dart';
+import 'readium_epub.dart';
+import 'readium_epub_manifest.dart';
 import 'book_identity.dart';
 import 'book_tag_catalog.dart';
 import 'book_import_limits.dart';
@@ -108,6 +110,7 @@ ImportedBook parseLocalBook(
   bool autoTitles = true,
   bool inlineEpubImages = true,
   bool preserveRichText = true,
+  Map<String, dynamic>? readiumManifest,
 }) {
   _validateInput(input.name, input.bytes.length);
   // Content identity makes re-import and cross-device sync address the same
@@ -125,6 +128,7 @@ ImportedBook parseLocalBook(
       autoTitles: autoTitles,
       mergeUnlistedIllustrations: inlineEpubImages,
       preserveRichText: preserveRichText,
+      readiumManifest: readiumManifest,
     );
   }
   if (!name.toLowerCase().endsWith('.txt')) {
@@ -268,6 +272,7 @@ ImportedBook _epub(
   Map<String, String> imageNames = const {},
   bool coverOnly = false,
   bool normalizeMarkup = true,
+  Map<String, dynamic>? readiumManifest,
 }) {
   final zip = archive ?? boundedZip(input.bytes, maxSize: 1024 * 1024 * 1024);
   final files = {
@@ -293,14 +298,22 @@ ImportedBook _epub(
     }
   }
 
-  final container = XmlDocument.parse(read('META-INF/container.xml'));
-  final packageReference = container.descendants
-      .whereType<XmlElement>()
-      .where((e) => e.name.local == 'rootfile')
-      .firstOrNull
-      ?.getAttribute('full-path');
-  if (packageReference == null || packageReference.trim().isEmpty) {
-    throw const FormatException('EPUB 缺少书籍索引，请重新获取完整原书');
+  final readium = readiumManifest == null
+      ? null
+      : ReadiumEpubManifest(readiumManifest);
+  String? packageReference;
+  if (readium == null) {
+    // Only legacy maintenance uses the historical parser. New imports always
+    // supply the manifest parsed by the native Readium toolkit.
+    final container = XmlDocument.parse(read('META-INF/container.xml'));
+    packageReference = container.descendants
+        .whereType<XmlElement>()
+        .where((e) => e.name.local == 'rootfile')
+        .firstOrNull
+        ?.getAttribute('full-path');
+    if (packageReference == null || packageReference.trim().isEmpty) {
+      throw const FormatException('EPUB 缺少书籍索引，请重新获取完整原书');
+    }
   }
   // `base` is already a decoded ZIP filename. Re-encode its segments before
   // using it as a URL, so a literal #, ? or % cannot change relative resolution.
@@ -322,8 +335,8 @@ ImportedBook _epub(
     return Uri.decodeComponent(uri.path.substring(1));
   }
 
-  final opfPath = resolve('', packageReference);
-  final package = XmlDocument.parse(read(opfPath));
+  final opfPath = readium == null ? resolve('', packageReference!) : '';
+  final package = readium?.resourceIndex() ?? XmlDocument.parse(read(opfPath));
   final elements = package.descendants.whereType<XmlElement>().toList();
   String field(String name) =>
       elements
@@ -489,6 +502,18 @@ ImportedBook _epub(
       if (ol != null) walk(ol, '');
     } on FormatException {
       warnings.add('原书导航无法读取，已按原书顺序和正文标题恢复章节。');
+    }
+  }
+  if (readium != null) {
+    for (final entry in readium.navigation) {
+      final split = entry.key.indexOf('#');
+      labels[(
+        path: entry.key.substring(0, split),
+        fragment: entry.key.substring(split + 1),
+      )] = (
+        title: entry.title,
+        volume: '',
+      );
     }
   }
   final images = <String, Uint8List>{};
@@ -1261,22 +1286,23 @@ ImportedBook _epub(
           .firstOrNull
           ?.getAttribute('toc')];
   final authored =
-      readEpubNavigation(
-            navPath: manifest.values
-                .where((e) => hasEpubToken(e.props, 'nav'))
-                .firstOrNull
-                ?.path,
-            ncxPath: preferredNcx?.type == 'application/x-dtbncx+xml'
-                ? preferredNcx!.path
-                : ncx?.path,
-            read: read,
-            resolve: target,
-            contains: (path) =>
-                files.containsKey(path) || damage.containsKey(path),
-            warnings: warnings,
-            normalizeMarkup:
-                normalizeMarkup && !htmlPaths.contains(epubNav?.path),
-          )
+      (readium?.navigation ??
+              readEpubNavigation(
+                navPath: manifest.values
+                    .where((e) => hasEpubToken(e.props, 'nav'))
+                    .firstOrNull
+                    ?.path,
+                ncxPath: preferredNcx?.type == 'application/x-dtbncx+xml'
+                    ? preferredNcx!.path
+                    : ncx?.path,
+                read: read,
+                resolve: target,
+                contains: (path) =>
+                    files.containsKey(path) || damage.containsKey(path),
+                warnings: warnings,
+                normalizeMarkup:
+                    normalizeMarkup && !htmlPaths.contains(epubNav?.path),
+              ))
           .where((entry) {
             // A TOC's own top-level "#" link is not missing prose. Keep it only when
             // that NAV document actually produced a reading destination.
@@ -1395,6 +1421,7 @@ class _ImportJob {
     this.freshOriginal = false,
     this.recoverDamagedEpub = false,
     this.knownIncomplete = const {},
+    this.readiumManifest,
   });
   final String root, name;
   final Map<int, String> known;
@@ -1409,6 +1436,7 @@ class _ImportJob {
   final bool freshOriginal;
   final bool recoverDamagedEpub;
   final Set<int> knownIncomplete;
+  final Map<String, dynamic>? readiumManifest;
 }
 
 class _ImportedFile {
@@ -1487,6 +1515,7 @@ Future<_ImportedFile> _importOriginal(_ImportJob job) async {
         archive:
             recovered?.archive ??
             readLocalBookArchive(stream, maxSize: 1024 * 1024 * 1024),
+        readiumManifest: job.readiumManifest,
         damagedEntries: recovered?.damagedEntries,
         autoTitles: options.autoTitles,
         mergeUnlistedIllustrations: options.inlineEpubImages,
@@ -1500,9 +1529,9 @@ Future<_ImportedFile> _importOriginal(_ImportJob job) async {
         },
         saveBody: (index, body) =>
             File('${staging.path}/c$index.txt').writeAsStringSync(body),
-        appendBody: (index, body) => File(
-          '${staging.path}/c$index.txt',
-        ).writeAsStringSync(body, mode: FileMode.append),
+        appendBody: (index, body) =>
+            File('${staging.path}/c$index.txt')
+                .writeAsStringSync(body, mode: FileMode.append),
         saveImage: (name, image) {
           media[name] = image.name;
           // Covers remain immediately readable for large book lists. All other
@@ -1519,9 +1548,8 @@ Future<_ImportedFile> _importOriginal(_ImportJob job) async {
       final suppliedText = job.input?.text ?? job.text;
       late File textFile;
       if (suppliedText != null || file == null) {
-        textFile = await File(
-          '${staging.path}/.directory-source.txt',
-        ).writeAsString(suppliedText ?? utf8.decode(job.input!.bytes));
+        textFile = await File('${staging.path}/.directory-source.txt')
+            .writeAsString(suppliedText ?? utf8.decode(job.input!.bytes));
       } else {
         textFile = File(job.decodedPath ?? file.path);
       }
@@ -1601,9 +1629,8 @@ Future<_ImportedFile> _importOriginal(_ImportJob job) async {
     if (direct) {
       // The live descriptor belongs to the importer; no original is copied.
     } else if (file == null) {
-      await File(
-        '${staging.path}/original',
-      ).writeAsBytes(job.input!.bytes, flush: true);
+      await File('${staging.path}/original')
+          .writeAsBytes(job.input!.bytes, flush: true);
     } else {
       await file.copy('${staging.path}/original');
     }
@@ -1648,9 +1675,8 @@ Future<_ImportedFile> _importOriginal(_ImportJob job) async {
       if (utf8.encode(index).length > 1024 * 1024) {
         throw const FormatException('本地插图索引过大');
       }
-      await File(
-        '${staging.path}/media.json',
-      ).writeAsString(index, flush: true);
+      await File('${staging.path}/media.json')
+          .writeAsString(index, flush: true);
     }
     final metadata = jsonEncode({
       'version': 1,
@@ -1669,9 +1695,8 @@ Future<_ImportedFile> _importOriginal(_ImportJob job) async {
     if (utf8.encode(metadata).length > 4 * 1024 * 1024) {
       throw const FormatException('书籍目录过大，请拆分原书后导入');
     }
-    await File(
-      '${staging.path}/book.json',
-    ).writeAsString(metadata, flush: true);
+    await File('${staging.path}/book.json')
+        .writeAsString(metadata, flush: true);
     await staging.rename('${job.root}/$id');
     return _ImportedFile(id, digest, parsed.novel, source);
   } on ArchiveException {
@@ -1988,10 +2013,8 @@ class LocalBookStore extends ChangeNotifier
     if (identical(cached?.source, source) && cached?.url == url) {
       return cached!.result;
     }
-    final result = Novel.fromSnapshot({
-      ...source.toSnapshot(),
-      'coverUrl': url,
-    }).withChapters(source.chapters);
+    final result = Novel.fromSnapshot({...source.toSnapshot(), 'coverUrl': url})
+        .withChapters(source.chapters);
     _coveredBooks[source.id] = (source: source, url: url, result: result);
     return result;
   }
@@ -2027,9 +2050,9 @@ class LocalBookStore extends ChangeNotifier
   ].where((book) => book.coverUrl != null).toList(growable: false);
 
   Future<Novel> setVolumeCover(int id, int volumeId) async {
-    final source = volumeCoverChoices(
-      id,
-    ).where((book) => book.id == volumeId).firstOrNull;
+    final source = volumeCoverChoices(id)
+        .where((book) => book.id == volumeId)
+        .firstOrNull;
     if (source == null) throw const FormatException('请选择本合订本中有封面的分卷');
     final bytes = await preparePersonalImageBytes(
       await LocalBookMedia.load(source.coverUrl!),
@@ -2144,9 +2167,9 @@ class LocalBookStore extends ChangeNotifier
   bool isIncompleteBook(int id) => importIssues(id).isNotEmpty;
 
   @override
-  bool shouldShowImportWarning(int id) => importIssues(
-    id,
-  ).any((issue) => _sources[issue.bookId]?['hideImportWarning'] != true);
+  bool shouldShowImportWarning(int id) =>
+      importIssues(id)
+          .any((issue) => _sources[issue.bookId]?['hideImportWarning'] != true);
 
   @override
   Future<void> setImportWarningHidden(int id, bool hidden) async {
@@ -2312,35 +2335,46 @@ class LocalBookStore extends ChangeNotifier
       Future<_ImportedFile> readOriginal(
         LocalDocumentInput? selectedInput, {
         bool freshOriginal = false,
-      }) => compute(
-        _importOriginal,
-        _ImportJob(
-          root: directory.path,
-          name: name,
-          input: input,
-          path: path,
-          text: text,
-          decodedPath: decodedPath,
-          options: options.effective,
-          optionsById: optionsById,
-          epubLayouts: _epubLayouts,
-          preserveDirectory: requireMatchingOptions,
-          linkedOriginal: selectedOriginal,
-          document: selectedInput,
-          freshOriginal: freshOriginal,
-          recoverDamagedEpub: recoverDamagedEpub,
-          knownIncomplete: {
-            for (final id in _sources.keys)
-              if (isIncompleteBook(id)) id,
-          },
-          known: {
-            for (final e in _sources.entries)
-              e.key: e.value['digest'] as String,
-            for (final id in _series.keys) id: 'reserved-series',
-          },
-        ),
-        debugLabel: 'local-book-import',
-      );
+      }) async {
+        final manifest = name.toLowerCase().endsWith('.epub')
+            ? await loadReadiumEpub(
+                path: path,
+                bytes: input?.bytes,
+                document: selectedInput,
+              )
+            : null;
+        return compute(
+          _importOriginal,
+          _ImportJob(
+            root: directory.path,
+            name: name,
+            readiumManifest: manifest,
+            input: input,
+            path: path,
+            text: text,
+            decodedPath: decodedPath,
+            options: options.effective,
+            optionsById: optionsById,
+            epubLayouts: _epubLayouts,
+            preserveDirectory: requireMatchingOptions,
+            linkedOriginal: selectedOriginal,
+            document: selectedInput,
+            freshOriginal: freshOriginal,
+            recoverDamagedEpub: recoverDamagedEpub,
+            knownIncomplete: {
+              for (final id in _sources.keys)
+                if (isIncompleteBook(id)) id,
+            },
+            known: {
+              for (final e in _sources.entries)
+                e.key: e.value['digest'] as String,
+              for (final id in _series.keys) id: 'reserved-series',
+            },
+          ),
+          debugLabel: 'local-book-import',
+        );
+      }
+
       final _ImportedFile imported;
       if (linkedOriginalReference != null) {
         imported = await (documentAccess as LocalDocumentImportAccess)
@@ -2421,9 +2455,8 @@ class LocalBookStore extends ChangeNotifier
     final source = _seriesChapters[id]?[chapter.id];
     final base = source?.bookId ?? id;
     final chapterId = source?.chapterId ?? chapter.id;
-    if (importIssues(
-      base,
-    ).any((issue) => issue.chapterIds.contains(chapterId))) {
+    if (importIssues(base)
+        .any((issue) => issue.chapterIds.contains(chapterId))) {
       throw const FormatException(
         '原文件本章数据损坏，需完整原件恢复。其他可读章节仍可阅读；请重新获取完整原件后重新导入，内容不同会作为新书保留，不会覆盖原有进度与书签。',
       );
@@ -2772,9 +2805,8 @@ class LocalBookStore extends ChangeNotifier
         if (old == null ||
             series.updatedAt > old.updatedAt ||
             (series.updatedAt == old.updatedAt &&
-                jsonEncode(
-                      series.toJson(),
-                    ).compareTo(jsonEncode(old.toJson())) >
+                jsonEncode(series.toJson())
+                        .compareTo(jsonEncode(old.toJson())) >
                     0)) {
           next[series.id] = series.copyWith(tags: series.tags ?? old?.tags);
         }

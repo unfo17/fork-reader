@@ -170,3 +170,6 @@ key.properties
 !android/gradlew
 !android/gradlew.bat
 !android/gradle/wrapper/gradle-wrapper.jar
+
+# Reproducible checks for the Readium fork.
+!/tools/verify_readium.dart

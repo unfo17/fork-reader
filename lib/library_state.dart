@@ -775,7 +775,7 @@ class LibraryState extends ChangeNotifier {
   Set<ReadingEntry> _directReadingPages = {};
   bool _directReadingEnabled = false;
   bool _openRecentOnLaunch = false;
-  AppStartPage _startPage = AppStartPage.discovery;
+  AppStartPage _startPage = AppStartPage.local;
   bool _combinedShelf = false;
   ReaderPreferences _readerPreferences = const ReaderPreferences();
   final _bookReaderStyles = <int, ReaderBookStyle>{};

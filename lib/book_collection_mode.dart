@@ -50,5 +50,5 @@ enum AppStartPage {
   };
 
   static AppStartPage parseOrDefault(Object? value) =>
-      tryParse(value) ?? discovery;
+      tryParse(value) ?? local;
 }

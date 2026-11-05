@@ -1004,3 +1004,7 @@ tools/update-mirror/distribution.mjs
 tools/update-mirror/index.mjs
 tools/update-mirror/worker.mjs
 tools/update-mirror/wrangler.jsonc
+README_READIUM.md
+lib/readium_epub.dart
+lib/readium_epub_manifest.dart
+tools/verify_readium.dart
