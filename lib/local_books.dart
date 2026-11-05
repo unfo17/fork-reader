@@ -506,10 +506,9 @@ ImportedBook _epub(
   }
   if (readium != null) {
     for (final entry in readium.navigation) {
-      final split = entry.key.indexOf('#');
       labels[(
-        path: entry.key.substring(0, split),
-        fragment: entry.key.substring(split + 1),
+        path: entry.documentKey.substring(0, entry.documentKey.length - 1),
+        fragment: entry.key.substring(entry.documentKey.length),
       )] = (
         title: entry.title,
         volume: '',
