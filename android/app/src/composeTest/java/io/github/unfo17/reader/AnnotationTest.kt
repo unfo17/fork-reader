@@ -39,10 +39,18 @@ class AnnotationTest {
         error("没有找到批注编辑控件：$visible")
     }
     private fun click(text: String) {
-        var node: AccessibilityNodeInfo? = waitNodes(scroll = true) { it.text?.toString() == text || it.contentDescription?.toString() == text }.first()
-        while (node != null && !node.isClickable) node = node.parent
-        assertTrue(node?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true)
-        instrumentation.waitForIdleSync()
+        val end = SystemClock.uptimeMillis() + 12000
+        var direction = AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+        while (SystemClock.uptimeMillis() < end) {
+            if (android.os.Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.clearCache()
+            val root = instrumentation.uiAutomation.rootInActiveWindow
+            var node = root?.let { nodes(it).firstOrNull { candidate -> candidate.text?.toString() == text || candidate.contentDescription?.toString() == text } }
+            while (node != null && !node.isClickable) node = node.parent
+            if (node?.isEnabled == true && node.isVisibleToUser && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) { instrumentation.waitForIdleSync(); return }
+            root?.let { nodes(it).firstOrNull { it.isScrollable } }?.let { if (!it.performAction(direction)) direction = if (direction == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD else AccessibilityNodeInfo.ACTION_SCROLL_FORWARD }
+            SystemClock.sleep(100)
+        }
+        error("无法点击批注控件：$text")
     }
     private suspend fun waitJavascript(scenario: ActivityScenario<ReaderActivity>, script: String): EpubNavigatorFragment {
         val deadline = System.currentTimeMillis() + 25000

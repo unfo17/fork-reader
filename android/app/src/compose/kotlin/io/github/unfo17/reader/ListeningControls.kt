@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
                 ListeningPhase.STOPPED -> "已停止"
             })
             (error ?: state.error)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            if (state.missingLanguages.isNotEmpty()) Text("已跳过缺少语音模型的语言：${state.missingLanguages.sorted().joinToString()}。请在系统语音设置中安装对应模型。")
             if (state.text.isNotBlank()) Text(state.text)
             Row {
                 Button(enabled = state.active, onClick = { ListeningSession.command(context, if (state.phase == ListeningPhase.PAUSED) ListeningSession.RESUME else ListeningSession.PAUSE) }) { Text(if (state.phase == ListeningPhase.PAUSED) "继续朗读" else "暂停朗读") }

@@ -420,6 +420,20 @@
       ]
     },
     {
+      "id": "speech.languages",
+      "feature": "段落语言识别、同引擎匹配、缺少模型提示、每书语言筛选及声线覆盖",
+      "upstream": [
+        "lib/listening/languages.dart",
+        "lib/listening/store.dart",
+        "lib/listening/widgets.dart"
+      ],
+      "status": "partial",
+      "tests": [
+        "io.github.unfo17.reader.SpeechLanguagesTest.languagePolicyRetainsUpstreamBoundariesAndVoicePreference",
+        "io.github.unfo17.reader.SpeechLanguagesTest.actualEngineSwitchesForTaggedParagraphsAndSkipsMissingModels"
+      ]
+    },
+    {
       "id": "speech.continuous",
       "feature": "全书连续朗读、段落跟随和进度",
       "upstream": [

@@ -12,7 +12,7 @@ data class ListeningSnapshot(
     val phase: ListeningPhase = ListeningPhase.STOPPED,
     val bookId: String = "", val seriesId: String? = null, val title: String = "", val text: String = "",
     val locator: String? = null, val positionMillis: Long = 0, val durationMillis: Long = 0,
-    val speed: Float = 1f, val error: String? = null, val sleepUntil: Long? = null, val sleepAfterChapter: Boolean = false,
+    val speed: Float = 1f, val error: String? = null, val sleepUntil: Long? = null, val sleepAfterChapter: Boolean = false, val missingLanguages: Set<String> = emptySet(),
 ) {
     val active get() = phase in listOf(ListeningPhase.PREPARING, ListeningPhase.PLAYING, ListeningPhase.PAUSED)
 }

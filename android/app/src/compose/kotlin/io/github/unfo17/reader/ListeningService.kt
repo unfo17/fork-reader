@@ -124,6 +124,7 @@ class ListeningService : Service() {
                 val library = Library.get(this@ListeningService)
                 val series = seriesId?.let { library.series.get(it) }?.takeIf { !it.deleted && it.volumes.any { part -> part.bookId == bookId } }
                 val originals = series?.volumes?.map { it.bookId }?.dropWhile { it != bookId } ?: listOf(bookId)
+                val engineVoices = mutableMapOf<String, List<SystemVoice>>()
                 var any = false
                 var previousParagraph: String? = null
                 var previousChapter: String? = null
@@ -152,6 +153,7 @@ class ListeningService : Service() {
                             if (!matchedParagraph && resume != null && ChapterSearchWindow.resource(paragraph.locator.href.toString()) != ChapterSearchWindow.resource(resume.href)) error("续听原文已变化，请从阅读页重新开始")
                             if (paragraph !is Content.TextualElement) continue
                             val text = paragraph.text.orEmpty()
+                            val paragraphLanguages = mutableMapOf<String, String>()
                             val paragraphKey = withContext(Dispatchers.Default) { ListeningCursor.paragraphKey(paragraph) }
                             if (!matchedParagraph && resume != null) {
                                 if (paragraphKey != resume.paragraphKey) continue
@@ -178,7 +180,18 @@ class ListeningService : Service() {
                                 if (snapshot.sleepAfterChapter && sleepChapterTarget == null) sleepChapterTarget = chapter
                                 while (paused) resumes.receive()
                                 ensureActive()
-                                val preferences = SystemSpeechSettings.load(this@ListeningService)
+                                var preferences = SystemSpeechSettings.load(this@ListeningService)
+                                if (preferences.autoLanguage) {
+                                    val tag = paragraph.language?.code ?: (paragraph as? Content.TextElement)?.segments?.firstNotNullOfOrNull { it.language?.code }.orEmpty()
+                                    val language = paragraphLanguages.getOrPut(preferences.locale) { SpeechLanguages.paragraph(tag, text, preferences.locale) }
+                                    val voices = engineVoices[preferences.engine] ?: client.voices(preferences.engine).also { engineVoices[preferences.engine] = it }
+                                    val selected = SpeechLanguages.voice(language, preferences.voice, voices)
+                                    if (selected == null) {
+                                        snapshot = snapshot.copy(missingLanguages = snapshot.missingLanguages + language)
+                                        continue
+                                    }
+                                    preferences = preferences.copy(voice = selected.id, locale = selected.locale)
+                                }
                                 if (previousParagraph != null && (previousParagraph != paragraphKey || previousChapter != chapter)) {
                                     val until = SystemClock.elapsedRealtime() + preferences.paragraphGapMillis
                                     // Like the upstream timer, pausing does not restart the gap countdown.
@@ -214,7 +227,7 @@ class ListeningService : Service() {
                         require(matchedParagraph && resumedSegment) { "续听原文已变化，请从阅读页重新开始" }
                     } finally { withContext(NonCancellable + Dispatchers.IO) { publication?.close() } }
                 }
-                if (!any) error("当前位置没有可朗读的文字")
+                if (!any) error(if (snapshot.missingLanguages.isNotEmpty()) "当前正文缺少对应语言的语音模型：${snapshot.missingLanguages.sorted().joinToString()}" else "当前位置没有可朗读的文字")
                 if (epoch == generation && snapshot.sleepAfterChapter) {
                     snapshot = snapshot.copy(sleepAfterChapter = false)
                     sleepChapterTarget = null
