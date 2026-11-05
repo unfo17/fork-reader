@@ -16,7 +16,7 @@ val readerPreview = providers.gradleProperty("wenkuReaderPreview").orNull == "tr
 android {
     namespace = "org.mewx.wenku8_flutter"
     compileSdk = 36
-    ndkVersion = flutter.ndkVersion
+    ndkVersion = "27.0.12077973"
 
     compileOptions {
         isCoreLibraryDesugaringEnabled = true

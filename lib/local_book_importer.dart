@@ -386,7 +386,7 @@ class LocalBookImporter extends ChangeNotifier {
                       encoding: encoding,
                     );
                   }
-                  return registerImported(
+                  return await registerImported(
                     await books.importDerivedDocument(
                       selected.name,
                       selected.path!,

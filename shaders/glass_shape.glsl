@@ -1,5 +1,5 @@
-// One analytic ray evaluation per pixel. GPU quad derivatives provide the
-// optical footprint without evaluating four more Snell/normal calculations.
+// Forward differences also compile for the SkSL runtime-effect backend,
+// which does not expose GPU quad derivative functions.
 vec3 glassPoint(vec2 position) {
     vec2 p = position - uRect.xy - uRect.zw * 0.5;
     float touchX = (clamp(uTouch, 0.0, 1.0) - 0.5) * uRect.z;
@@ -58,9 +58,11 @@ void main() {
         }
     }
     vec3 center = glassPoint(position);
-    float aa = max(fwidth(center.z), 1.0);
-    vec2 dx = dFdx(center.xy) * 0.25;
-    vec2 dy = dFdy(center.xy) * 0.25;
+    vec3 stepX = glassPoint(position + vec2(1.0, 0.0)) - center;
+    vec3 stepY = glassPoint(position + vec2(0.0, 1.0)) - center;
+    float aa = max(abs(stepX.z) + abs(stepY.z), 1.0);
+    vec2 dx = stepX.xy * 0.25;
+    vec2 dy = stepY.xy * 0.25;
     if (any(greaterThanEqual(distance, uRect.zw * 0.5))) {
         fragColor = vec4(0.0);
         return;

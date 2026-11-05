@@ -69,7 +69,6 @@ import 'local_book_importer.dart';
 import 'local_text_reference.dart';
 import 'local_text_recovery.dart';
 import 'native_effects.dart' show NativeGlassGroup;
-import 'lan_handoff_widgets.dart';
 import 'network_status.dart';
 import 'novel_feed_controller.dart';
 import 'offline_repository.dart';
@@ -100,8 +99,6 @@ import 'reader_book_find.dart';
 import 'reader_annotations.dart';
 import 'reader_annotation_editor.dart';
 import 'reader_embedded_vertical.dart';
-import 'lan_reading_sync.dart';
-import 'lan_reading_page.dart';
 import 'reader_pagination.dart';
 import 'reader_paged_view.dart';
 import 'reader_vertical_text.dart';
@@ -1634,8 +1631,9 @@ class _ReaderLoaderPageState extends State<ReaderLoaderPage> {
         book = await offline.cachedBook(widget.novel.id);
       }
     }
-    book ??= (await widget.repository.detail(widget.novel))
-        .withChapters(await widget.repository.chapters(widget.novel.id));
+    book ??= (await widget.repository.detail(
+      widget.novel,
+    )).withChapters(await widget.repository.chapters(widget.novel.id));
     if (book.tags.isEmpty && widget.novel.tags.isNotEmpty) {
       book = book.withGenre(widget.novel.genre);
     }
@@ -2433,9 +2431,9 @@ class _ShelfPageState extends State<ShelfPage>
                               ArchiveSymbol.shelf,
                               key: const ValueKey('empty-shelf-icon'),
                               ambient: true,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurfaceVariant,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
                               size: 34,
                             ),
                             const SizedBox(height: 18),
@@ -2468,9 +2466,9 @@ class _ShelfPageState extends State<ShelfPage>
                               textAlign: TextAlign.center,
                               style: TextStyle(
                                 fontSize: 12,
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onSurfaceVariant,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
                               ),
                             ),
                           ],
@@ -3053,21 +3051,6 @@ class SettingsPage extends StatelessWidget {
             options: _effectsOptions,
           ),
           const SizedBox(height: 14),
-          if (LanSyncScope.maybeOf(context) case final sync?) ...[
-            FeatureEntry(
-              key: const ValueKey('settings-lan-sync'),
-              title: '局域网续读',
-              subtitle: '连接自己的设备，接着上次的位置阅读',
-              icon: CupertinoIcons.wifi,
-              onTap: () => pushNovelPage<void>(
-                context,
-                LanReadingPage(sync: sync, reduceMotion: state.reduceMotion),
-                reduceMotion: state.reduceMotion,
-                slot: ('settings', 'lan-reading'),
-              ),
-            ),
-            const SizedBox(height: 14),
-          ],
           FeatureEntry(
             key: const ValueKey('settings-reading-widgets'),
             title: '小组件',
@@ -3797,9 +3780,9 @@ class InlineSearchResults extends StatelessWidget {
                                       ? '已找到 ${group.items.length}'
                                       : '${group.totalItems} 个结果',
                                   style: TextStyle(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .onSurfaceVariant,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
                                     fontSize: 13,
                                   ),
                                 ),
@@ -4025,9 +4008,9 @@ class InlineSearchResults extends StatelessWidget {
                           style: TextStyle(
                             fontSize: 13,
                             height: 1.6,
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurfaceVariant,
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onSurfaceVariant,
                           ),
                         ),
                         Align(
@@ -4997,8 +4980,9 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
             child: DecoratedBox(
               decoration: BoxDecoration(
                 border: Border.all(
-                  color: Theme.of(context).colorScheme.outlineVariant
-                      .withValues(alpha: .7),
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.outlineVariant.withValues(alpha: .7),
                   width: .7,
                 ),
                 borderRadius: BorderRadius.circular(3),
@@ -5036,8 +5020,9 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           border: Border.all(
-            color: Theme.of(context).colorScheme.outlineVariant
-                .withValues(alpha: .65),
+            color: Theme.of(
+              context,
+            ).colorScheme.outlineVariant.withValues(alpha: .65),
             width: .7,
           ),
           borderRadius: BorderRadius.circular(4),
@@ -5350,9 +5335,9 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
 
   String get _directoryCountLabel {
     final count = novel.directory.length;
-    final volumes = NovelVolume.of(novel.directoryChapters)
-        .where((volume) => volume.title.isNotEmpty)
-        .length;
+    final volumes = NovelVolume.of(
+      novel.directoryChapters,
+    ).where((volume) => volume.title.isNotEmpty).length;
     final unit = novel.navigation?.entries.isNotEmpty == true ? '项' : '章';
     return '${volumes > 0 ? '$volumes 卷 · ' : ''}$count $unit';
   }
@@ -6455,8 +6440,9 @@ class _ReaderPageState extends State<ReaderPage>
       });
     }
     _scheduleChromeHint();
-    final region = chineseLocale(Localizations.maybeLocaleOf(context))
-        .countryCode;
+    final region = chineseLocale(
+      Localizations.maybeLocaleOf(context),
+    ).countryCode;
     if (_readerRegion == null) {
       // Resolve inherited locale before creating the first display/cache spec.
       _readerRegion = region;
@@ -6924,8 +6910,10 @@ class _ReaderPageState extends State<ReaderPage>
     final spec = _displaySpec;
     if (!refresh) {
       if (_cachedDisplay(index) case final cached?) return Future.value(cached);
-      if (_displayLoads[index] case (spec: final key, request: final request)
-          when key == spec) {
+      if (_displayLoads[index] case (
+        spec: final key,
+        request: final request,
+      ) when key == spec) {
         return request;
       }
     }
@@ -7199,8 +7187,10 @@ class _ReaderPageState extends State<ReaderPage>
     int chapter,
   ) async {
     if (isLocalBook(widget.novel.id)) return source;
-    if (_automaticContent[chapter] case (final original, final effective)
-        when identical(original, source)) {
+    if (_automaticContent[chapter] case (
+      final original,
+      final effective,
+    ) when identical(original, source)) {
       return effective;
     }
     final local = widget.repository is OfflineNovelRepository
@@ -8116,8 +8106,9 @@ class _ReaderPageState extends State<ReaderPage>
         chapterIndex = sourceChapter ?? _chapter;
     if (page.fragments.length == 1 &&
         page.fragments.first.image &&
-        readerIllustrationUrl(page.fragments.first.text)
-                ?.startsWith('wenku-local:') !=
+        readerIllustrationUrl(
+              page.fragments.first.text,
+            )?.startsWith('wenku-local:') !=
             true) {
       return ReaderTurnPart(
         bounds: page.fragments.first.rect,
@@ -8198,8 +8189,9 @@ class _ReaderPageState extends State<ReaderPage>
               page: page,
               glyphCache: _verticalGlyphs,
               style: style.copyWith(
-                fontSize: MediaQuery.textScalerOf(context)
-                    .scale(style.fontSize ?? 19),
+                fontSize: MediaQuery.textScalerOf(
+                  context,
+                ).scale(style.fontSize ?? 19),
               ),
               highlightParagraph: _bookmarkLanding.value,
               listeningParagraph: listening.paragraph,
@@ -8231,8 +8223,9 @@ class _ReaderPageState extends State<ReaderPage>
                     if (glyph != null) {
                       AppHaptics.play(context, HapticCue.action);
                       unawaited(
-                        _doubleTapListeningParagraph(glyph.paragraph)
-                            .catchError((Object _) {}),
+                        _doubleTapListeningParagraph(
+                          glyph.paragraph,
+                        ).catchError((Object _) {}),
                       );
                     }
                   },
@@ -9241,12 +9234,7 @@ class _ReaderPageState extends State<ReaderPage>
     );
   }
 
-  bool _canHandoff(BuildContext context) {
-    final sync = LanSyncScope.maybeOf(context);
-    return isLocalBook(widget.novel.id)
-        ? sync?.books != null
-        : widget.novel.id > 0 && sync?.repository != null;
-  }
+  bool _canHandoff(BuildContext context) => false;
 
   double _readerHeaderExtent(BuildContext context) =>
       math.max(46, MediaQuery.textScalerOf(context).scale(16) * 1.25);
@@ -9426,8 +9414,9 @@ class _ReaderPageState extends State<ReaderPage>
     final anchor = _paragraphRegistry.capture(offset, clampToLast: true);
     if (content == null || anchor == null) return null;
     final row = content.readingOrder?.indexOf(anchor.index) ?? anchor.index;
-    return ReaderSourceProgress.of(content)
-        .fraction((row: row, fraction: anchor.fraction));
+    return ReaderSourceProgress.of(
+      content,
+    ).fraction((row: row, fraction: anchor.fraction));
   }
 
   void _reportChromeSourceProgress(double fraction) {
@@ -10862,34 +10851,7 @@ class _ReaderPageState extends State<ReaderPage>
     }
   }
 
-  Future<void> _openHandoff() async {
-    if (_toolsOpen || _catalogueOpen || _findOpen || _detailsOpen) return;
-    final sync = LanSyncScope.maybeOf(context);
-    final position = _currentPosition();
-    if (!_canHandoff(context) || sync == null || position == null) return;
-    _cancelExitRequest();
-    _selection.clear();
-    _stopAutoScroll();
-    _followTicket++;
-    _followScroll.cancel();
-    _toolsOpen = true;
-    try {
-      await showJellySheet<void>(
-        context: context,
-        reduceMotion: widget.state.reduceMotion,
-        surfaceWrapper: _readerSurface,
-        builder: (_) => LanSendBookSheet(
-          sync: sync,
-          book: _sourceBook,
-          position: position,
-          reduceMotion: widget.state.reduceMotion,
-        ),
-      );
-    } finally {
-      _toolsOpen = false;
-      _savePosition(notify: false);
-    }
-  }
+  Future<void> _openHandoff() async {}
 
   void _showFindMatch(ReaderMatch match) {
     _highlightTimer?.cancel();

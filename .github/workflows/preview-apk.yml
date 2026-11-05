@@ -1,0 +1,46 @@
+name: Build Readium preview APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/readium-local-reader]
+permissions:
+  contents: write
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.9'
+          channel: stable
+          cache: true
+      - name: Resolve dependencies and verify parser
+        run: |
+          flutter pub get
+          dart run tools/verify_readium.dart
+          dart analyze --no-fatal-warnings lib
+      - name: Build APK
+        run: flutter build apk --release --target-platform android-arm64 --build-name=0.5.6-readium-preview.1 --build-number=2278
+      - name: Verify and package APK
+        run: |
+          mkdir -p release
+          cp build/app/outputs/flutter-apk/app-release.apk release/wenku8-readium-preview-arm64-v8a.apk
+          BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
+          "$BUILD_TOOLS/apksigner" verify --verbose release/*.apk
+          cd release
+          sha256sum *.apk > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: readium-preview-apk
+          path: release/*
+      - name: Publish preview release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create readium-preview-20261105.1 release/* --target "$GITHUB_SHA" --prerelease --title "Readium 本地阅读器预览版 1" --notes-file RELEASE_PREVIEW.md

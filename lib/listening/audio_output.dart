@@ -29,18 +29,6 @@ class NativeListeningOutput implements ListeningAudioOutput {
   Future<void> initialize() async {
     _session = await AudioSession.instance;
     await _session!.configure(const AudioSessionConfiguration.speech());
-    if (LocalPlatform.android) {
-      _subscriptions.add(
-        _player.androidAudioSessionIdStream.distinct().listen((id) {
-          unawaited(
-            controller.enhancement.configure(
-              controller.enhancement.preference,
-              audioSessionId: id,
-            ),
-          );
-        }),
-      );
-    }
     _subscriptions.add(
       _session!.interruptionEventStream.listen((event) {
         if (event.begin) unawaited(controller.pause());
@@ -132,9 +120,7 @@ class NativeListeningOutput implements ListeningAudioOutput {
     for (final subscription in _subscriptions) {
       await subscription.cancel();
     }
-    if (LocalPlatform.android) {
-      await controller.enhancement.configure(controller.enhancement.preference);
-    }
+    if (LocalPlatform.android) {}
     await _player.dispose();
     await _completed.close();
   }

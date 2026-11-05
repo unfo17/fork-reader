@@ -17,7 +17,6 @@ import 'custom_tts_page.dart';
 import 'system_tts_page.dart';
 import 'listening_speed_control.dart';
 import 'reader_target.dart';
-import 'enhancement_controls.dart';
 
 class ListeningScope extends InheritedWidget {
   const ListeningScope({
@@ -658,11 +657,6 @@ class _ListeningPanelState extends State<ListeningPanel> {
                 ),
               ),
               const SizedBox(height: 12),
-              ListeningEnhancementSettings(
-                enhancement: widget.controller.enhancement,
-                onChanged: (value) =>
-                    _act(() => widget.controller.setEnhancement(value)),
-              ),
               const SizedBox(height: 12),
               Row(
                 children: [

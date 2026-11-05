@@ -85,15 +85,6 @@ flutter:
   uses-material-design: true
   assets:
     - assets/branding/app-icon.png
-    - assets/report/
-    - assets/reading_previews/archive-117.webp
-    - assets/reading_previews/shelf-117.webp
-    - assets/reading_previews/editorial-117.webp
-    - assets/reading_previews/constellation-117.webp
-    - assets/reading_previews/signal-117.webp
-    - assets/reading_previews/score-117.webp
-    - assets/reading_previews/ink-117.webp
-    - assets/reading_previews/festival-117.webp
     - assets/fonts/OFL-BarlowCondensed.txt
     - assets/fonts/OFL-NotoSerifSC.txt
     - assets/fonts/OFL-SourceHanSerif.txt
