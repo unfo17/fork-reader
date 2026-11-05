@@ -32,6 +32,8 @@ internal class ChapterSearchWindow private constructor(html: String) {
     private fun coordinate(index: Int): Int? = if (index in 0 until raw.length) coordinates[index] else null
     private var chapterStart = 0
     private var chapterEnd = Int.MAX_VALUE
+    private var boundaries: List<Int> = listOf(0)
+    data class ChapterSpan(val start: Int, val end: Int, val chapter: Int)
 
     init {
         var position = 0
@@ -82,17 +84,13 @@ internal class ChapterSearchWindow private constructor(html: String) {
         return selected?.let { heads[it] }
     }
 
-    fun window(paragraph: Content.TextualElement): Window {
+    private fun paragraphCoordinates(paragraph: Content.TextualElement): IntArray {
         val text = paragraph.text.orEmpty()
+        if (text.isEmpty()) return IntArray(0)
         val selector = paragraph.locator.toJSON().optJSONObject("locations")?.optString("cssSelector").orEmpty()
         val node = element(selector) ?: error("无法精确定位当前章节的正文段落")
         val start = starts.getValue(node); val end = ends.getValue(node)
-        if (heads.getValue(node) >= chapterEnd) return Window(0, 0)
-        if (end > start && coordinates[end - 1] < chapterStart) {
-            consumedCoordinate = maxOf(consumedCoordinate, coordinates[end - 1] + 1)
-            return Window(0, 0)
-        }
-        if (start == end) return if (heads.getValue(node) in chapterStart until chapterEnd) Window(0, text.length) else Window(0, 0)
+        if (start == end) return IntArray(text.length) { heads.getValue(node) }
         if (cachedNode !== node) {
             val normalized = StringBuilder(); val map = IntArray(end - start)
             for (index in start until end) {
@@ -111,15 +109,35 @@ internal class ChapterSearchWindow private constructor(html: String) {
         val offset = cachedText.indexOf(text, low)
         require(offset >= 0) { "无法精确划分当前章节，请使用全书搜索" }
         consumedCoordinate = map[offset + text.length - 1] + 1
-        var first = 0; var last = text.length
-        while (first < last && map[offset + first] < chapterStart) first++
-        while (last > first && map[offset + last - 1] >= chapterEnd) last--
+        return IntArray(text.length) { map[offset + it] }
+    }
+
+    fun window(paragraph: Content.TextualElement): Window {
+        val map = paragraphCoordinates(paragraph)
+        var first = 0; var last = map.size
+        while (first < last && map[first] < chapterStart) first++
+        while (last > first && map[last - 1] >= chapterEnd) last--
         return Window(first, last)
+    }
+
+    /** Boundaries can occur inside one paragraph; speech must not cross them in one WAV. */
+    fun chapters(paragraph: Content.TextualElement): List<ChapterSpan> {
+        val map = paragraphCoordinates(paragraph)
+        if (map.isEmpty()) return emptyList()
+        fun chapter(at: Int): Int { val found = boundaries.binarySearch(at); return if (found >= 0) found else (-found - 2).coerceAtLeast(0) }
+        val spans = mutableListOf<ChapterSpan>()
+        var start = 0; var current = chapter(map[0])
+        for (at in 1 until map.size) {
+            val next = chapter(map[at])
+            if (next != current) { spans += ChapterSpan(start, at, current); start = at; current = next }
+        }
+        spans += ChapterSpan(start, map.size, current)
+        return spans
     }
 
     companion object {
         fun resource(href: String) = href.substringBefore('#').substringBefore('?')
-        suspend fun create(publication: Publication, href: String, current: Locator?): ChapterSearchWindow? {
+        suspend fun create(publication: Publication, href: String, current: Locator?, wholeResource: Boolean = false): ChapterSearchWindow? {
             fun flatten(links: List<Link>): List<Link> = links.flatMap { listOf(it) + flatten(it.children) }
             val toc = flatten(publication.tableOfContents).filter { resource(it.href.toString()) == resource(href) }
             if (toc.none { '#' in it.href.toString() }) return null
@@ -136,7 +154,8 @@ internal class ChapterSearchWindow private constructor(html: String) {
                 if (fragment.isEmpty()) 0 else index.anchor(fragment)?.let { index.heads[it] }
             }.map { if (it <= (index.coordinate(0) ?: 0)) 0 else it }.distinct().sorted()
             require(boundaries.isNotEmpty()) { "目录锚点无法定位，请使用全书搜索" }
-            val at = current?.let { index.position(it) }
+            index.boundaries = (listOf(0) + boundaries).distinct().sorted()
+            val at = if (wholeResource) 0 else current?.let { index.position(it) }
                 ?: href.substringAfter('#', "").takeIf { it.isNotEmpty() }?.let { index.anchor(it) }?.let { index.heads[it] }
                 ?: if (boundaries.size == 1 || current?.locations?.progression == 0.0) 0 else null
             require(at != null) { "无法确定当前章节，请从目录打开章节后重试" }

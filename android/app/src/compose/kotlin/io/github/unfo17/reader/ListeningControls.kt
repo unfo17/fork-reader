@@ -60,11 +60,13 @@ import androidx.compose.ui.unit.dp
             }
             TextButton(onClick = onVoiceSettings) { Text("系统语音与音色") }
             Text("睡眠定时", style = MaterialTheme.typography.titleMedium)
-            state.sleepUntil?.let { until -> Text("${java.time.Instant.ofEpochMilli(until).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))} 暂停朗读") }
+            if (state.sleepAfterChapter) Text("本章结束后暂停朗读")
+            else state.sleepUntil?.let { until -> Text("${java.time.Instant.ofEpochMilli(until).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))} 暂停朗读") }
                 ?: Text("当前未设置定时")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(5, 15, 30, 60).forEach { minutes -> TextButton(enabled = state.active, onClick = { ListeningSession.sleep(context, minutes) }) { Text("$minutes 分钟") } }
-                TextButton(enabled = state.active && state.sleepUntil != null, onClick = { ListeningSession.sleep(context, 0) }) { Text("关闭定时") }
+                TextButton(enabled = state.active, onClick = { ListeningSession.sleepAfterChapter(context, true) }) { Text("本章结束") }
+                TextButton(enabled = state.active && (state.sleepUntil != null || state.sleepAfterChapter), onClick = { ListeningSession.sleep(context, 0) }) { Text("关闭定时") }
             }
             TextButton(enabled = state.bookId.isNotBlank(), onClick = {
                 if (Library.get(context).books().none { it.id == state.bookId }) error = "原书已移除，请重新导入后阅读"

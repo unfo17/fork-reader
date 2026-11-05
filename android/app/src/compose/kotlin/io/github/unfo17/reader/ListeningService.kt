@@ -45,6 +45,8 @@ class ListeningService : Service() {
     private lateinit var store: ListeningStore
     private var currentCursor: ListeningCursor? = null
     private var lastSave = 0L
+    private var currentChapter: String? = null
+    private var sleepChapterTarget: String? = null
     private val resumes = Channel<Unit>(Channel.CONFLATED)
     private var snapshot: ListeningSnapshot
         get() = ListeningSession.mutable.value
@@ -85,6 +87,13 @@ class ListeningService : Service() {
             ListeningSession.PAUSE -> if (snapshot.active) pause() else stopSelf(startId)
             ListeningSession.RESUME -> if (snapshot.active) resume() else stopSelf(startId)
             ListeningSession.STOP -> finish(ListeningPhase.STOPPED)
+            ListeningSession.CHAPTER_SLEEP -> if (snapshot.active) {
+                timer?.cancel()
+                val enabled = intent.getBooleanExtra("enabled", false)
+                sleepChapterTarget = currentChapter.takeIf { enabled }
+                snapshot = snapshot.copy(sleepUntil = null, sleepAfterChapter = enabled)
+                publish(force = true)
+            } else stopSelf(startId)
             ListeningSession.SLEEP -> if (snapshot.active) setTimer(intent.getLongExtra("until", 0L).takeIf { it > 0 }) else stopSelf(startId)
             ListeningSession.SPEED -> if (snapshot.active) {
                 val speed = intent.getFloatExtra("speed", 1f)
@@ -99,6 +108,7 @@ class ListeningService : Service() {
         saveCursor(force = true)
         val epoch = ++generation
         playback?.cancel(); audio.stop(); timer?.cancel(); paused = false; decoding = false; currentCursor = null
+        currentChapter = null; sleepChapterTarget = null
         val saved = intent.getStringExtra("resumeOwner")?.let { store.cursor(it) }
         val bookId = intent.getStringExtra("book") ?: saved?.bookId.orEmpty()
         val seriesId = intent.getStringExtra("series") ?: saved?.seriesId
@@ -132,6 +142,8 @@ class ListeningService : Service() {
                         } else if (index == 0) initial else null
                         val iterator = withContext(Dispatchers.IO) { publication!!.content(begin)?.iterator() }
                             ?: error("这本书没有可提取的朗读正文")
+                        var chapterResource: String? = null
+                        var chapterIndex: ChapterSearchWindow? = null
                         while (true) {
                             ensureActive()
                             val paragraph = withContext(Dispatchers.IO) { iterator.nextOrNull() } ?: break
@@ -143,10 +155,25 @@ class ListeningService : Service() {
                                 if (paragraphKey != resume.paragraphKey) continue
                                 matchedParagraph = true
                             }
-                            for (segment in SpeechSegments.split(text)) {
+                            val resource = ChapterSearchWindow.resource(paragraph.locator.href.toString())
+                            if (chapterResource != resource) {
+                                chapterIndex = withContext(Dispatchers.IO) { ChapterSearchWindow.create(publication!!, resource, null, wholeResource = true) }
+                                chapterResource = resource
+                            }
+                            val spans = chapterIndex?.chapters(paragraph) ?: listOf(ChapterSearchWindow.ChapterSpan(0, text.length, 0))
+                            for (span in spans) for (part in SpeechSegments.split(text.substring(span.start, span.end))) {
+                                val segment = part.copy(start = part.start + span.start, end = part.end + span.start)
                                 if (!resumedSegment && resume != null && segment.end <= resume.start) continue
                                 val restoring = resume?.takeUnless { resumedSegment }
                                 resumedSegment = true
+                                val chapter = "${book.id}:$resource:${span.chapter}"
+                                if (snapshot.sleepAfterChapter && sleepChapterTarget != null && sleepChapterTarget != chapter) {
+                                    snapshot = snapshot.copy(sleepAfterChapter = false)
+                                    sleepChapterTarget = null
+                                    pause()
+                                }
+                                currentChapter = chapter
+                                if (snapshot.sleepAfterChapter && sleepChapterTarget == null) sleepChapterTarget = chapter
                                 while (paused) resumes.receive()
                                 ensureActive()
                                 val preferences = SystemSpeechSettings.load(this@ListeningService)
@@ -178,6 +205,12 @@ class ListeningService : Service() {
                     } finally { withContext(NonCancellable + Dispatchers.IO) { publication?.close() } }
                 }
                 if (!any) error("当前位置没有可朗读的文字")
+                if (epoch == generation && snapshot.sleepAfterChapter) {
+                    snapshot = snapshot.copy(sleepAfterChapter = false)
+                    sleepChapterTarget = null
+                    pause()
+                    while (paused) resumes.receive()
+                }
                 if (epoch == generation) finish(ListeningPhase.COMPLETED)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { coroutineContext.ensureActive(); if (epoch == generation) finish(ListeningPhase.FAILED, e.message ?: "听书失败，请检查系统语音设置") }
@@ -196,15 +229,19 @@ class ListeningService : Service() {
         if (!snapshot.active) return
         if (snapshot.sleepUntil?.let { it <= System.currentTimeMillis() } == true) { timer?.cancel(); snapshot = snapshot.copy(sleepUntil = null) }
         try {
-            audio.resume(); paused = false; resumes.trySend(Unit); acquireWake()
+            paused = false; acquireWake()
             snapshot = snapshot.copy(phase = if (audio.ready) ListeningPhase.PLAYING else ListeningPhase.PREPARING, error = null)
-            publish(force = true)
+            // Resuming a finished chapter can synchronously complete the playback coroutine.
+            // Publish the requested state first, so its terminal state cannot be overwritten.
+            audio.resume(); resumes.trySend(Unit)
+            if (snapshot.active) publish(force = true)
         } catch (e: Exception) { paused = true; snapshot = snapshot.copy(phase = ListeningPhase.PAUSED, error = e.message); publish(force = true) }
     }
     private fun setTimer(until: Long?) {
         require(until == null || until in 1..1000000000000000L)
         timer?.cancel()
-        snapshot = snapshot.copy(sleepUntil = until)
+        sleepChapterTarget = null
+        snapshot = snapshot.copy(sleepUntil = until, sleepAfterChapter = false)
         if (until != null) timer = scope.launch { delay((until - System.currentTimeMillis()).coerceAtLeast(0)); snapshot = snapshot.copy(sleepUntil = null); pause() }
         publish(force = true)
     }
@@ -227,7 +264,7 @@ class ListeningService : Service() {
     private fun finish(phase: ListeningPhase, error: String? = null) {
         saveCursor(force = true, completed = phase == ListeningPhase.COMPLETED)
         generation++; playback?.cancel(); audio.stop(); timer?.cancel(); releaseWake()
-        snapshot = snapshot.copy(phase = phase, error = error, sleepUntil = null)
+        snapshot = snapshot.copy(phase = phase, error = error, sleepUntil = null, sleepAfterChapter = false)
         media.isActive = false
         if (foreground) { foreground = false; stopForeground(STOP_FOREGROUND_REMOVE) }
         stopSelf()
@@ -267,7 +304,7 @@ class ListeningService : Service() {
     override fun onDestroy() {
         if (snapshot.active) saveCursor(force = true)
         generation++; scope.cancel(); audio.close(); client.close(); releaseWake(); media.release()
-        if (snapshot.active) snapshot = snapshot.copy(phase = ListeningPhase.STOPPED, sleepUntil = null)
+        if (snapshot.active) snapshot = snapshot.copy(phase = ListeningPhase.STOPPED, sleepUntil = null, sleepAfterChapter = false)
         super.onDestroy()
     }
     companion object { const val CHANNEL = "listening"; const val NOTIFICATION_ID = 0x574b38 }

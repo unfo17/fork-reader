@@ -12,7 +12,7 @@ data class ListeningSnapshot(
     val phase: ListeningPhase = ListeningPhase.STOPPED,
     val bookId: String = "", val seriesId: String? = null, val title: String = "", val text: String = "",
     val locator: String? = null, val positionMillis: Long = 0, val durationMillis: Long = 0,
-    val speed: Float = 1f, val error: String? = null, val sleepUntil: Long? = null,
+    val speed: Float = 1f, val error: String? = null, val sleepUntil: Long? = null, val sleepAfterChapter: Boolean = false,
 ) {
     val active get() = phase in listOf(ListeningPhase.PREPARING, ListeningPhase.PLAYING, ListeningPhase.PAUSED)
 }
@@ -26,6 +26,7 @@ object ListeningSession {
     const val RESUME = "io.github.unfo17.reader.listening.RESUME"
     const val STOP = "io.github.unfo17.reader.listening.STOP"
     const val SPEED = "io.github.unfo17.reader.listening.SPEED"
+    const val CHAPTER_SLEEP = "io.github.unfo17.reader.listening.CHAPTER_SLEEP"
     const val SLEEP = "io.github.unfo17.reader.listening.SLEEP"
     fun start(context: Context, bookId: String, seriesId: String?, locator: Locator?) {
         ContextCompat.startForegroundService(context, Intent(context, ListeningService::class.java).setAction(START)
@@ -43,6 +44,9 @@ object ListeningSession {
     fun sleepUntil(context: Context, deadline: Long?) {
         require(deadline == null || deadline - System.currentTimeMillis() in 0..24 * 60 * 60 * 1000L)
         context.startService(Intent(context, ListeningService::class.java).setAction(SLEEP).putExtra("until", deadline ?: 0L))
+    }
+    fun sleepAfterChapter(context: Context, enabled: Boolean) {
+        context.startService(Intent(context, ListeningService::class.java).setAction(CHAPTER_SLEEP).putExtra("enabled", enabled))
     }
     fun speed(context: Context, value: Float) {
         require(value.isFinite() && value in .5f..3f)

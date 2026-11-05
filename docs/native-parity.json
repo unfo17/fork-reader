@@ -454,12 +454,15 @@
       "id": "speech.timer",
       "feature": "睡眠定时、暂停恢复与章节结束",
       "upstream": [
-        "lib/listening/widgets.dart"
+        "lib/listening/widgets.dart",
+        "lib/listening/controller.dart"
       ],
-      "status": "partial",
+      "status": "verified",
       "tests": [
         "io.github.unfo17.reader.ListeningServiceTest.foregroundSessionSurvivesReaderDestructionAndMediaControlsPreserveAudioPosition",
-        "io.github.unfo17.reader.ListeningUiTest.libraryMiniPlayerAndSleepControlsOperateTheSameBackgroundSession"
+        "io.github.unfo17.reader.ListeningUiTest.libraryMiniPlayerAndSleepControlsOperateTheSameBackgroundSession",
+        "io.github.unfo17.reader.ListeningChapterTest.chapterTimerStopsBeforeAnInlineTocAnchorWithoutSynthesizingTheNextChapter",
+        "io.github.unfo17.reader.ListeningChapterTest.lastChapterTimerPausesBeforeTheNextSeriesVolumeAndCanBeCancelled"
       ]
     },
     {

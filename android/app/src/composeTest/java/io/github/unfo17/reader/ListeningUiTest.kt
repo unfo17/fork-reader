@@ -70,8 +70,11 @@ class ListeningUiTest {
                 waitUntil { ListeningSession.state.value.let { state -> state.phase == ListeningPhase.PLAYING && state.durationMillis >= 14000 } }
                 click("正在听书"); click("暂停朗读")
                 waitUntil { ListeningSession.state.value.phase == ListeningPhase.PAUSED }
+                click("本章结束"); waitUntil { ListeningSession.state.value.sleepAfterChapter }
+                assertNull(ListeningSession.state.value.sleepUntil)
                 click("15 分钟")
                 waitUntil { ListeningSession.state.value.sleepUntil != null }
+                assertFalse(ListeningSession.state.value.sleepAfterChapter)
                 assertTrue(ListeningSession.state.value.sleepUntil!! > System.currentTimeMillis() + 14 * 60000L)
                 click("关闭定时"); waitUntil { ListeningSession.state.value.sleepUntil == null }
                 click("系统语音与音色"); click("取消")
