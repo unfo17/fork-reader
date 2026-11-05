@@ -58,9 +58,11 @@ Future<LocalImportReport> importLocalDocuments({
   final failures = <LocalImportNotice>[];
   for (final selection in selections) {
     final prepared = <BookDocumentSelection>[];
+    BookDocumentSelection? staged;
     try {
       if (selection.error case final error?) throw FormatException(error);
-      prepared.addAll(await documents.prepareBook(selection));
+      staged = await documents.stageForImport(selection);
+      prepared.addAll(await documents.prepareBook(staged));
       for (final source in prepared) {
         try {
           if (source.error case final error?) throw FormatException(error);
@@ -88,6 +90,10 @@ Future<LocalImportReport> importLocalDocuments({
       // Only release generated children here; callers may still need the
       // selected original for linked imports or verified move operations.
       final cleanup = [
+        if (staged != null &&
+            staged.path != selection.path &&
+            !prepared.any((p) => p.path == staged!.path))
+          staged,
         ...prepared.where((p) => p.path != selection.path),
         if (releaseSources) selection,
       ];
