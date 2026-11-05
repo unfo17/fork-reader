@@ -1023,3 +1023,5 @@ lib/reading_widget_reference.dart
 lib/reading_widget_reference_capture.dart
 lib/reading_widget_skin.dart
 lib/reading_widget_skin_picker.dart
+android/app/src/main/kotlin/org/mewx/wenku8_flutter/BookArchiveImport.kt
+android/app/src/main/kotlin/org/mewx/wenku8_flutter/BookFolderScanner.kt

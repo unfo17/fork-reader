@@ -5,14 +5,6 @@ const maxLocalArchiveBytes = 512 * 1024 * 1024;
 const bookFormatLabels = <String, String>{
   'epub': 'EPUB',
   'txt': 'TXT',
-  'kindle': 'Kindle',
-  'pdf': 'PDF',
-  'fb2': 'FB2',
-  'docx': 'DOCX',
-  'doc': 'DOC',
-  'rtf': 'RTF',
-  'html': 'HTML',
-  'markdown': 'Markdown',
   'zip': 'ZIP',
 };
 String bookFormatKey(String name) =>
@@ -31,19 +23,13 @@ Set<String> bookFormatExtensions(Iterable<String> formats) => {
       _ => [format],
     },
 };
-const bookImportFormatsSummary =
-    'TXT、EPUB、Kindle（MOBI / AZW / AZW3 / PRC）、FB2、PDF、DOC / DOCX、RTF、HTML 和 Markdown，支持 ZIP 批量导入';
-const iosBookImportFormatsSummary =
-    'TXT、EPUB、Kindle（MOBI / AZW / AZW3 / PRC）、FB2、PDF、DOCX、RTF、HTML 和 Markdown，支持 ZIP 批量导入';
+const bookImportFormatsSummary = '预览版支持 TXT、EPUB 和 ZIP 批量导入';
+const iosBookImportFormatsSummary = bookImportFormatsSummary;
 const bookImportLimitsSummary =
-    'EPUB / PDF / DOCX / ZIP：512 MiB；Kindle：256 MiB；TXT / FB2 / RTF / DOC：128 MiB；HTML / Markdown：32 MiB。ZIP 展开后合计不超过 1 GiB。';
-const iosBookImportLimitsSummary =
-    'EPUB / PDF / DOCX / ZIP：512 MiB；Kindle：256 MiB；TXT / FB2 / RTF：128 MiB；HTML / Markdown：32 MiB。ZIP 展开后合计不超过 1 GiB。';
-
-bool supportsBookImport(String name) => RegExp(
-  r'\.(txt|epub|mobi|azw|azw3|prc|fb2|pdf|docx?|rtf|html?|xhtml|md|markdown|zip)$',
-  caseSensitive: false,
-).hasMatch(name);
+    'TXT：128 MiB；EPUB / ZIP：512 MiB；ZIP 展开后不超过 1 GiB。';
+const iosBookImportLimitsSummary = bookImportLimitsSummary;
+bool supportsBookImport(String name) =>
+    RegExp(r'\.(txt|epub|zip)$', caseSensitive: false).hasMatch(name);
 
 int localBookByteLimit(String name) =>
     switch (name.split('.').last.toLowerCase()) {

@@ -170,7 +170,7 @@ class BookDocuments internal constructor(
             "prepareLinkedDocument" -> background(result, linked = true) {
                 val lease = links.openDocument(call.argument<String>("reference") ?: "")
                 try {
-                    BookArchiveImport(importRoot).apply { documents = BookMarkupImport(importRoot, BookPdfImport(activity, importRoot)::read) }
+                    BookArchiveImport(importRoot)
                         .prepare(call.argument<String>("name") ?: "", if (lease["descriptor"] is Int)
                             BookDocumentInput(lease["descriptor"] as Int, lease["size"] as Long)
                             else BookDocumentInput(File(lease["path"] as String)))
@@ -197,7 +197,7 @@ class BookDocuments internal constructor(
             "prepareBook" -> background(result) {
                 val source = bookTextFile(call.argument<String>("path") ?: "")
                 val staging = if (imports.initialized && source.parentFile == importRoot.canonicalFile) importRoot else root
-                BookArchiveImport(staging).apply { documents = BookMarkupImport(staging, BookPdfImport(activity, staging)::read) }
+                BookArchiveImport(staging)
                     .prepare(call.argument<String>("name") ?: "", source)
             }
             "readSync" -> background(result) {
