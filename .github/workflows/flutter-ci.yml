@@ -2,7 +2,7 @@ name: Flutter source checks
 
 on:
   push:
-    branches: ['master']
+    branches: ['master', 'flutter-local-only']
   pull_request:
   workflow_dispatch:
 
@@ -19,3 +19,24 @@ jobs:
           persist-credentials: false
       - name: Validate the exact public source commit
         run: python3 tools/check_public_source.py --revision "$(git rev-parse HEAD)"
+
+  android-preview:
+    if: github.ref == 'refs/heads/flutter-local-only'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings
+      - run: flutter build apk --release --target-platform android-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flutter-local-only-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
