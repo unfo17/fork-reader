@@ -35,8 +35,9 @@ internal class BookArchiveImport(private val root: File) {
                     val target = File.createTempFile("prepared-", ".source", root)
                     created += target
                     try {
-                        zip.getInputStream(entry).use { copy(it, target, minOf(limit(display), 1024L * 1024 * 1024 - total)) }
-                        total += target.length()
+                        zip.getInputStream(entry).use { copy(it, target, limit(display)) { count ->
+                            total += count; require(total <= 1024L * 1024 * 1024) { "ZIP 展开后超过 1 GiB" }
+                        } }
                         result += mapOf("name" to display, "path" to target.path)
                     } catch (error: Exception) {
                         target.delete()
@@ -48,11 +49,12 @@ internal class BookArchiveImport(private val root: File) {
             return result
         } catch (error: Exception) { created.forEach { it.delete() }; throw error }
     }
-    private fun copy(input: InputStream, output: File, maximum: Long) {
+    private fun copy(input: InputStream, output: File, maximum: Long, onBytes: (Int) -> Unit = {}) {
         output.outputStream().use { sink ->
             val buffer = ByteArray(65536); var size = 0L
             while (true) {
                 val count = input.read(buffer); if (count < 0) break
+                onBytes(count)
                 size += count; require(size <= maximum) { "文件展开后超过大小限制" }
                 sink.write(buffer, 0, count)
             }

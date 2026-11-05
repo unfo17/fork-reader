@@ -32,6 +32,21 @@ class LocalScanPage extends StatelessWidget {
           children: [
             const Text('扫描已授权的目录，选择文件后再导入。'),
             const SizedBox(height: 20),
+            OutlinedButton(
+              onPressed: isBusy()
+                  ? null
+                  : () async {
+                      try {
+                        await documents.selectScanFolder();
+                      } catch (error) {
+                        if (context.mounted)
+                          ScaffoldMessenger.of(
+                            context,
+                          ).showSnackBar(SnackBar(content: Text('$error')));
+                      }
+                    },
+              child: const Text('选择扫描文件夹'),
+            ),
             FilledButton(
               onPressed: isBusy() ? null : () => onScan(context),
               child: Text(isBusy() ? '扫描中…' : '扫描书籍'),

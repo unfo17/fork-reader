@@ -11,7 +11,7 @@ import java.util.UUID
 
 /** Explicitly authorized SAF trees and optional shared storage only. */
 internal class BookFolderScanner(private val activity: Activity) {
-    private val prefs = activity.getSharedPreferences("readium_scan", 0)
+    private val prefs = activity.getSharedPreferences("book_scan_folders", 0)
     private data class Entry(val uri: Uri, val name: String, val size: Long, val modified: Long, val grant: Uri?)
     private val pending = linkedMapOf<String, Entry>()
     fun formats(): Set<String> = prefs.getStringSet("formats", setOf("txt", "epub", "zip"))!!.toSet()
@@ -29,7 +29,9 @@ internal class BookFolderScanner(private val activity: Activity) {
         check(prefs.edit().remove("tree").putBoolean("all", true).commit()); return info()!!
     }
     fun disconnect() { prefs.getString("tree", null)?.let {
-        try { activity.contentResolver.releasePersistableUriPermission(Uri.parse(it), Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) { }
+        if (!BookTextLinks(activity).usesGrant(Uri.parse(it))) {
+            try { activity.contentResolver.releasePersistableUriPermission(Uri.parse(it), Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) { }
+        }
     }; check(prefs.edit().clear().commit()); pending.clear() }
     fun info(): Map<String, Any>? {
         val tree = prefs.getString("tree", null)
