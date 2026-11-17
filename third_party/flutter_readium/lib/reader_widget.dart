@@ -403,7 +403,10 @@ class _ReadiumReaderWidgetState extends State<ReadiumReaderWidget>
   void _cleanup() {
     _log.d('cleanup ${_channel?.name}!');
     // ignore: invalid_use_of_protected_member
-    _readium.currentReaderWidget = null;
+    if (identical(_readium.currentReaderWidget, this)) {
+      // ignore: invalid_use_of_protected_member
+      _readium.currentReaderWidget = null;
+    }
   }
 
   Locator? _currentLocator;

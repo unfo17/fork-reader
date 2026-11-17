@@ -77,9 +77,12 @@ class ReadiumReaderWidget(
 
     override fun dispose() {
         PluginLog.d(TAG, "::dispose")
-        ReadiumReader.visualClose()
-
-        ReadiumReader.emitReaderStatusUpdate(ReadiumReaderStatus.Closed)
+        // A previous route may finish its exit after the next reader is ready.
+        // Its disposal must not close the new route's global navigator.
+        if (ReadiumReader.currentReaderWidget === this) {
+            ReadiumReader.visualClose()
+            ReadiumReader.emitReaderStatusUpdate(ReadiumReaderStatus.Closed)
+        }
         hasSentReady = false
 
         channel.setMethodCallHandler(null)
