@@ -494,6 +494,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
       letterSpacing: prefs.letterSpacing / fontSize,
       textAlign: prefs.justify ? TextAlign.justify : null,
       textColor: prefs.darkPaper(dark) ? prefs.foreground(dark) : null,
+      // Readium pairs text/background overrides for a readable night palette.
+      // Daytime paper is applied only to the page, preserving publisher boxes.
+      backgroundColor: prefs.darkPaper(dark) ? prefs.background(dark) : null,
     );
     // Set before the platform view is constructed, including its scroll mode.
     _preferences = nextPreferences;
@@ -508,8 +511,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
             .toRadixString(16)
             .padLeft(8, '0')
             .substring(2);
-        // Readium's custom background preference clears every publisher background.
-        // Apply the page paper only, leaving coloured boxes/tables untouched.
+        // In daytime, change only the paper so publisher boxes/tables survive.
+        // At night Readium also clears those backgrounds to match its text colour.
         final css = StringBuffer(
           'html{background-color:#$paper !important;}body{background-color:transparent !important;line-height:$lineHeight !important;}',
         );
