@@ -9330,7 +9330,7 @@ class _ReaderPageState extends State<ReaderPage>
     _stopAutoScroll();
     _suspendListeningFollow();
     try {
-      await showReaderAnnotationEditor(
+      final savedMark = await showReaderAnnotationEditor(
         context,
         state: widget.state,
         novelId: widget.novel.id,
@@ -9343,12 +9343,8 @@ class _ReaderPageState extends State<ReaderPage>
         surfaceWrapper: _readerSurface,
       );
       if (mounted && _readium != null) {
-        for (final mark
-            in widget.state
-                .bookmarksFor(widget.novel.id)
-                .where((m) => m.quote == selected.text)) {
-          await _readium!.rememberBookmark(mark.id, selected: true);
-        }
+        if (savedMark != null)
+          await _readium!.rememberBookmark(savedMark.id, selected: true);
         _nativeMarksKey = null;
         setState(() {});
       }
