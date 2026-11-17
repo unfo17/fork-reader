@@ -5737,9 +5737,10 @@ class _ReaderPageState extends State<ReaderPage>
 
   void _nativeLocation(int chapter, double fraction, String? text) {
     if (!mounted) return;
+    final moved = _nativeFraction != fraction || _chapter != chapter;
     _nativeFraction = fraction;
     _nativeText = text;
-    if (_verifiedEligible) _verifiedReading.advance();
+    if (moved && _verifiedEligible) _verifiedReading.advance();
     if (chapter != _chapter) {
       _nativeLocationChanging = true;
       _go(chapter);
@@ -8298,8 +8299,8 @@ class _ReaderPageState extends State<ReaderPage>
               .savePosition(
                 novel: _sourceBook,
                 chapter: _chapter,
-                offset: at.fraction,
-                maximum: 1,
+                offset: at.offset,
+                maximum: ReadiumReaderBridge.positionExtent,
                 width: _layoutWidth,
                 notify: notify,
                 paragraphIndex: at.paragraphIndex,
@@ -8367,7 +8368,7 @@ class _ReaderPageState extends State<ReaderPage>
       return ReadingPosition(
         chapter: _chapter,
         chapterId: _sourceBook.chapters[_chapter].id,
-        offset: _nativeFraction,
+        offset: _nativeFraction * ReadiumReaderBridge.positionExtent,
         fraction: _nativeFraction,
         fontSize: _fontSize,
         width: _layoutWidth,

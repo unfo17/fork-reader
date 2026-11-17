@@ -76,6 +76,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
           locator?.href.split('#').first;
   Future<void> _saves = Future.value();
   Future<void> _commands = Future.value();
+  static const positionExtent = 100000.0;
+  int _locationTicket = 0;
   static const native = MethodChannel('org.mewx.wenku8/readium_controls');
   String get _key => 'readium.locator.v1.${book.id}';
   rd.Link? linkForChapter(int index) {
@@ -195,6 +197,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       if (initialLocator == null && first != null)
         initialLocator = publication!.locatorFromLink(first);
       _events = api.onTextLocatorChanged.listen((at) {
+        final locationTicket = ++_locationTicket;
         if (_disposed || _owner != this) return;
         if (!_firstLocation.isCompleted) _firstLocation.complete();
         if (locator?.href != at.href) _scrollAtEnd = false;
@@ -204,6 +207,24 @@ class ReadiumReaderBridge extends ChangeNotifier {
         ready = true;
         progress.value = fraction;
         onLocation(chapter, fraction, at.text?.highlight);
+        if ((at.text?.highlight ?? '').trim().isEmpty &&
+            Platform.isAndroid &&
+            at.locations?.cssSelector != null) {
+          unawaited(
+            () async {
+              final selector = jsonEncode(at.locations!.cssSelector);
+              final raw = await native.invokeMethod<String>('evaluate', {
+                'script':
+                    '(function(){var e=document.querySelector($selector);if(!e)return null;var c=e.cloneNode(true);c.querySelectorAll("rt,script,style").forEach(function(n){n.remove();});return (c.textContent||"").trim().slice(0,500);})()',
+              });
+              if (_disposed || locationTicket != _locationTicket || raw == null)
+                return;
+              final text = jsonDecode(raw);
+              if (text is String && text.trim().isNotEmpty)
+                onLocation(chapter, fraction, text);
+            }().catchError((Object _) {}),
+          );
+        }
         persist();
         notifyListeners();
       });
