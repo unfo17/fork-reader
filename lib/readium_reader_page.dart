@@ -382,7 +382,6 @@ class ReadiumReaderBridge extends ChangeNotifier {
           : null,
       letterSpacing: prefs.letterSpacing / fontSize,
       textAlign: prefs.justify ? TextAlign.justify : null,
-      backgroundColor: prefs.background(dark),
       textColor: prefs.darkPaper(dark) ? prefs.foreground(dark) : null,
     );
     // Set before the platform view is constructed, including its scroll mode.
@@ -390,7 +389,17 @@ class ReadiumReaderBridge extends ChangeNotifier {
     return command(() async {
       await api.setEPUBPreferences(_preferences);
       if (Platform.isAndroid) {
-        final css = StringBuffer('body{line-height:$lineHeight !important;}');
+        final paper = prefs
+            .background(dark)
+            .toARGB32()
+            .toRadixString(16)
+            .padLeft(8, '0')
+            .substring(2);
+        // Readium's custom background preference clears every publisher background.
+        // Apply the page paper only, leaving coloured boxes/tables untouched.
+        final css = StringBuffer(
+          'html{background-color:#$paper !important;}body{background-color:transparent !important;line-height:$lineHeight !important;}',
+        );
         if (prefs.indent) css.write('p{text-indent:2em !important;}');
         if (prefs.justify) css.write('p{text-align:justify !important;}');
         if (prefs.paragraphGapOverride)
