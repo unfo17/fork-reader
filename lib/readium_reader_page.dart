@@ -28,7 +28,13 @@ class ReadiumReaderBridge extends ChangeNotifier {
   }) {
     controls = ValueNotifier(chromeVisible);
     native.setMethodCallHandler((call) async {
-      if (call.method == 'selectionEnded') _owner?.onSelectionEnd();
+      if (call.method == 'selectionEnded') {
+        final owner = _owner;
+        if (owner != null) {
+          owner._selectionTicket++;
+          owner.onSelectionEnd();
+        }
+      }
     });
     chapter = initialChapter;
     opening = _open();
@@ -68,7 +74,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     final ticket = ++_selectionTicket;
     final raw = await native.invokeMethod<String>('evaluate', {
       'script':
-          '(function(){var s=window.getSelection();if(!s||!s.rangeCount)return null;var r=s.getRangeAt(0).getBoundingClientRect();return JSON.stringify({x:r.x,y:r.y,w:r.width,h:r.height,v:window.innerWidth});})()',
+          '(function(){var s=window.getSelection();if(!s||!s.rangeCount||s.isCollapsed)return null;var r=s.getRangeAt(0).getBoundingClientRect();return JSON.stringify({x:r.x,y:r.y,w:r.width,h:r.height,v:window.innerWidth});})()',
     });
     if (_disposed || ticket != _selectionTicket || raw == null) return;
     Object? decoded = jsonDecode(raw);
@@ -77,11 +83,12 @@ class ReadiumReaderBridge extends ChangeNotifier {
     if (decoded is! Map || box is! RenderBox || !box.hasSize) return;
     final scale = box.size.width / (decoded['v'] as num).toDouble();
     final bounds = Rect.fromLTWH(
-      (decoded['x'] as num) * scale,
-      (decoded['y'] as num) * scale,
-      (decoded['w'] as num) * scale,
-      (decoded['h'] as num) * scale,
+      (decoded['x'] as num).toDouble() * scale,
+      (decoded['y'] as num).toDouble() * scale,
+      (decoded['w'] as num).toDouble() * scale,
+      (decoded['h'] as num).toDouble() * scale,
     ).shift(box.localToGlobal(Offset.zero));
+    if (bounds.isEmpty) return;
     onSelection(
       event.selectedText ?? event.locator.text?.highlight ?? '',
       bounds,
