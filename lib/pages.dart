@@ -5949,9 +5949,7 @@ class _ReaderPageState extends State<ReaderPage>
             prefs.marginBottom +
             ReaderScrollLocation.extentOf(context),
       ),
-      child: prefs.chapterEntrance
-          ? FadeTransition(opacity: _chapterReveal, child: bridge.view())
-          : bridge.view(),
+      child: FadeTransition(opacity: _chapterReveal, child: bridge.view()),
     );
   }
 
