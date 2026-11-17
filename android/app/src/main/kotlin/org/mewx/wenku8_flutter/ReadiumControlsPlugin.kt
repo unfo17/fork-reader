@@ -26,6 +26,11 @@ class ReadiumControlsPlugin : FlutterPlugin {
                                 else ReadiumReader.visualGoBackward(animated)
                                 result.success(null)
                             }
+                            "decorations" -> {
+                                val marks = call.argument<List<Map<String, Any>>>("marks") ?: emptyList()
+                                ReadiumReader.applyAppDecorations(marks, call.argument<String>("group") ?: "wenku")
+                                result.success(null)
+                            }
                             "style" -> {
                                 val script = call.argument<String>("script") ?: ""
                                 ReadiumReader.appReaderStyleScript = script

@@ -11,3 +11,7 @@ data class SpotlightStyle(
     @ColorInt override val tint: Int,
 ) : Decoration.Style,
     Decoration.Style.Tinted
+
+/** Original reader's outline annotation, drawn by the Readium navigator. */
+@Parcelize
+data class OutlineStyle(@ColorInt override val tint: Int) : Decoration.Style, Decoration.Style.Tinted

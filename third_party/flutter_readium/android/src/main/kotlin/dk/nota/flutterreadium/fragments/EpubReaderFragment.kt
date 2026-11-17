@@ -14,6 +14,7 @@ import dk.nota.flutterreadium.PluginLog
 import dk.nota.flutterreadium.R
 import dk.nota.flutterreadium.ReadiumReader
 import dk.nota.flutterreadium.SpotlightStyle
+import dk.nota.flutterreadium.OutlineStyle
 import dk.nota.flutterreadium.effectiveForLayout
 import dk.nota.flutterreadium.isFixed
 import dk.nota.flutterreadium.models.EpubReaderViewModel
@@ -632,6 +633,15 @@ class EpubReaderFragment :
                                 experimentalPositioning = true,
                             ).also { templates ->
                                 templates[SpotlightStyle::class] = spotlightDecorationTemplate()
+                                templates[OutlineStyle::class] = HtmlDecorationTemplate(
+                                    layout = HtmlDecorationTemplate.Layout.BOXES,
+                                    width = HtmlDecorationTemplate.Width.BOUNDS,
+                                    element = { decoration ->
+                                        val tint = (decoration.style as OutlineStyle).tint
+                                        val rgb = "rgb(${android.graphics.Color.red(tint)},${android.graphics.Color.green(tint)},${android.graphics.Color.blue(tint)})"
+                                        """<div style="border:1px solid $rgb !important;border-radius:3px;box-sizing:border-box;"/>"""
+                                    },
+                                )
                             },
                     // Only register the callback if custom selectionActions are added.
                     selectionActionModeCallback =

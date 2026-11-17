@@ -5685,6 +5685,7 @@ class _ReaderPageState extends State<ReaderPage>
   bool _nativeLocationChanging = false;
   double _nativeFraction = 0;
   String? _nativeText;
+  String? _nativeReportedError;
   bool _nativeInitialRestored = false;
   bool _nativeAutoBusy = false;
   void _restoreNativePosition() {
@@ -5715,6 +5716,13 @@ class _ReaderPageState extends State<ReaderPage>
 
   void _nativeChanged() {
     if (!mounted) return;
+    final error = _readium!.error;
+    if (error != null && _nativeReportedError != error) {
+      _nativeReportedError = error;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) showNovelFeedback(context, error);
+      });
+    }
     _ready = _readium!.ready && _currentContent != null;
     _restoreNativePosition();
     setState(() {});
@@ -5802,8 +5810,80 @@ class _ReaderPageState extends State<ReaderPage>
     if (action == 'dictionary') unawaited(_lookupQuote(quote));
   }
 
+  String? _nativeMarksKey;
+  void _nativeOpenAnnotation(String id) {
+    final mark = widget.state
+        .bookmarksFor(widget.novel.id)
+        .where((m) => m.id == id.split(':').first)
+        .firstOrNull;
+    if (mark == null) return;
+    unawaited(
+      showReaderAnnotationEditor(
+        context,
+        state: widget.state,
+        novelId: widget.novel.id,
+        novel: _sourceBook,
+        bookmark: mark,
+        rangeContextResolver: _annotationRangeContext,
+        surfaceWrapper: _readerSurface,
+      ).whenComplete(() {
+        if (mounted) {
+          _nativeMarksKey = null;
+          setState(() {});
+        }
+      }),
+    );
+  }
+
+  void _nativeAnnotations() {
+    final engine = _readium, content = _currentContent;
+    if (engine == null || !engine.ready || content == null) return;
+    final bookmarks = widget.state.bookmarksFor(widget.novel.id);
+    final key =
+        '$_chapter|${content.revision}|${bookmarks.map((m) => '${m.id}/${m.annotation.updatedAt}/${m.rangeUpdatedAt}').join(',')}';
+    if (_nativeMarksKey == key) return;
+    _nativeMarksKey = key;
+    final marks = <Map<String, dynamic>>[];
+    for (final bookmark in bookmarks) {
+      final annotation = bookmark.annotation;
+      if (annotation.style == ReaderMarkStyle.none) continue;
+      var ordinal = 0;
+      for (final range in bookmark.underlineRanges) {
+        if (range.chapterId != _sourceBook.chapters[_chapter].id) continue;
+        for (
+          var i = range.startParagraph;
+          i <= range.endParagraph && i < content.paragraphs.length;
+          i++
+        ) {
+          final paragraph = content.paragraphs[i];
+          final start = (i == range.startParagraph ? range.startOffset : 0)
+              .clamp(0, paragraph.length);
+          final end =
+              (i == range.endParagraph ? range.endOffset : paragraph.length)
+                  .clamp(start, paragraph.length);
+          if (start == end) continue;
+          final mark = engine.mark(
+            id: '${bookmark.id}:${ordinal++}',
+            chapter: _chapter,
+            text: paragraph.substring(start, end),
+            before: paragraph.substring(math.max(0, start - 60), start),
+            after: paragraph.substring(
+              end,
+              math.min(paragraph.length, end + 60),
+            ),
+            style: annotation.style.name,
+            color: annotation.color.argb ?? 0xffc69a32,
+          );
+          if (mark != null) marks.add(mark);
+        }
+      }
+    }
+    unawaited(engine.decorations('wenku-annotations', marks));
+  }
+
   Widget _nativeBody(BuildContext context) {
     final bridge = _readium!;
+    _nativeAnnotations();
     final prefs = _readerPreferences;
     final dark = Theme.of(context).brightness == Brightness.dark;
     final hidden = widget.state.hiddenReaderLanguagesFor(widget.novel.id);
@@ -6561,6 +6641,7 @@ class _ReaderPageState extends State<ReaderPage>
         chromeVisible: _chromeTarget,
         onLocation: _nativeLocation,
         onAction: _nativeAction,
+        onAnnotation: _nativeOpenAnnotation,
         onTap: (point) {
           final box = context.findRenderObject() as RenderBox?;
           _contentTap(
@@ -6678,6 +6759,7 @@ class _ReaderPageState extends State<ReaderPage>
   void didChangeDependencies() {
     super.didChangeDependencies();
     _activityRouteCurrent = ModalRoute.isCurrentOf(context) != false;
+    if (_activityRouteCurrent) _readium?.activate();
     _syncReadingActivity();
     _releaseFeedbackHeader ??= bindNovelFeedbackHeader(context, _chrome);
     final handoff = ReaderHandoffScope.maybeOf(context);
@@ -6867,6 +6949,8 @@ class _ReaderPageState extends State<ReaderPage>
       _listeningTarget = null;
       _followTicket++;
       _followScroll.cancel();
+      if (_readium != null)
+        unawaited(_readium!.decorations('wenku-listening', []));
       return;
     }
     if (!state.follow || _followLocallyPaused || current == null) {
@@ -6950,8 +7034,25 @@ class _ReaderPageState extends State<ReaderPage>
     if (_readium != null) {
       unawaited(
         _prepareContent(chapter).then<void>((content) async {
-          if (!mounted || paragraph >= content.paragraphs.length) return;
+          if (!mounted ||
+              paragraph >= content.paragraphs.length ||
+              (automatic &&
+                  (_listening?.snapshot.value.follow != true ||
+                      _followLocallyPaused)))
+            return;
           final text = content.paragraphs[paragraph];
+          final spoken = text.substring(
+            start.clamp(0, text.length),
+            end.clamp(0, text.length),
+          );
+          final mark = _readium!.mark(
+            id: 'spoken',
+            chapter: chapter,
+            text: spoken,
+          );
+          await _readium!.decorations('wenku-listening', [
+            if (mark != null) mark,
+          ]);
           await _readium!.go(
             chapter,
             text: text.substring(
@@ -7353,6 +7454,7 @@ class _ReaderPageState extends State<ReaderPage>
               );
         if (mapped < 0) throw const FormatException('当前章节已不在目录中');
         _readerBook = directory;
+        if (_readium != null) _readium!.book = directory;
         index = _chapter = mapped;
         _restorePending = _readerPosition(_restorePending);
         // These caches are indexed by the adopted directory, never by an
@@ -8172,17 +8274,19 @@ class _ReaderPageState extends State<ReaderPage>
       final at = _currentPosition();
       if (at != null)
         unawaited(
-          widget.state.savePosition(
-            novel: _sourceBook,
-            chapter: _chapter,
-            offset: at.fraction,
-            maximum: 1,
-            width: _layoutWidth,
-            notify: notify,
-            paragraphIndex: at.paragraphIndex,
-            textOffset: at.textOffset,
-            contentRevision: _currentContent?.revision ?? '',
-          ),
+          widget.state
+              .savePosition(
+                novel: _sourceBook,
+                chapter: _chapter,
+                offset: at.fraction,
+                maximum: 1,
+                width: _layoutWidth,
+                notify: notify,
+                paragraphIndex: at.paragraphIndex,
+                textOffset: at.textOffset,
+                contentRevision: _currentContent?.revision ?? '',
+              )
+              .catchError((Object _) {}),
         );
       return;
     }
@@ -8970,7 +9074,7 @@ class _ReaderPageState extends State<ReaderPage>
     _savePosition(notify: false);
     final index = position.paragraphIndex;
     final text = index == null ? '' : _currentContent?.paragraphs[index] ?? '';
-    return widget.state.addBookmark(
+    final bookmark = await widget.state.addBookmark(
       novel: _sourceBook,
       position: position,
       quote:
@@ -8980,6 +9084,9 @@ class _ReaderPageState extends State<ReaderPage>
           ? text
           : '',
     );
+    if (_readium != null && bookmark != null)
+      await _readium!.rememberBookmark(bookmark.id);
+    return bookmark;
   }
 
   ReadingPosition? _quotePosition(ReaderQuoteSelection selected) {
@@ -9136,6 +9243,16 @@ class _ReaderPageState extends State<ReaderPage>
         rangeContextResolver: _annotationRangeContext,
         surfaceWrapper: _readerSurface,
       );
+      if (mounted && _readium != null) {
+        for (final mark
+            in widget.state
+                .bookmarksFor(widget.novel.id)
+                .where((m) => m.quote == selected.text)) {
+          await _readium!.rememberBookmark(mark.id, selected: true);
+        }
+        _nativeMarksKey = null;
+        setState(() {});
+      }
     } catch (error) {
       if (mounted) {
         showNovelFeedback(
@@ -11180,6 +11297,10 @@ class _ReaderPageState extends State<ReaderPage>
       );
       if (!mounted) return;
       await _handleReaderAction(action);
+      if (mounted && _readium != null) {
+        _nativeMarksKey = null;
+        setState(() {});
+      }
     } finally {
       _toolsOpen = false;
       _typographyPreviewing = false;
@@ -11220,7 +11341,13 @@ class _ReaderPageState extends State<ReaderPage>
           bookmark.position,
         );
         if (chapter != null) {
-          _go(chapter, position: bookmark.position, highlightBookmark: true);
+          if (_readium != null && await _readium!.openBookmark(bookmark.id)) {
+            _nativeLocationChanging = true;
+            _go(chapter, position: bookmark.position, highlightBookmark: true);
+            _nativeLocationChanging = false;
+          } else {
+            _go(chapter, position: bookmark.position, highlightBookmark: true);
+          }
         }
       case ReaderOpenFind():
         // The settings surface has fully collapsed before opening the next.
@@ -11250,6 +11377,18 @@ class _ReaderPageState extends State<ReaderPage>
         _currentContent != null &&
         match.paragraph < _currentContent!.paragraphs.length) {
       final text = _currentContent!.paragraphs[match.paragraph];
+      final selected = text.substring(
+        match.start.clamp(0, text.length),
+        match.end.clamp(0, text.length),
+      );
+      final mark = _readium!.mark(
+        id: 'search',
+        chapter: _chapter,
+        text: selected,
+      );
+      unawaited(
+        _readium!.decorations('wenku-search', [if (mark != null) mark]),
+      );
       unawaited(
         _readium!.go(
           _chapter,
@@ -11268,7 +11407,11 @@ class _ReaderPageState extends State<ReaderPage>
       chapter: _chapter,
     );
     _highlightTimer = Timer(const Duration(seconds: 8), () {
-      if (mounted) _findMatch.value = null;
+      if (mounted) {
+        _findMatch.value = null;
+        if (_readium != null)
+          unawaited(_readium!.decorations('wenku-search', []));
+      }
     });
   }
 

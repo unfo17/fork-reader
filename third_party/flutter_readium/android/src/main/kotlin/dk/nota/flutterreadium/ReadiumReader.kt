@@ -1537,6 +1537,10 @@ object ReadiumReader :
         navigator.updatePreferences(preferences)
     }
 
+    suspend fun applyAppDecorations(values: List<Map<String, Any>>, group: String) {
+        applyDecorations(values.mapNotNull { decorationFromMap(it) }, group)
+    }
+
     suspend fun applyDecorations(
         decorations: List<Decoration>,
         group: String,

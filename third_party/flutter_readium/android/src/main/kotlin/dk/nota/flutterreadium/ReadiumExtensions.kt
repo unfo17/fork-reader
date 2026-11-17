@@ -120,6 +120,7 @@ fun decorationStyleFromMap(decoMap: Map<*, *>?): Decoration.Style? {
         val tint = tintColorStr?.let { readiumColorFromCSS(it).int } ?: Color.TRANSPARENT
         val style =
             when (styleStr) {
+                "outline" -> OutlineStyle(tint)
                 "underline" -> Decoration.Style.Underline(tint, isActive)
                 "spotlight" -> SpotlightStyle(tint)
                 else -> Decoration.Style.Highlight(tint, isActive) // "highlight" + unknown

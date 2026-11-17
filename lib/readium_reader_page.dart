@@ -21,12 +21,14 @@ class ReadiumReaderBridge extends ChangeNotifier {
     required this.onAction,
     required this.onTap,
     required this.onUserNavigation,
+    required this.onAnnotation,
     required bool chromeVisible,
   }) {
     controls = ValueNotifier(chromeVisible);
+    chapter = initialChapter;
     opening = _open();
   }
-  final Novel book;
+  Novel book;
   final LocalBookStore books;
   final int initialChapter;
   final bool restoreLocator;
@@ -34,7 +36,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
   bool _hasSavedLocator = false;
   static ReadiumReaderBridge? _owner;
   static Future<void> _lifecycle = Future.value();
-  final _firstLocation = Completer<void>();
+  var _firstLocation = Completer<void>();
+  bool _suspended = false;
+  bool _openedOnce = false;
   rd.EPUBPreferences _preferences = const rd.EPUBPreferences(
     publisherStyles: true,
   );
@@ -42,10 +46,12 @@ class ReadiumReaderBridge extends ChangeNotifier {
   final void Function(String action, String text) onAction;
   final ValueChanged<Offset> onTap;
   final VoidCallback onUserNavigation;
+  final ValueChanged<String> onAnnotation;
+  rd.Locator? selectedLocator;
   final progress = ValueNotifier<double>(0);
   final api = rd.FlutterReadium();
   late final ValueNotifier<bool> controls;
-  late final Future<void> opening;
+  late Future<void> opening;
   rd.Publication? publication;
   rd.Locator? initialLocator, locator;
   StreamSubscription<rd.Locator>? _events;
@@ -85,6 +91,14 @@ class ReadiumReaderBridge extends ChangeNotifier {
     final pub = publication;
     if (pub == null) return chapter;
     final href = at.href.split('#').first;
+    final tocHref = at.locations?.toJson()['tocHref'] as String?;
+    if (tocHref != null) {
+      final target = book.navigation?.targets[tocHref];
+      if (target != null) {
+        final i = book.chapters.indexWhere((c) => c.id == target.chapterId);
+        if (i >= 0) return i;
+      }
+    }
     final candidates = <int>[];
     for (var i = 0; i < book.chapters.length; i++) {
       final link = linkForChapter(i);
@@ -112,23 +126,38 @@ class ReadiumReaderBridge extends ChangeNotifier {
     return chapter;
   }
 
+  void activate() {
+    if (_disposed || !_suspended) return;
+    _suspended = false;
+    _firstLocation = Completer<void>();
+    initialLocator = null;
+    _commands = Future.value();
+    opening = _open();
+    notifyListeners();
+  }
+
   Future<void> _open() async {
-    chapter = initialChapter;
     try {
       _prefs = await SharedPreferences.getInstance();
-      _staging = await (await getTemporaryDirectory()).createTemp(
+      _staging ??= await (await getTemporaryDirectory()).createTemp(
         'readium-render-',
       );
       final file = File('${_staging!.path}/publication.epub');
-      await books.copyEpubForReadium(book.id, file);
+      if (!await file.exists()) await books.copyEpubForReadium(book.id, file);
       if (_disposed) return;
       final acquire = _lifecycle.catchError((Object _) {}).then((_) async {
         if (_disposed) return;
         final previous = _owner;
         if (previous != null) {
           await previous._events?.cancel();
+          if (!previous._firstLocation.isCompleted)
+            previous._firstLocation.complete();
           await previous._commands;
           await api.closePublication();
+          previous.publication = null;
+          previous.ready = false;
+          previous._suspended = true;
+          if (!previous._disposed) previous.notifyListeners();
         }
         _owner = this;
         api.setDefaultPreferences(_preferences);
@@ -138,18 +167,19 @@ class ReadiumReaderBridge extends ChangeNotifier {
       await acquire;
       if (_disposed || _owner != this) return;
       final raw = _prefs!.getString(_key);
-      if (restoreLocator && raw != null) {
+      if ((restoreLocator || _openedOnce) && raw != null) {
         try {
           final saved = rd.Locator.fromJson(
             jsonDecode(raw) as Map<String, dynamic>,
           );
-          if (saved != null && chapterFor(saved) == initialChapter) {
+          if (saved != null && chapterFor(saved) == chapter) {
             initialLocator = saved;
             _hasSavedLocator = true;
           }
         } catch (_) {}
       }
-      final first = linkForChapter(initialChapter);
+      final first = linkForChapter(chapter);
+      _openedOnce = true;
       if (initialLocator == null && first != null)
         initialLocator = publication!.locatorFromLink(first);
       _events = api.onTextLocatorChanged.listen((at) {
@@ -181,6 +211,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       if (waitForView) await _firstLocation.future;
       if (_disposed || _owner != this) return;
       await action();
+      error = null;
     });
     _commands = next.catchError((Object e) {
       error = '阅读操作失败：$e';
@@ -202,23 +233,107 @@ class ReadiumReaderBridge extends ChangeNotifier {
           await api.goBackward();
         }
       });
-  Future<void> go(int index, {double? progression, String? text}) =>
+  rd.Locator? locationFor(
+    int index, {
+    double? progression,
+    String? text,
+    String? before,
+    String? after,
+  }) {
+    final link = linkForChapter(index);
+    if (link == null) return null;
+    final base = publication!.locatorFromLink(link);
+    if (base == null) return null;
+    final json = base.toJson();
+    if (text != null && text.trim().isNotEmpty) {
+      json['text'] = {
+        'highlight': text,
+        if (before != null) 'before': before,
+        if (after != null) 'after': after,
+      };
+      json['locations'] = {
+        if (progression != null) 'progression': progression.clamp(0.0, 1.0),
+      };
+    } else if (progression != null) {
+      json['locations'] = {'progression': progression.clamp(0.0, 1.0)};
+    }
+    return rd.Locator.fromJson(json);
+  }
+
+  Future<void> go(
+    int index, {
+    double? progression,
+    String? text,
+    String? before,
+    String? after,
+  }) => command(() async {
+    final at = locationFor(
+      index,
+      progression: progression,
+      text: text,
+      before: before,
+      after: after,
+    );
+    if (at == null) throw const FormatException('原书目录没有对应的阅读位置');
+    await api.goToLocator(at);
+  });
+
+  String _bookmarkKey(String id) => 'readium.bookmark.v1.${book.id}.$id';
+  Future<void> rememberBookmark(String id, {bool selected = false}) async {
+    final at = selected ? selectedLocator : locator;
+    if (at != null)
+      await _prefs?.setString(_bookmarkKey(id), jsonEncode(at.toJson()));
+  }
+
+  Future<bool> openBookmark(String id) async {
+    await opening;
+    final raw = _prefs?.getString(_bookmarkKey(id));
+    if (raw == null) return false;
+    try {
+      final at = rd.Locator.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      if (at == null) return false;
+      await command(() => api.goToLocator(at));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> decorations(String group, List<Map<String, dynamic>> marks) =>
       command(() async {
-        final link = linkForChapter(index);
-        if (link == null) throw const FormatException('原书目录没有对应的阅读位置');
-        final base = publication!.locatorFromLink(link);
-        if (base == null) return;
-        final json = base.toJson();
-        if (text != null && text.trim().isNotEmpty) {
-          json['text'] = {'highlight': text};
-        } else if (progression != null) {
-          json['locations'] = {
-            ...?(json['locations'] as Map?),
-            'progression': progression.clamp(0.0, 1.0),
-          };
+        if (Platform.isAndroid) {
+          await native.invokeMethod<void>('decorations', {
+            'group': group,
+            'marks': marks,
+          });
+        } else {
+          await api.applyDecorations(
+            group,
+            marks.map(rd.ReaderDecoration.fromJson).toList(),
+          );
         }
-        await api.goToLocator(rd.Locator.fromJson(json)!);
       });
+  Map<String, dynamic>? mark({
+    required String id,
+    required int chapter,
+    required String text,
+    String? before,
+    String? after,
+    String style = 'highlight',
+    int color = 0xffe9c75b,
+  }) {
+    final at = locationFor(chapter, text: text, before: before, after: after);
+    if (at == null) return null;
+    return {
+      'id': id,
+      'locator': at.toJson(),
+      'style': {
+        'style': style,
+        'tint': '#${color.toRadixString(16).padLeft(8, '0').substring(2)}',
+      },
+    };
+  }
+
   Future<void> preferences(
     ReaderPreferences prefs, {
     required double fontSize,
@@ -348,7 +463,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
         });
   }
 
-  Widget view() => publication == null
+  Widget view() => _suspended
+      ? const SizedBox.expand()
+      : publication == null
       ? Center(
           child: error == null
               ? const CircularProgressIndicator()
@@ -366,7 +483,18 @@ class ReadiumReaderBridge extends ChangeNotifier {
             rd.SelectionAction(id: 'dictionary', title: '查词'),
             rd.SelectionAction(id: 'illustrations', title: '本卷插图'),
           ],
-          onSelectionAction: (e) => onAction(e.actionId, e.selectedText ?? ''),
+          allowedDefaultActions: const {},
+          onTextSelected: (e) {
+            selectedLocator = e.locator;
+            onUserNavigation();
+          },
+          onSelectionAction: (e) {
+            selectedLocator = e.locator;
+            onAction(e.actionId, e.selectedText ?? '');
+          },
+          onDecorationInteraction: (e) {
+            if (e.group == 'wenku-annotations') onAnnotation(e.decorationId);
+          },
           goBackwardSemanticLabel: '上一页',
           goForwardSemanticLabel: '下一页',
           toggleShowControlsSemanticLabel: '切换阅读控件',
