@@ -5760,13 +5760,13 @@ class _ReaderPageState extends State<ReaderPage>
       _showChrome(_readium!.controls.value);
   }
 
-  ReaderQuoteSelection _nativeQuote(String text) {
+  ReaderQuoteSelection _nativeQuote(String text, {bool selection = false}) {
     final paragraphs = _currentContent?.paragraphs ?? const <String>[];
     if (text.trim().isEmpty || paragraphs.isEmpty)
       return ReaderQuoteSelection(text, null, chapter: _chapter);
     final full = paragraphs.join('\n');
     var start = full.indexOf(text), end = start + text.length;
-    if (start < 0) {
+    if (start < 0 || selection) {
       final map = <int>[];
       final normalized = StringBuffer();
       for (var i = 0; i < full.length; i++) {
@@ -5776,7 +5776,47 @@ class _ReaderPageState extends State<ReaderPage>
         }
       }
       final wanted = text.replaceAll(RegExp(r'\s+'), '');
-      final at = normalized.toString().indexOf(wanted);
+      final normalizedFull = normalized.toString();
+      var at = normalizedFull.indexOf(wanted);
+      if (selection && wanted.isNotEmpty) {
+        final context = _readium?.selectedLocator?.text;
+        final before = (context?.before ?? '').replaceAll(RegExp(r'\s+'), '');
+        final after = (context?.after ?? '').replaceAll(RegExp(r'\s+'), '');
+        var bestScore = -1, bestDistance = double.infinity;
+        for (
+          var candidate = at;
+          candidate >= 0;
+          candidate = normalizedFull.indexOf(wanted, candidate + 1)
+        ) {
+          var score = 0;
+          for (
+            var i = 1;
+            i <= 80 && i <= before.length && i <= candidate;
+            i++
+          ) {
+            if (before[before.length - i] != normalizedFull[candidate - i])
+              break;
+            score++;
+          }
+          final end = candidate + wanted.length;
+          for (
+            var i = 0;
+            i < 80 && i < after.length && end + i < normalizedFull.length;
+            i++
+          ) {
+            if (after[i] != normalizedFull[end + i]) break;
+            score++;
+          }
+          final distance = (candidate - normalizedFull.length * _nativeFraction)
+              .abs();
+          if (score > bestScore ||
+              score == bestScore && distance < bestDistance) {
+            at = candidate;
+            bestScore = score;
+            bestDistance = distance;
+          }
+        }
+      }
       if (at >= 0 && wanted.isNotEmpty) {
         start = map[at];
         end = map[at + wanted.length - 1] + 1;
@@ -5814,7 +5854,7 @@ class _ReaderPageState extends State<ReaderPage>
       _volumeIllustrations();
       return;
     }
-    final quote = _nativeQuote(text);
+    final quote = _nativeQuote(text, selection: true);
     if (quote.anchor == null) {
       showNovelFeedback(context, '所选内容暂时无法定位，请从原书目录重新打开该章节');
       return;
@@ -6673,6 +6713,7 @@ class _ReaderPageState extends State<ReaderPage>
         },
       )..addListener(_nativeChanged);
       _readium!.controls.addListener(_syncNativeChrome);
+      unawaited(_bookFontReady);
     }
   }
 
