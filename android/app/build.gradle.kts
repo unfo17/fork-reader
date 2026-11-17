@@ -58,11 +58,11 @@ android {
             if (readerPreview) {
                 applicationIdSuffix = ".reader_preview"
             }
-            // Local previews remain install-compatible. Public distributions
-            // use an owner's untracked key.properties, never an embedded key.
-            signingConfig = signingConfigs.getByName(
-                if (releaseKeyFile.isFile && !readerPreview) "distribution" else "debug"
-            )
+            check(releaseKeyFile.isFile || !gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }) {
+                "Release signing key is missing. Refusing a temporary debug signature."
+            }
+            signingConfig = if (releaseKeyFile.isFile) signingConfigs.getByName("distribution") else null
+
         }
     }
 
@@ -95,6 +95,7 @@ flutter {
 }
 
 dependencies {
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.apache.poi:poi-scratchpad:5.5.1")
     implementation("com.github.albfernandez:juniversalchardet:2.0.4")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")

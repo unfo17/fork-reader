@@ -5674,19 +5674,151 @@ class ReaderPage extends StatefulWidget {
   final Duration Function()? verifiedReadingElapsed;
 
   @override
-  State<ReaderPage> createState() {
-    final source = repository;
-    if ((LocalPlatform.android || LocalPlatform.ios) &&
-        source is OfflineNovelRepository &&
-        source.local?.isReadiumEpub(novel.id) == true) {
-      return NativeEpubReaderState();
-    }
-    return _ReaderPageState();
-  }
+  State<ReaderPage> createState() => _ReaderPageState();
 }
 
 class _ReaderPageState extends State<ReaderPage>
     with TickerProviderStateMixin, WidgetsBindingObserver {
+  ReadiumReaderBridge? _readium;
+  String? _nativePreferencesKey;
+  bool _nativeLocationChanging = false;
+  double _nativeFraction = 0;
+  String? _nativeText;
+  bool _nativeInitialRestored = false;
+  void _restoreNativePosition() {
+    final engine = _readium;
+    final content = _currentContent;
+    if (_nativeInitialRestored ||
+        engine == null ||
+        !engine.ready ||
+        content == null)
+      return;
+    _nativeInitialRestored = true;
+    final saved = _restorePending;
+    _restorePending = null;
+    _restoring = false;
+    if (saved != null &&
+        (!engine.hasSavedLocator ||
+            widget.initialBookmark != null ||
+            widget.initialPosition != null)) {
+      final i = saved.paragraphIndex;
+      final text = i != null && i >= 0 && i < content.paragraphs.length
+          ? content.paragraphs[i].substring(
+              (saved.textOffset ?? 0).clamp(0, content.paragraphs[i].length),
+            )
+          : null;
+      unawaited(engine.go(_chapter, progression: saved.fraction, text: text));
+    }
+  }
+
+  void _nativeChanged() {
+    if (!mounted) return;
+    _ready = _readium!.ready && _currentContent != null;
+    _restoreNativePosition();
+    setState(() {});
+  }
+
+  void _nativeLocation(int chapter, double fraction, String? text) {
+    if (!mounted) return;
+    _nativeFraction = fraction;
+    _nativeText = text;
+    if (_verifiedEligible) _verifiedReading.advance();
+    if (chapter != _chapter) {
+      _nativeLocationChanging = true;
+      _go(chapter);
+      _nativeLocationChanging = false;
+    }
+    _ready = _currentContent != null;
+    if (_nativeInitialRestored) _savePosition(notify: false);
+  }
+
+  void _syncNativeChrome() {
+    if (mounted && _readium!.controls.value != _chromeTarget)
+      _showChrome(_readium!.controls.value);
+  }
+
+  ReaderQuoteSelection _nativeQuote(String text) {
+    final paragraphs = _currentContent?.paragraphs ?? const <String>[];
+    if (text.trim().isEmpty || paragraphs.isEmpty)
+      return ReaderQuoteSelection(text, null, chapter: _chapter);
+    final full = paragraphs.join('\n');
+    var start = full.indexOf(text), end = start + text.length;
+    if (start < 0) {
+      final map = <int>[];
+      final normalized = StringBuffer();
+      for (var i = 0; i < full.length; i++) {
+        if (full[i].trim().isNotEmpty) {
+          map.add(i);
+          normalized.write(full[i]);
+        }
+      }
+      final wanted = text.replaceAll(RegExp(r'\s+'), '');
+      final at = normalized.toString().indexOf(wanted);
+      if (at >= 0 && wanted.isNotEmpty) {
+        start = map[at];
+        end = map[at + wanted.length - 1] + 1;
+      }
+    }
+    if (start < 0) return ReaderQuoteSelection(text, null, chapter: _chapter);
+    ReaderSelectionAnchor anchor(int at) {
+      var base = 0;
+      for (var i = 0; i < paragraphs.length; i++) {
+        if (at <= base + paragraphs[i].length)
+          return (
+            paragraph: i,
+            offset: (at - base).clamp(0, paragraphs[i].length),
+          );
+        base += paragraphs[i].length + 1;
+      }
+      return (paragraph: paragraphs.length - 1, offset: paragraphs.last.length);
+    }
+
+    final first = anchor(start), last = anchor(end);
+    return ReaderQuoteSelection(
+      text,
+      first,
+      chapter: _chapter,
+      ranges: [ReaderQuoteRange(first, last, chapter: _chapter)],
+    );
+  }
+
+  void _nativeAction(String action, String text) {
+    if (action == 'copy') {
+      Clipboard.setData(ClipboardData(text: text));
+      return;
+    }
+    if (action == 'illustrations') {
+      _volumeIllustrations();
+      return;
+    }
+    final quote = _nativeQuote(text);
+    if (quote.anchor == null) {
+      showNovelFeedback(context, '所选内容暂时无法定位，请从原书目录重新打开该章节');
+      return;
+    }
+    if (action == 'bookmark') unawaited(_saveQuote(quote));
+    if (action == 'dictionary') unawaited(_lookupQuote(quote));
+  }
+
+  Widget _nativeBody(BuildContext context) {
+    final bridge = _readium!;
+    final key =
+        '${_readerPreferences.layoutKey}|$_fontSize|$_lineHeight|$_readerFontFamily|${Theme.of(context).brightness}';
+    if (key != _nativePreferencesKey) {
+      _nativePreferencesKey = key;
+      unawaited(
+        bridge.preferences(
+          _readerPreferences,
+          fontSize: _fontSize,
+          lineHeight: _lineHeight,
+          dark: Theme.of(context).brightness == Brightness.dark,
+          fontFamily: _readerFontFamily,
+        ),
+      );
+    }
+    return bridge.view();
+  }
+
   ReaderPreferences get _readerPreferences =>
       widget.state.readerPreferencesFor(widget.novel.id);
   double get _fontSize => widget.state.readerFontSizeFor(widget.novel.id);
@@ -6080,6 +6212,16 @@ class _ReaderPageState extends State<ReaderPage>
   );
 
   void _paperChanged() {
+    if (_readium != null) {
+      _nativePreferencesKey = null;
+      setState(() {
+        _paper = _readerPreferences.paper;
+        _readerMode = _readerPreferences.mode;
+        _hideSystemStatus = _readerPreferences.hideSystemStatus;
+        _showStatusInfo = _readerPreferences.showStatusInfo;
+      });
+      return;
+    }
     if (!_readerPreferences.chapterEntrance) {
       _chapterRevealPending = false;
       if (!_chapterReveal.isCompleted) _chapterReveal.value = 1;
@@ -6124,6 +6266,18 @@ class _ReaderPageState extends State<ReaderPage>
         !_listeningScrollSceneActive) {
       return;
     }
+    if (_readium != null) {
+      final dt = ((elapsed - previous).inMicroseconds / 1000000).clamp(
+        0.0,
+        .05,
+      );
+      if (_nativeFraction >= .999) {
+        unawaited(_readium!.pageBy(1));
+      } else {
+        unawaited(_readium!.scrollBy(dt * _readerPreferences.autoScrollSpeed));
+      }
+      return;
+    }
     if (!_scroll.hasClients) return;
     final position = _scroll.position;
     if (position.pixels >= position.maxScrollExtent - .5) {
@@ -6154,7 +6308,7 @@ class _ReaderPageState extends State<ReaderPage>
         !_paginated ||
         !_ready ||
         _restoring ||
-        !_paged.ready) {
+        (_readium == null && !_paged.ready)) {
       return;
     }
     // A stationary page needs no vsync callbacks. Wake once at the requested
@@ -6170,7 +6324,17 @@ class _ReaderPageState extends State<ReaderPage>
           _stopAutoScroll();
           return;
         }
-        if (!_ready || _restoring || !_paged.ready) return;
+        if (!_ready || _restoring) return;
+        if (_readium != null) {
+          if (_nativeFraction >= .999 &&
+              _chapter + 1 >= _sourceBook.chapters.length) {
+            _stopAutoScroll(showControls: true);
+          } else {
+            unawaited(_readium!.pageBy(1).then((_) => _scheduleAutoPage()));
+          }
+          return;
+        }
+        if (!_paged.ready) return;
         if (_paged.pageBy(1)) {
           _scheduleAutoPage();
         } else if (_chapter + 1 < _sourceBook.chapters.length) {
@@ -6337,6 +6501,35 @@ class _ReaderPageState extends State<ReaderPage>
       _restorePending = _readerPosition(saved);
       _restoreAlignStart = _alignIosResumeStart(saved);
     }
+    final source = widget.repository;
+    if ((LocalPlatform.android || LocalPlatform.ios) &&
+        source is OfflineNovelRepository &&
+        source.local?.isReadiumEpub(widget.novel.id) == true) {
+      _readium = ReadiumReaderBridge(
+        book: _sourceBook,
+        books: source.local!,
+        initialChapter: _chapter,
+        restoreLocator:
+            widget.initialBookmark == null && widget.initialPosition == null,
+        chromeVisible: _chromeTarget,
+        onLocation: _nativeLocation,
+        onAction: _nativeAction,
+        onTap: (point) {
+          final box = context.findRenderObject() as RenderBox?;
+          _contentTap(
+            TapUpDetails(
+              globalPosition: point,
+              localPosition: box?.globalToLocal(point) ?? point,
+            ),
+          );
+        },
+        onUserNavigation: () {
+          _stopAutoScroll();
+          _suspendListeningFollow();
+        },
+      )..addListener(_nativeChanged);
+      _readium!.controls.addListener(_syncNativeChrome);
+    }
   }
 
   @override
@@ -6396,6 +6589,10 @@ class _ReaderPageState extends State<ReaderPage>
 
   @override
   void dispose() {
+    _readium?.removeListener(_nativeChanged);
+    _readium?.controls.removeListener(_syncNativeChrome);
+    _readium?.dispose();
+
     widget.state.illustrationChanges.removeListener(_illustrationLayoutChanged);
     _selection.removeListener(_syncReadingActivity);
     _readingActivity.dispose();
@@ -6702,6 +6899,22 @@ class _ReaderPageState extends State<ReaderPage>
     int end, {
     required bool automatic,
   }) {
+    if (_readium != null) {
+      unawaited(
+        _prepareContent(chapter).then((content) {
+          if (!mounted || paragraph >= content.paragraphs.length) return;
+          final text = content.paragraphs[paragraph];
+          return _readium!.go(
+            chapter,
+            text: text.substring(
+              start.clamp(0, text.length),
+              end.clamp(0, text.length),
+            ),
+          );
+        }),
+      );
+      return;
+    }
     final ticket = ++_followTicket;
     _followAutomatic = automatic;
     _followScroll.cancel();
@@ -6805,6 +7018,54 @@ class _ReaderPageState extends State<ReaderPage>
     int turnDirection = 0,
   }) {
     if (index < 0 || index >= _sourceBook.chapters.length) {
+      return;
+    }
+    if (_readium != null) {
+      if (!_nativeLocationChanging) {
+        unawaited(
+          _prepareContent(index)
+              .then((content) {
+                if (!mounted) return;
+                final paragraph = position?.paragraphIndex;
+                String? text;
+                if (paragraph != null &&
+                    paragraph >= 0 &&
+                    paragraph < content.paragraphs.length) {
+                  final body = content.paragraphs[paragraph];
+                  final start = (position?.textOffset ?? 0).clamp(
+                    0,
+                    body.length,
+                  );
+                  text = body.substring(
+                    start,
+                    (start + 200).clamp(start, body.length),
+                  );
+                }
+                return _readium!.go(
+                  index,
+                  progression: position?.fraction,
+                  text: text,
+                );
+              })
+              .catchError((Object _) {}),
+        );
+      }
+      _chapter = index;
+      _ready = false;
+      _currentContent = null;
+      _unfilteredContent = null;
+      _restoring = false;
+      _restorePending = null;
+      _content = _loadContent(prepared: prepared, findMatch: findMatch);
+      unawaited(
+        _content.then((_) {
+          if (mounted) {
+            _ready = _readium!.ready;
+            setState(() {});
+          }
+        }),
+      );
+      setState(() {});
       return;
     }
     if (index != _chapter &&
@@ -7064,9 +7325,16 @@ class _ReaderPageState extends State<ReaderPage>
       if (mounted && index == _chapter && generation == _contentGeneration) {
         _currentContent = content;
         _unfilteredContent = localized;
+        if (_readium != null) {
+          _ready = _readium!.ready;
+          _restoreNativePosition();
+          setState(() {});
+        }
         if (findMatch != null) _showFindMatch(findMatch);
-        if (_restorePending case final saved?) {
-          _restorePending = _resolveContentPosition(saved);
+        if (_readium == null) {
+          if (_restorePending case final saved?) {
+            _restorePending = _resolveContentPosition(saved);
+          }
         }
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && generation == _contentGeneration) {
@@ -7353,6 +7621,8 @@ class _ReaderPageState extends State<ReaderPage>
   }
 
   void _showChrome(bool visible) {
+    if (_readium != null && _readium!.controls.value != visible)
+      _readium!.controls.value = visible;
     if (visible) {
       _dismissChromeHint?.call();
       _dismissChromeHint = null;
@@ -7445,6 +7715,16 @@ class _ReaderPageState extends State<ReaderPage>
   }
 
   void _pageBy(int direction) {
+    if (_readium != null) {
+      if (!_toolsOpen && !_catalogueOpen && !_findOpen)
+        unawaited(
+          _readium!.pageBy(
+            direction,
+            animated: _readerPreferences.pageEffect != ReaderPageEffect.none,
+          ),
+        );
+      return;
+    }
     if (_pendingChapter != null && _pendingChapter != _chapter + direction) {
       _chapterSwitchTicket++;
       _pendingChapter = null;
@@ -7839,6 +8119,25 @@ class _ReaderPageState extends State<ReaderPage>
     // Explicit save/restore/exit supersedes any delayed copy of that position.
     _idleSave?.cancel();
     _idleSave = null;
+    if (_readium != null) {
+      _readium!.persist();
+      final at = _currentPosition();
+      if (at != null)
+        unawaited(
+          widget.state.savePosition(
+            novel: _sourceBook,
+            chapter: _chapter,
+            offset: at.fraction,
+            maximum: 1,
+            width: _layoutWidth,
+            notify: notify,
+            paragraphIndex: at.paragraphIndex,
+            textOffset: at.textOffset,
+            contentRevision: _currentContent?.revision ?? '',
+          ),
+        );
+      return;
+    }
     if (_detailsOpen ||
         _sourceChanged ||
         !_ready ||
@@ -7891,6 +8190,21 @@ class _ReaderPageState extends State<ReaderPage>
     bool includeParagraph = true,
     bool bookmark = false,
   }) {
+    if (_readium != null && _readium!.ready) {
+      final quote = _nativeQuote(_nativeText ?? '');
+      return ReadingPosition(
+        chapter: _chapter,
+        chapterId: _sourceBook.chapters[_chapter].id,
+        offset: _nativeFraction,
+        fraction: _nativeFraction,
+        fontSize: _fontSize,
+        width: _layoutWidth,
+        updatedAt: DateTime.now().millisecondsSinceEpoch,
+        paragraphIndex: quote.anchor?.paragraph,
+        textOffset: quote.anchor?.offset,
+        contentRevision: _currentContent?.revision ?? '',
+      );
+    }
     if (!_ready ||
         _restoring ||
         (_paginated ? !_paged.ready : !_scroll.hasClients) ||
@@ -8905,6 +9219,10 @@ class _ReaderPageState extends State<ReaderPage>
   }
 
   Future<void> _seekProgress(double fraction) async {
+    if (_readium != null) {
+      await _readium!.go(_chapter, progression: fraction);
+      return;
+    }
     if (!_ready || (_paginated ? !_paged.ready : !_scroll.hasClients)) return;
     _clearBookmarkLanding();
     if (_paginated) {
@@ -9370,6 +9688,10 @@ class _ReaderPageState extends State<ReaderPage>
   );
 
   void _previewChromeProgress(double value) {
+    if (_readium != null) {
+      unawaited(_readium!.go(_chapter, progression: value));
+      return;
+    }
     _pageAdvanceOrigin = null;
     _scrollAdvanceOrigin = null;
     _verifiedReading.resetPending();
@@ -9403,6 +9725,10 @@ class _ReaderPageState extends State<ReaderPage>
   }
 
   void _commitChromeProgress(double value) {
+    if (_readium != null) {
+      unawaited(_readium!.go(_chapter, progression: value));
+      return;
+    }
     _cancelChromeProgress();
     if (mounted) {
       if (_paginated) {
@@ -9686,11 +10012,12 @@ class _ReaderPageState extends State<ReaderPage>
                       visibility: progressAnimation,
                       valueListenable: _chromeSourceProgress,
                       builder: (context, source) {
-                        final sourceFraction =
-                            !_paginated &&
-                                source?.chapter == _chapter &&
-                                source?.generation == _contentGeneration &&
-                                identical(source?.content, _currentContent)
+                        final sourceFraction = _readium != null
+                            ? _nativeFraction
+                            : !_paginated &&
+                                  source?.chapter == _chapter &&
+                                  source?.generation == _contentGeneration &&
+                                  identical(source?.content, _currentContent)
                             ? source?.fraction
                             : null;
                         return ReaderChapterProgress(
@@ -9835,7 +10162,7 @@ class _ReaderPageState extends State<ReaderPage>
   }) => ActiveListenableBuilder(
     listenable: widget.state.readerSettingsChanges,
     builder: (context) {
-      if (_paginated) return const SizedBox.shrink();
+      if (_paginated && _readium == null) return const SizedBox.shrink();
       final preferences = _readerPreferences;
       if (!footer && !preferences.showReaderStatus) {
         return const SizedBox.shrink();
@@ -9890,6 +10217,7 @@ class _ReaderPageState extends State<ReaderPage>
                       'reader-scroll-${footer ? 'footer' : 'location'}-$_contentGeneration',
                     ),
                     controller: _scroll,
+                    externalProgress: _readium?.progress,
                     title: readerInformationTitle(
                       chapter.title,
                       _sourceBook.directoryIndexFor(_chapter) + 1,
@@ -10014,28 +10342,30 @@ class _ReaderPageState extends State<ReaderPage>
                           const CustomSemanticsAction(label: '切换阅读控件'):
                               _toggleChrome,
                         },
-                        child: ReaderSelection(
-                          controller: _selection,
-                          vertical: _readerMode == ReaderMode.vertical,
-                          onBookmark: _saveQuote,
-                          onDictionary: _lookupQuote,
-                          onIllustrations: _volumeIllustrations,
-                          onSelect: () {
-                            _stopAutoScroll();
-                            _suspendListeningFollow();
-                          },
-                          child: ReaderTouchSurface(
-                            canRecord: () =>
-                                _activityEligible && !_selection.value,
-                            child: ReaderTapSurface(
-                              key: const ValueKey('reader-content-tap'),
-                              controller: _contentTapSurface,
-                              onTapUp: _contentTap,
-                              onPreview: _previewContentTap,
-                              child: _article(context, chapter, appDark),
-                            ),
-                          ),
-                        ),
+                        child: _readium != null
+                            ? _nativeBody(context)
+                            : ReaderSelection(
+                                controller: _selection,
+                                vertical: _readerMode == ReaderMode.vertical,
+                                onBookmark: _saveQuote,
+                                onDictionary: _lookupQuote,
+                                onIllustrations: _volumeIllustrations,
+                                onSelect: () {
+                                  _stopAutoScroll();
+                                  _suspendListeningFollow();
+                                },
+                                child: ReaderTouchSurface(
+                                  canRecord: () =>
+                                      _activityEligible && !_selection.value,
+                                  child: ReaderTapSurface(
+                                    key: const ValueKey('reader-content-tap'),
+                                    controller: _contentTapSurface,
+                                    onTapUp: _contentTap,
+                                    onPreview: _previewContentTap,
+                                    child: _article(context, chapter, appDark),
+                                  ),
+                                ),
+                              ),
                       ),
                     ),
                   ),
@@ -10863,6 +11193,20 @@ class _ReaderPageState extends State<ReaderPage>
   Future<void> _openHandoff() async {}
 
   void _showFindMatch(ReaderMatch match) {
+    if (_readium != null &&
+        _currentContent != null &&
+        match.paragraph < _currentContent!.paragraphs.length) {
+      final text = _currentContent!.paragraphs[match.paragraph];
+      unawaited(
+        _readium!.go(
+          _chapter,
+          text: text.substring(
+            match.start.clamp(0, text.length),
+            match.end.clamp(0, text.length),
+          ),
+        ),
+      );
+    }
     _highlightTimer?.cancel();
     _findMatch.value = ReaderMatch(
       match.paragraph,

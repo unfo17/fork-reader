@@ -16,6 +16,7 @@ class ReaderScrollLocation extends StatefulWidget {
     required this.ink,
     required this.paper,
     this.sourceFraction,
+    this.externalProgress,
     this.sourceTitle,
     this.bookTitle,
     this.footer = false,
@@ -29,6 +30,7 @@ class ReaderScrollLocation extends StatefulWidget {
     this.transparentPaper = false,
   });
   final ScrollController controller;
+  final ValueListenable<double>? externalProgress;
   final String title;
   final EdgeInsets margin;
   final Color ink, paper;
@@ -58,6 +60,7 @@ class _ReaderScrollLocationState extends State<ReaderScrollLocation> {
   void initState() {
     super.initState();
     widget.controller.addListener(_updateAfterLayout);
+    widget.externalProgress?.addListener(_updateAfterLayout);
     _updateAfterLayout();
   }
 
@@ -72,6 +75,19 @@ class _ReaderScrollLocationState extends State<ReaderScrollLocation> {
   }
 
   void _update() {
+    if (widget.externalProgress case final progress?) {
+      final percent = (progress.value * 100).clamp(0, 100).round();
+      if (_reportedPercent != percent) {
+        _reportedPercent = percent;
+        widget.onFractionChanged?.call(progress.value);
+      }
+      if (_percent != percent || _title != widget.title)
+        setState(() {
+          _percent = percent;
+          _title = widget.title;
+        });
+      return;
+    }
     final controller = widget.controller;
     if (!controller.hasClients || !controller.position.hasContentDimensions) {
       return;
@@ -110,6 +126,10 @@ class _ReaderScrollLocationState extends State<ReaderScrollLocation> {
   @override
   void didUpdateWidget(ReaderScrollLocation oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.externalProgress != widget.externalProgress) {
+      oldWidget.externalProgress?.removeListener(_updateAfterLayout);
+      widget.externalProgress?.addListener(_updateAfterLayout);
+    }
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller.removeListener(_updateAfterLayout);
       widget.controller.addListener(_updateAfterLayout);
@@ -124,6 +144,7 @@ class _ReaderScrollLocationState extends State<ReaderScrollLocation> {
 
   @override
   void dispose() {
+    widget.externalProgress?.removeListener(_updateAfterLayout);
     widget.controller.removeListener(_updateAfterLayout);
     super.dispose();
   }

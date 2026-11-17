@@ -35,7 +35,8 @@ dependencies:
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
-  flutter_readium: 0.3.3
+  flutter_readium:
+    path: third_party/flutter_readium
   cupertino_icons: ^1.0.8
   shared_preferences: ^2.5.5
   material_color_utilities: ^0.13.0

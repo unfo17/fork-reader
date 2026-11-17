@@ -1528,9 +1528,9 @@ Future<_ImportedFile> _importOriginal(_ImportJob job) async {
         },
         saveBody: (index, body) =>
             File('${staging.path}/c$index.txt').writeAsStringSync(body),
-        appendBody: (index, body) =>
-            File('${staging.path}/c$index.txt')
-                .writeAsStringSync(body, mode: FileMode.append),
+        appendBody: (index, body) => File(
+          '${staging.path}/c$index.txt',
+        ).writeAsStringSync(body, mode: FileMode.append),
         saveImage: (name, image) {
           media[name] = image.name;
           // Covers remain immediately readable for large book lists. All other
@@ -1547,8 +1547,9 @@ Future<_ImportedFile> _importOriginal(_ImportJob job) async {
       final suppliedText = job.input?.text ?? job.text;
       late File textFile;
       if (suppliedText != null || file == null) {
-        textFile = await File('${staging.path}/.directory-source.txt')
-            .writeAsString(suppliedText ?? utf8.decode(job.input!.bytes));
+        textFile = await File(
+          '${staging.path}/.directory-source.txt',
+        ).writeAsString(suppliedText ?? utf8.decode(job.input!.bytes));
       } else {
         textFile = File(job.decodedPath ?? file.path);
       }
@@ -1612,6 +1613,7 @@ Future<_ImportedFile> _importOriginal(_ImportJob job) async {
       'imageSizing': 1,
       if (isEpub) 'richText': 2,
       if (isEpub) 'epubNavigation': 1,
+      if (isEpub) 'epubOrigins': parsed.origins,
       if (isEpub) 'publisherSpacing': 1,
       if (isEpub) 'publisherLanguages': epubPublisherLanguageVersion,
       if (isEpub) 'epubMarkup': epubMarkupVersion,
@@ -1628,8 +1630,9 @@ Future<_ImportedFile> _importOriginal(_ImportJob job) async {
     if (direct) {
       // The live descriptor belongs to the importer; no original is copied.
     } else if (file == null) {
-      await File('${staging.path}/original')
-          .writeAsBytes(job.input!.bytes, flush: true);
+      await File(
+        '${staging.path}/original',
+      ).writeAsBytes(job.input!.bytes, flush: true);
     } else {
       await file.copy('${staging.path}/original');
     }
@@ -1674,8 +1677,9 @@ Future<_ImportedFile> _importOriginal(_ImportJob job) async {
       if (utf8.encode(index).length > 1024 * 1024) {
         throw const FormatException('本地插图索引过大');
       }
-      await File('${staging.path}/media.json')
-          .writeAsString(index, flush: true);
+      await File(
+        '${staging.path}/media.json',
+      ).writeAsString(index, flush: true);
     }
     final metadata = jsonEncode({
       'version': 1,
@@ -1694,8 +1698,9 @@ Future<_ImportedFile> _importOriginal(_ImportJob job) async {
     if (utf8.encode(metadata).length > 4 * 1024 * 1024) {
       throw const FormatException('书籍目录过大，请拆分原书后导入');
     }
-    await File('${staging.path}/book.json')
-        .writeAsString(metadata, flush: true);
+    await File(
+      '${staging.path}/book.json',
+    ).writeAsString(metadata, flush: true);
     await staging.rename('${job.root}/$id');
     return _ImportedFile(id, digest, parsed.novel, source);
   } on ArchiveException {
@@ -2012,8 +2017,10 @@ class LocalBookStore extends ChangeNotifier
     if (identical(cached?.source, source) && cached?.url == url) {
       return cached!.result;
     }
-    final result = Novel.fromSnapshot({...source.toSnapshot(), 'coverUrl': url})
-        .withChapters(source.chapters);
+    final result = Novel.fromSnapshot({
+      ...source.toSnapshot(),
+      'coverUrl': url,
+    }).withChapters(source.chapters);
     _coveredBooks[source.id] = (source: source, url: url, result: result);
     return result;
   }
@@ -2049,9 +2056,9 @@ class LocalBookStore extends ChangeNotifier
   ].where((book) => book.coverUrl != null).toList(growable: false);
 
   Future<Novel> setVolumeCover(int id, int volumeId) async {
-    final source = volumeCoverChoices(id)
-        .where((book) => book.id == volumeId)
-        .firstOrNull;
+    final source = volumeCoverChoices(
+      id,
+    ).where((book) => book.id == volumeId).firstOrNull;
     if (source == null) throw const FormatException('请选择本合订本中有封面的分卷');
     final bytes = await preparePersonalImageBytes(
       await LocalBookMedia.load(source.coverUrl!),
@@ -2166,9 +2173,9 @@ class LocalBookStore extends ChangeNotifier
   bool isIncompleteBook(int id) => importIssues(id).isNotEmpty;
 
   @override
-  bool shouldShowImportWarning(int id) =>
-      importIssues(id)
-          .any((issue) => _sources[issue.bookId]?['hideImportWarning'] != true);
+  bool shouldShowImportWarning(int id) => importIssues(
+    id,
+  ).any((issue) => _sources[issue.bookId]?['hideImportWarning'] != true);
 
   @override
   Future<void> setImportWarningHidden(int id, bool hidden) async {
@@ -2454,8 +2461,9 @@ class LocalBookStore extends ChangeNotifier
     final source = _seriesChapters[id]?[chapter.id];
     final base = source?.bookId ?? id;
     final chapterId = source?.chapterId ?? chapter.id;
-    if (importIssues(base)
-        .any((issue) => issue.chapterIds.contains(chapterId))) {
+    if (importIssues(
+      base,
+    ).any((issue) => issue.chapterIds.contains(chapterId))) {
       throw const FormatException(
         '原文件本章数据损坏，需完整原件恢复。其他可读章节仍可阅读；请重新获取完整原件后重新导入，内容不同会作为新书保留，不会覆盖原有进度与书签。',
       );
@@ -2804,8 +2812,9 @@ class LocalBookStore extends ChangeNotifier
         if (old == null ||
             series.updatedAt > old.updatedAt ||
             (series.updatedAt == old.updatedAt &&
-                jsonEncode(series.toJson())
-                        .compareTo(jsonEncode(old.toJson())) >
+                jsonEncode(
+                      series.toJson(),
+                    ).compareTo(jsonEncode(old.toJson())) >
                     0)) {
           next[series.id] = series.copyWith(tags: series.tags ?? old?.tags);
         }
@@ -3025,13 +3034,26 @@ class LocalBookStore extends ChangeNotifier
   bool isReadiumEpub(int id) =>
       (_sources[id]?['name'] as String? ?? '').toLowerCase().endsWith('.epub');
 
+  String? readiumChapterHref(int id, int index) {
+    final origins = _sources[id]?['epubOrigins'];
+    if (origins is List &&
+        index >= 0 &&
+        index < origins.length &&
+        origins[index] is String)
+      return origins[index] as String;
+    return null;
+  }
+
   /// Stream a byte-identical EPUB while its scoped-storage lease is alive.
   Future<void> copyEpubForReadium(int id, File target) async {
     if (!isReadiumEpub(id)) throw const FormatException('本书不是独立 EPUB 原书');
     await _withOriginalInput(id, (input) async {
       final sink = target.openWrite();
-      try { await sink.addStream(input.bytes()); }
-      finally { await sink.close(); }
+      try {
+        await sink.addStream(input.bytes());
+      } finally {
+        await sink.close();
+      }
     });
   }
 

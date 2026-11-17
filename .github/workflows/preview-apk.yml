@@ -25,14 +25,42 @@ jobs:
           flutter pub get
           dart run tools/verify_readium.dart
           dart analyze --no-fatal-warnings lib
+      - name: Restore persistent release signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.READIUM_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.READIUM_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.READIUM_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.READIUM_KEY_ALIAS }}
+        run: |
+          python3 - <<'PYCODE'
+          import base64, os, pathlib
+          for name in ['KEYSTORE_BASE64','STORE_PASSWORD','KEY_PASSWORD','KEY_ALIAS']:
+              if not os.environ.get(name): raise SystemExit('Missing persistent signing secret: '+name)
+          key=pathlib.Path(os.environ['RUNNER_TEMP'])/'readium-release.jks'
+          key.write_bytes(base64.b64decode(os.environ['KEYSTORE_BASE64'],validate=True));key.chmod(0o600)
+          props=pathlib.Path('android/key.properties')
+          props.write_text('storeFile='+str(key)+'\nstorePassword='+os.environ['STORE_PASSWORD']+'\nkeyPassword='+os.environ['KEY_PASSWORD']+'\nkeyAlias='+os.environ['KEY_ALIAS']+'\n');props.chmod(0o600)
+          PYCODE
       - name: Build APK
-        run: flutter build apk --release --target-platform android-arm64 --build-name=0.5.6-readium-preview.2 --build-number=2279
+        run: flutter build apk --release --target-platform android-arm64 --build-name=0.5.6-readium-preview.3 --build-number=2280
       - name: Verify and package APK
+        env:
+          EXPECTED_CERT: ${{ vars.READIUM_SIGNING_SHA256 }}
         run: |
           mkdir -p release
           cp build/app/outputs/flutter-apk/app-release.apk release/wenku8-readium-preview-arm64-v8a.apk
           BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
           "$BUILD_TOOLS/apksigner" verify --verbose release/*.apk
+          export APKSIGNER="$BUILD_TOOLS/apksigner"
+          python3 - <<'PYCODE'
+          import os, subprocess
+          expected=os.environ['EXPECTED_CERT'].lower().replace(':','')
+          if len(expected)!=64: raise SystemExit('Pinned signing certificate is missing')
+          out=subprocess.check_output([os.environ['APKSIGNER'],'verify','--print-certs','release/wenku8-readium-preview-arm64-v8a.apk'],text=True)
+          actual=next(line.split(': ',1)[1].strip().lower() for line in out.splitlines() if 'certificate SHA-256 digest:' in line)
+          if actual!=expected: raise SystemExit('Signing certificate differs from the pinned update certificate')
+          print('Persistent signing certificate verified:',actual)
+          PYCODE
           cd release
           sha256sum *.apk > SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
@@ -40,7 +68,8 @@ jobs:
           name: readium-preview-apk
           path: release/*
       - name: Publish preview release
+        if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create readium-preview-20261117.2 release/* --target "$GITHUB_SHA" --prerelease --title "Readium 本地阅读器预览版 2" --notes-file RELEASE_PREVIEW.md
+          gh release create readium-preview-20261117.3 release/* --target "$GITHUB_SHA" --prerelease --title "Readium 本地阅读器预览版 3" --notes-file RELEASE_PREVIEW.md

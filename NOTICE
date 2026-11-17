@@ -53,3 +53,8 @@ build files and notices: third_party/juniversalchardet-2.0.4/.
 Apache POI HWPF 5.5.1 and document dependency notices: assets/licenses/poi.txt.
 
 0.5.0 source distribution: upstream library test suites and sample fixtures are omitted; runtime library sources and original licenses are retained.
+
+Readium Flutter adapter: third_party/flutter_readium is based on flutter_readium 0.3.3
+(Royal Danish Library, BSD-3-Clause; see its LICENSE). Wenku modifications route
+tap zones through the existing Flutter controls and disable duplicate native
+edge-tap navigation. Readium toolkit parsing and rendering remain unchanged.
