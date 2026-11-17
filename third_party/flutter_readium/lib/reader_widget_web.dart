@@ -11,6 +11,8 @@ class ReadiumReaderWidget extends StatefulWidget {
     this.loadingWidget = const Center(child: CircularProgressIndicator()),
     this.initialLocator,
     this.shouldShowControls,
+    this.onReaderTap,
+    this.onUserNavigation,
     this.onExternalLinkActivated,
     this.goBackwardSemanticLabel = 'Go Backward',
     this.goForwardSemanticLabel = 'Go Forward',
@@ -29,6 +31,8 @@ class ReadiumReaderWidget extends StatefulWidget {
   final Widget loadingWidget;
   final Locator? initialLocator;
   final ValueNotifier<bool>? shouldShowControls;
+  final ValueChanged<Offset>? onReaderTap;
+  final VoidCallback? onUserNavigation;
   final Function(String)? onExternalLinkActivated;
   final String goBackwardSemanticLabel;
   final String goForwardSemanticLabel;
@@ -45,7 +49,8 @@ class ReadiumReaderWidget extends StatefulWidget {
   State<ReadiumReaderWidget> createState() => _ReadiumReaderWidgetState();
 }
 
-class _ReadiumReaderWidgetState extends State<ReadiumReaderWidget> implements ReadiumReaderWidgetInterface {
+class _ReadiumReaderWidgetState extends State<ReadiumReaderWidget>
+    implements ReadiumReaderWidgetInterface {
   static final _log = ReadiumLog.tag('ReaderWidget');
 
   @override

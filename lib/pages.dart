@@ -5685,6 +5685,7 @@ class _ReaderPageState extends State<ReaderPage>
   double _nativeFraction = 0;
   String? _nativeText;
   bool _nativeInitialRestored = false;
+  bool _nativeAutoBusy = false;
   void _restoreNativePosition() {
     final engine = _readium;
     final content = _currentContent;
@@ -6267,15 +6268,21 @@ class _ReaderPageState extends State<ReaderPage>
       return;
     }
     if (_readium != null) {
+      if (_nativeAutoBusy) return;
       final dt = ((elapsed - previous).inMicroseconds / 1000000).clamp(
         0.0,
         .05,
       );
-      if (_nativeFraction >= .999) {
-        unawaited(_readium!.pageBy(1));
-      } else {
-        unawaited(_readium!.scrollBy(dt * _readerPreferences.autoScrollSpeed));
+      if (_nativeFraction >= .999 &&
+          _chapter + 1 >= _sourceBook.chapters.length) {
+        _stopAutoScroll(showControls: true);
+        return;
       }
+      _nativeAutoBusy = true;
+      final work = _nativeFraction >= .999
+          ? _readium!.pageBy(1)
+          : _readium!.scrollBy(dt * _readerPreferences.autoScrollSpeed);
+      unawaited(work.whenComplete(() => _nativeAutoBusy = false));
       return;
     }
     if (!_scroll.hasClients) return;
@@ -6520,6 +6527,7 @@ class _ReaderPageState extends State<ReaderPage>
             TapUpDetails(
               globalPosition: point,
               localPosition: box?.globalToLocal(point) ?? point,
+              kind: PointerDeviceKind.touch,
             ),
           );
         },
@@ -6901,10 +6909,10 @@ class _ReaderPageState extends State<ReaderPage>
   }) {
     if (_readium != null) {
       unawaited(
-        _prepareContent(chapter).then((content) {
+        _prepareContent(chapter).then<void>((content) async {
           if (!mounted || paragraph >= content.paragraphs.length) return;
           final text = content.paragraphs[paragraph];
-          return _readium!.go(
+          await _readium!.go(
             chapter,
             text: text.substring(
               start.clamp(0, text.length),
@@ -7024,7 +7032,7 @@ class _ReaderPageState extends State<ReaderPage>
       if (!_nativeLocationChanging) {
         unawaited(
           _prepareContent(index)
-              .then((content) {
+              .then<void>((content) async {
                 if (!mounted) return;
                 final paragraph = position?.paragraphIndex;
                 String? text;
@@ -7041,7 +7049,7 @@ class _ReaderPageState extends State<ReaderPage>
                     (start + 200).clamp(start, body.length),
                   );
                 }
-                return _readium!.go(
+                await _readium!.go(
                   index,
                   progression: position?.fraction,
                   text: text,
@@ -8355,6 +8363,11 @@ class _ReaderPageState extends State<ReaderPage>
   }
 
   void _prepareRestore(ReadingPosition position, {bool alignStart = false}) {
+    if (_readium != null) {
+      _readium!.persist();
+      _restoring = false;
+      return;
+    }
     // Rotation/safe-area changes must resume at the saved source sentence,
     // rather than the beginning of a newly packed iOS page.
     _restoreAlignStart = alignStart || _alignIosResumeStart(position);

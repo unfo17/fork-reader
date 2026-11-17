@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'app_ui.dart';
 import 'reader_chrome.dart';
 import 'reader_status.dart';

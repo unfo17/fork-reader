@@ -232,7 +232,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       lineHeight: lineHeight,
       fontFamily: fontFamily,
       fontWeight: switch (prefs.textWeight) {
-        ReaderTextWeight.regular => null,
+        ReaderTextWeight.regular => 1.0,
         ReaderTextWeight.medium => 1.25,
         ReaderTextWeight.bold => 1.5,
       },

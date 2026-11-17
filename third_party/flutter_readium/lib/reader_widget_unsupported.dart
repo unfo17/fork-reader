@@ -7,6 +7,8 @@ class ReadiumReaderWidget extends StatelessWidget {
     this.loadingWidget = const Center(child: CircularProgressIndicator()),
     this.initialLocator,
     this.shouldShowControls,
+    this.onReaderTap,
+    this.onUserNavigation,
     this.onExternalLinkActivated,
     this.onTextSelected,
     this.onSelectionAction,
@@ -25,6 +27,8 @@ class ReadiumReaderWidget extends StatelessWidget {
   final Widget loadingWidget;
   final Locator? initialLocator;
   final ValueNotifier<bool>? shouldShowControls;
+  final ValueChanged<Offset>? onReaderTap;
+  final VoidCallback? onUserNavigation;
   final Function(String)? onExternalLinkActivated;
   final ValueChanged<TextSelectionEvent>? onTextSelected;
   final ValueChanged<SelectionActionEvent>? onSelectionAction;
@@ -38,5 +42,6 @@ class ReadiumReaderWidget extends StatelessWidget {
   final bool verticalScroll;
 
   @override
-  Widget build(final BuildContext context) => Center(child: Text('ReaderWidget is not available on this platform.'));
+  Widget build(final BuildContext context) =>
+      Center(child: Text('ReaderWidget is not available on this platform.'));
 }
