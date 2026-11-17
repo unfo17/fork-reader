@@ -7176,10 +7176,11 @@ class _ReaderPageState extends State<ReaderPage>
     }
     if (_readium != null) {
       if (!_nativeLocationChanging) {
+        final nativeTicket = ++_chapterSwitchTicket;
         unawaited(
           _prepareContent(index)
               .then<void>((content) async {
-                if (!mounted) return;
+                if (!mounted || nativeTicket != _chapterSwitchTicket) return;
                 final paragraph = position?.paragraphIndex;
                 String? text;
                 if (paragraph != null &&

@@ -273,23 +273,28 @@ class ReadiumReaderBridge extends ChangeNotifier {
     return rd.Locator.fromJson(json);
   }
 
+  int _seekTicket = 0;
   Future<void> go(
     int index, {
     double? progression,
     String? text,
     String? before,
     String? after,
-  }) => command(() async {
-    final at = locationFor(
-      index,
-      progression: progression,
-      text: text,
-      before: before,
-      after: after,
-    );
-    if (at == null) throw const FormatException('原书目录没有对应的阅读位置');
-    await api.goToLocator(at);
-  });
+  }) {
+    final ticket = ++_seekTicket;
+    return command(() async {
+      if (ticket != _seekTicket) return;
+      final at = locationFor(
+        index,
+        progression: progression,
+        text: text,
+        before: before,
+        after: after,
+      );
+      if (at == null) throw const FormatException('原书目录没有对应的阅读位置');
+      await api.goToLocator(at);
+    });
+  }
 
   String _bookmarkKey(String id) => 'readium.bookmark.v1.${book.id}.$id';
   Future<void> rememberBookmark(String id, {bool selected = false}) async {
