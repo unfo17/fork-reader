@@ -33,11 +33,13 @@ jobs:
           KEY_ALIAS: ${{ secrets.READIUM_KEY_ALIAS }}
         run: |
           python3 - <<'PYCODE'
-          import base64, os, pathlib
+          import base64, hashlib, os, pathlib, subprocess
           for name in ['KEYSTORE_BASE64','STORE_PASSWORD','KEY_PASSWORD','KEY_ALIAS']:
               if not os.environ.get(name): raise SystemExit('Missing persistent signing secret: '+name)
           key=pathlib.Path(os.environ['RUNNER_TEMP'])/'readium-release.jks'
           key.write_bytes(base64.b64decode(os.environ['KEYSTORE_BASE64'],validate=True));key.chmod(0o600)
+          cert=subprocess.check_output(['keytool','-exportcert','-keystore',str(key),'-alias',os.environ['KEY_ALIAS'],'-storepass:env','STORE_PASSWORD'],stderr=subprocess.DEVNULL)
+          print('Restored key certificate SHA-256:',hashlib.sha256(cert).hexdigest())
           props=pathlib.Path('android/key.properties')
           props.write_text('storeFile='+str(key)+'\nstorePassword='+os.environ['STORE_PASSWORD']+'\nkeyPassword='+os.environ['KEY_PASSWORD']+'\nkeyAlias='+os.environ['KEY_ALIAS']+'\n');props.chmod(0o600)
           PYCODE
@@ -58,12 +60,14 @@ jobs:
           if len(expected)!=64: raise SystemExit('Pinned signing certificate is missing')
           out=subprocess.check_output([os.environ['APKSIGNER'],'verify','--print-certs','release/wenku8-readium-preview-arm64-v8a.apk'],text=True)
           actual=next(line.split(': ',1)[1].strip().lower() for line in out.splitlines() if 'certificate SHA-256 digest:' in line)
+          print('APK certificate SHA-256:',actual)
           if actual!=expected: raise SystemExit('Signing certificate differs from the pinned update certificate')
           print('Persistent signing certificate verified:',actual)
           PYCODE
           cd release
           sha256sum *.apk > SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: readium-preview-apk
           path: release/*
