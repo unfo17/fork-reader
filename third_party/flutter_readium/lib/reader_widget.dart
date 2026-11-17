@@ -292,7 +292,7 @@ class _ReadiumReaderWidgetState extends State<ReadiumReaderWidget>
 
   @override
   Future<void> setEPUBPreferences(EPUBPreferences preferences) async {
-    _channel?.setEPUBPreferences(preferences);
+    await _channel?.setEPUBPreferences(preferences);
 
     _scrollMode = preferences.scroll ?? false;
   }

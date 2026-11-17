@@ -114,6 +114,17 @@ class UserFontStore extends ChangeNotifier {
     _loaded = true;
   }
 
+  /// Expose the same private face to the native Readium renderer.
+  Future<File?> readerFile(String id) async {
+    await load();
+    if (!available(id) || id == AppTypeface.system.name) return null;
+    final root = await _root();
+    final font = find(id);
+    return font == null
+        ? File('${root.path}/${downloadableFont(id)!.fileName}')
+        : _file(root, font);
+  }
+
   Future<void> ensureLoaded(String id) async {
     final font = find(id);
     if (!available(id) || id == AppTypeface.system.name) return;

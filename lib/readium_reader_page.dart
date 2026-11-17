@@ -225,6 +225,10 @@ class ReadiumReaderBridge extends ChangeNotifier {
     required double lineHeight,
     required bool dark,
     required String? fontFamily,
+    File? fontFile,
+    File? backgroundFile,
+    Set<String> hiddenLanguages = const {},
+    String? onlyLanguage,
   }) {
     _preferences = rd.EPUBPreferences(
       publisherStyles: true,
@@ -238,7 +242,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       },
       scroll: prefs.mode == ReaderMode.scroll,
       verticalText: prefs.mode == ReaderMode.vertical,
-      pageMargins: prefs.bindingMargin / 26,
+      pageMargins: 0,
       paragraphIndent: prefs.indent ? 2 : null,
       paragraphSpacing: prefs.paragraphGapOverride
           ? prefs.paragraphGap / fontSize
@@ -250,11 +254,77 @@ class ReadiumReaderBridge extends ChangeNotifier {
     );
     // Set before the platform view is constructed, including its scroll mode.
     api.setDefaultPreferences(_preferences);
-    return command(
-      () => api.setEPUBPreferences(_preferences),
-      waitForView: false,
-    );
+    return command(() async {
+      await api.setEPUBPreferences(_preferences);
+      if (Platform.isAndroid) {
+        final css = StringBuffer('body{line-height:$lineHeight !important;}');
+        if (prefs.indent) css.write('p{text-indent:2em !important;}');
+        if (prefs.justify) css.write('p{text-align:justify !important;}');
+        if (prefs.paragraphGapOverride)
+          css.write(
+            'p{margin-block-start:0 !important;margin-block-end:${prefs.paragraphGap}px !important;}',
+          );
+        if (prefs.letterSpacing != .1)
+          css.write(
+            'body{letter-spacing:${prefs.letterSpacing}px !important;}',
+          );
+        if (prefs.textWeight != ReaderTextWeight.regular)
+          css.write(
+            'body{font-weight:${prefs.textWeight.weight.value} !important;}',
+          );
+        if (prefs.verticalLatinOrientation ==
+            ReaderVerticalLatinOrientation.upright)
+          css.write('body{text-orientation:upright !important;}');
+        if (fontFile != null && fontFamily != null) {
+          final data = await _dataUrl(fontFile, 'font/ttf');
+          final family = jsonEncode(fontFamily);
+          css.write(
+            '@font-face{font-family:$family;src:url("$data");}body,body *:not(code):not(pre){font-family:$family !important;}',
+          );
+        }
+        if (backgroundFile != null) {
+          final data = await _dataUrl(backgroundFile, 'image/png');
+          final c = prefs.background(dark);
+          final shade =
+              'rgba(${(c.r * 255).round()},${(c.g * 255).round()},${(c.b * 255).round()},${1 - prefs.backgroundOpacity})';
+          final fit = prefs.backgroundFit == BoxFit.contain
+              ? 'contain'
+              : prefs.backgroundFit == BoxFit.fill
+              ? '100% 100%'
+              : 'cover';
+          css.write(
+            'html{background-image:linear-gradient($shade,$shade),url("$data") !important;background-size:$fit !important;background-position:center !important;background-attachment:fixed !important;}body{background-color:transparent !important;}',
+          );
+        }
+        // Native EPUB language tags stay intact; only the user's explicit filter hides them.
+        for (final language in hiddenLanguages) {
+          final code = language.replaceAll(RegExp('[^a-zA-Z0-9-]'), '');
+          if (code.isNotEmpty)
+            css.write(
+              '[lang="$code"],[xml\\:lang="$code"]{display:none !important;}',
+            );
+        }
+        if (onlyLanguage != null) {
+          final code = onlyLanguage.replaceAll(RegExp('[^a-zA-Z0-9-]'), '');
+          if (code.isNotEmpty)
+            css.write(
+              'body [lang]:not([lang|="$code"]){display:none !important;}',
+            );
+        }
+        await native.invokeMethod<String>('style', {
+          'script':
+              '(function(){var s=document.getElementById("wenku-reader-preferences");if(!s){s=document.createElement("style");s.id="wenku-reader-preferences";document.head.appendChild(s);}s.textContent=${jsonEncode(css.toString())};})();',
+        });
+      }
+    }, waitForView: false);
   }
+
+  final _dataUrls = <String, Future<String>>{};
+  Future<String> _dataUrl(File file, String mime) =>
+      _dataUrls.putIfAbsent(file.path, () async {
+        if (_dataUrls.length > 2) _dataUrls.remove(_dataUrls.keys.first);
+        return 'data:$mime;base64,${base64Encode(await file.readAsBytes())}';
+      });
 
   Future<void> scrollBy(double pixels) => command(() async {
     if (!Platform.isAndroid) return;

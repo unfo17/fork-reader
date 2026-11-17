@@ -10,6 +10,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /** Narrow app-owned bridge to the pinned Readium navigator, not another WebView. */
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class ReadiumControlsPlugin : FlutterPlugin {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var channel: MethodChannel? = null
@@ -24,6 +25,11 @@ class ReadiumControlsPlugin : FlutterPlugin {
                                 if ((call.argument<Int>("direction") ?: 1) > 0) ReadiumReader.visualGoForward(animated)
                                 else ReadiumReader.visualGoBackward(animated)
                                 result.success(null)
+                            }
+                            "style" -> {
+                                val script = call.argument<String>("script") ?: ""
+                                ReadiumReader.appReaderStyleScript = script
+                                result.success(ReadiumReader.epubEvaluateJavascript(script))
                             }
                             "evaluate" -> result.success(ReadiumReader.epubEvaluateJavascript(call.argument<String>("script") ?: ""))
                             else -> result.notImplemented()

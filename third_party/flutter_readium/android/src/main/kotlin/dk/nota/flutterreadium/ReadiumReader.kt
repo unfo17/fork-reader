@@ -116,6 +116,8 @@ object ReadiumReader :
     TimebasedNavigator.TimebasedListener,
     EpubNavigator.VisualListener,
     CoroutineScope by CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) {
+    // App-owned preferences are reapplied to each Readium resource, never to a separate renderer.
+    var appReaderStyleScript: String? = null
     private var appRef: WeakReference<Application>? = null
 
     private var activityRef: WeakReference<Activity>? = null

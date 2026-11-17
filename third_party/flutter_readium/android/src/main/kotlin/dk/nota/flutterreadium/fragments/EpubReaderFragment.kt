@@ -118,6 +118,7 @@ class EpubReaderFragment :
         PluginLog.d(TAG, "::onPageLoaded")
         lifecycleScope.launch {
             applyCustomCssVariables()
+            ReadiumReader.appReaderStyleScript?.let { evaluateJavascript(it) }
             injectImageTapListeners()
         }
         listener?.onPageLoaded()

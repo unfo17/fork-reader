@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' show PointerDeviceKind;
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart' show setEquals;
@@ -5803,21 +5804,60 @@ class _ReaderPageState extends State<ReaderPage>
 
   Widget _nativeBody(BuildContext context) {
     final bridge = _readium!;
+    final prefs = _readerPreferences;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final hidden = widget.state.hiddenReaderLanguagesFor(widget.novel.id);
+    final only = widget.state.onlyReaderLanguageFor(widget.novel.id);
     final key =
-        '${_readerPreferences.layoutKey}|$_fontSize|$_lineHeight|$_readerFontFamily|${Theme.of(context).brightness}';
+        '${prefs.toJson()}|$_fontSize|$_lineHeight|$_readerFontId|$dark|$hidden|$only';
     if (key != _nativePreferencesKey) {
       _nativePreferencesKey = key;
+      // Supply initial defaults synchronously, before creating the native view.
       unawaited(
         bridge.preferences(
-          _readerPreferences,
+          prefs,
           fontSize: _fontSize,
           lineHeight: _lineHeight,
-          dark: Theme.of(context).brightness == Brightness.dark,
-          fontFamily: _readerFontFamily,
+          dark: dark,
+          fontFamily: null,
         ),
       );
+      unawaited(
+        () async {
+          final font = await widget.state.fonts.readerFile(_readerFontId);
+          final background = await widget.state.backgrounds.file(
+            prefs.backgroundImage,
+          );
+          if (!mounted || _nativePreferencesKey != key) return;
+          await bridge.preferences(
+            prefs,
+            fontSize: _fontSize,
+            lineHeight: _lineHeight,
+            dark: dark,
+            fontFamily: _readerFontFamily,
+            fontFile: font,
+            backgroundFile: background,
+            hiddenLanguages: hidden,
+            onlyLanguage: only,
+          );
+        }().catchError((Object _) {
+          if (mounted) showNovelFeedback(context, '阅读字体或背景未能加载，请重新选择');
+        }),
+      );
     }
-    return bridge.view();
+    final safe = MediaQuery.viewPaddingOf(context);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        safe.left + prefs.leftMargin,
+        (prefs.hideSystemStatus ? _systemStatusExtent(context) : safe.top) +
+            prefs.marginTop,
+        safe.right + prefs.rightMargin,
+        safe.bottom +
+            prefs.marginBottom +
+            ReaderScrollLocation.extentOf(context),
+      ),
+      child: bridge.view(),
+    );
   }
 
   ReaderPreferences get _readerPreferences =>
@@ -11292,6 +11332,10 @@ class _ReaderPageState extends State<ReaderPage>
         return;
       }
       _showFindMatch(match);
+      if (_readium != null) {
+        _showChrome(true);
+        return;
+      }
       // A manual drag can interrupt lazy positioning before it completes.
       // Expiration belongs to selection, not to successful restoration.
       if (_paginated) {
