@@ -6,6 +6,7 @@ internal object NetworkStatePolicy {
         internet == null -> "checking"
         !internet -> "offline"
         validated -> "online"
-        else -> "checking"
+        // A failed Android validation probe is not proof that HTTPS speech services are unreachable.
+        else -> "unknown"
     }
 }
