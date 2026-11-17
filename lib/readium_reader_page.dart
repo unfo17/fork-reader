@@ -62,6 +62,18 @@ class ReadiumReaderBridge extends ChangeNotifier {
   bool ready = false;
   int chapter = 0;
   double fraction = 0;
+  bool _scrollAtEnd = false;
+  bool get atResourceEnd {
+    if (_preferences.scroll == true) return _scrollAtEnd;
+    final locations = locator?.locations?.toJson();
+    final page = locations?['currentPage'], count = locations?['totalPages'];
+    return page is num && count is num && count > 0 && page >= count - 1;
+  }
+
+  bool get atBookEnd =>
+      atResourceEnd &&
+      publication?.readingOrder.lastOrNull?.href.split('#').first ==
+          locator?.href.split('#').first;
   Future<void> _saves = Future.value();
   Future<void> _commands = Future.value();
   static const native = MethodChannel('org.mewx.wenku8/readium_controls');
@@ -185,6 +197,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       _events = api.onTextLocatorChanged.listen((at) {
         if (_disposed || _owner != this) return;
         if (!_firstLocation.isCompleted) _firstLocation.complete();
+        if (locator?.href != at.href) _scrollAtEnd = false;
         locator = at;
         chapter = chapterFor(at);
         fraction = at.locations?.progression ?? 0;
@@ -443,9 +456,11 @@ class ReadiumReaderBridge extends ChangeNotifier {
 
   Future<void> scrollBy(double pixels) => command(() async {
     if (!Platform.isAndroid) return;
-    await native.invokeMethod<String>('evaluate', {
-      'script': 'window.scrollBy(0,${pixels.toStringAsFixed(3)});',
+    final result = await native.invokeMethod<String>('evaluate', {
+      'script':
+          '(function(){window.scrollBy(0,${pixels.toStringAsFixed(3)});var e=document.scrollingElement||document.documentElement;return e.scrollTop+e.clientHeight>=e.scrollHeight-1;})()',
     });
+    _scrollAtEnd = result == 'true';
   });
   void persist() {
     final at = locator;

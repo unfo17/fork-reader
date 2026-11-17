@@ -7,7 +7,7 @@
 
 - 首页固定为“本地 / 我的”，不再创建发现和书架主页。旧启动页配置回退到本地；网络状态和旧合并书架设置不会重新显示已移除的主页。
 - 移除合并书架、离线适配和阅读器模式开关；直接阅读页面选项仅保留本地。
-- 新导入 EPUB 使用 `flutter_readium 0.3.3` 的 `loadPublication`，由 Readium 解析元数据、资源清单、正文顺序、封面和多级目录；资源索引转换后接入现有正文、插图、注释和分页排版。
+- 新导入 EPUB 使用 `flutter_readium 0.3.3` 的 `loadPublication`，由 Readium 解析元数据、资源清单、正文顺序、封面和多级目录；原 EPUB 由 Readium Navigator 渲染；提取的文字只作为原搜索、书签和听书模块的辅助索引。
 - 支持普通文件、内存数据及系统文件选择器授权的文件描述符。描述符输入只为原生解析生成临时 EPUB，解析完成后清理，不改变原文件。
 - TXT 继续使用原 TXT 章节解析。Android 预览版目前限定 EPUB、TXT 和 ZIP，暂未实现其他文档转换。旧书库维护、目录升级及封面重建保留历史解析器，以兼容已有阅读坐标；此版本没有迁移已有书籍。
 
@@ -17,7 +17,7 @@ Readium EPUB 导入支持 Android / iOS；HarmonyOS 暂无此插件实现，会�
 Android 最低 API 24、compileSdk 36，AGP 8.13.2、Kotlin 2.3.21；
 iOS 最低 15.0，Podfile 已添加 Readium pod 源，插件指定 Swift toolkit 3.9.x。
 选择 0.3.3 是为兼容现有 AGP 8 工程，避免引入要求 AGP 9 / API 37 的新版插件。
-这里只使用解析 API，不创建 Readium 原生阅读视图；现有 Android 音频 Activity 可以保留。
+Android 阅读 Activity 使用 AudioServiceFragmentActivity 承载 Readium Fragment，同时保留音频服务。iOS 导入路径保留，当前预览 APK 的控件适配仅在 Android 验证。
 
 ## 验证
 
@@ -40,6 +40,18 @@ flutter analyze
 避免上游着色器的 GPU 导数函数阻止资源打包。
 APK 由 `.github/workflows/preview-apk.yml` 编译、校验签名，并发布到 GitHub 预览 Release。
 
-## 原书样式显示（预览版 2）
+## 原阅读控件与 Readium 正文（预览版 3）
 
-独立 EPUB 默认直接使用 Readium 原生 Navigator 显示原书，不再将 Flutter 提取正文作为显示输入。默认保留出版方 CSS，工具栏提供原书目录和文字缩放；Readium locator 单独保存。合订本及 TXT 暂保留旧路径，旧批注、听书及高级排版选项尚未迁移。样式回归样书可由 `python3 tools/create_readium_style_fixture.py` 生成，包含外部 CSS、颜色、右对齐、边框、表格、不同字号和 ruby 注音。
+`ReaderPage` 继续使用原来的 Flutter 顶栏、底栏、目录、阅读设置、搜索、书签编辑器与听书面板；`ReadiumReaderBridge` 只替换正文引擎，不再另建一套阅读页面。独立 EPUB 的包解析、正文布局和渲染均由 Readium 处理，直接加载原书 XHTML、CSS、内嵌字体和图片。原书样式默认保留。
+
+原控件的章节跳转、进度拖动、点击区域、音量键、自动滚动/翻页、字号、行距、四边留白、纸色、自选字体、背景图、搜索、书签定位、批注及听书跟随通过适配层驱动 Readium。精确续读与新书签保存 Readium locator；旧段落坐标在有文字索引时转换为文本定位。TXT 与手动合订本保留原阅读路径。Readium 的翻页动画与旧 Flutter 自绘动效不完全相同。
+
+`third_party/flutter_readium` 基于 BSD-3-Clause 的 0.3.3，只增加原应用点击回调、每个正文资源的阅读偏好恢复、批注边框样式，以及窄范围的原生控制接口。Readium Kotlin toolkit 固定为 3.2.0。自选字体与背景只读应用私有文件，通过样式送到 Readium，原 EPUB 文件不被改写。
+
+样式样书：`python3 tools/create_readium_style_fixture.py`，包含外部 CSS、颜色、右对齐、边框、表格、不同字号和 ruby 注音。
+
+## APK 固定签名
+
+Release 构建必须提供 `android/key.properties` 和固定 keystore，缺少时直接失败，不回退 debug 签名。CI 从仓库 Secrets 恢复密钥，并用 `READIUM_SIGNING_SHA256` 固定证书指纹；私钥和密码不得进入 Git。推送只生成供验证的 artifact，验证后再发布 Release。
+
+前两版使用了各自构建机器的临时 debug 密钥，私钥没有保留，无法用新密钥覆盖安装。这两版需要先通过应用内备份导出数据，再迁移到固定签名版；从固定签名版开始保持包名、证书一致，并递增 versionCode。

@@ -5686,6 +5686,7 @@ class _ReaderPageState extends State<ReaderPage>
   double _nativeFraction = 0;
   String? _nativeText;
   String? _nativeReportedError;
+  Object? _nativePublication;
   bool _nativeInitialRestored = false;
   bool _nativeAutoBusy = false;
   void _restoreNativePosition() {
@@ -5716,6 +5717,11 @@ class _ReaderPageState extends State<ReaderPage>
 
   void _nativeChanged() {
     if (!mounted) return;
+    if (!identical(_nativePublication, _readium!.publication)) {
+      _nativePublication = _readium!.publication;
+      _nativePreferencesKey = null;
+      _nativeMarksKey = null;
+    }
     final error = _readium!.error;
     if (error != null && _nativeReportedError != error) {
       _nativeReportedError = error;
@@ -6393,13 +6399,12 @@ class _ReaderPageState extends State<ReaderPage>
         0.0,
         .05,
       );
-      if (_nativeFraction >= .999 &&
-          _chapter + 1 >= _sourceBook.chapters.length) {
+      if (_readium!.atBookEnd) {
         _stopAutoScroll(showControls: true);
         return;
       }
       _nativeAutoBusy = true;
-      final work = _nativeFraction >= .999
+      final work = _readium!.atResourceEnd
           ? _readium!.pageBy(1)
           : _readium!.scrollBy(dt * _readerPreferences.autoScrollSpeed);
       unawaited(work.whenComplete(() => _nativeAutoBusy = false));
@@ -6453,8 +6458,7 @@ class _ReaderPageState extends State<ReaderPage>
         }
         if (!_ready || _restoring) return;
         if (_readium != null) {
-          if (_nativeFraction >= .999 &&
-              _chapter + 1 >= _sourceBook.chapters.length) {
+          if (_readium!.atBookEnd) {
             _stopAutoScroll(showControls: true);
           } else {
             unawaited(_readium!.pageBy(1).then((_) => _scheduleAutoPage()));
@@ -7866,13 +7870,26 @@ class _ReaderPageState extends State<ReaderPage>
 
   void _pageBy(int direction) {
     if (_readium != null) {
-      if (!_toolsOpen && !_catalogueOpen && !_findOpen)
+      if (!_ready || _toolsOpen || _catalogueOpen || _findOpen || _noteOpen)
+        return;
+      _cancelExitRequest();
+      _stopAutoScroll();
+      _suspendListeningFollow();
+      if (direction > 0 && _readium!.atBookEnd) {
+        AppHaptics.play(context, HapticCue.boundary);
+        unawaited(_completeReadingAtEnd());
+      } else {
+        AppHaptics.play(context, HapticCue.pageTurn);
         unawaited(
           _readium!.pageBy(
             direction,
-            animated: _readerPreferences.pageEffect != ReaderPageEffect.none,
+            animated:
+                _readerPreferences.pageEffect != ReaderPageEffect.none &&
+                !widget.state.reduceMotion &&
+                !MediaQuery.disableAnimationsOf(context),
           ),
         );
+      }
       return;
     }
     if (_pendingChapter != null && _pendingChapter != _chapter + direction) {
