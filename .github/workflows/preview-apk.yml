@@ -44,7 +44,7 @@ jobs:
           props.write_text('storeFile='+str(key)+'\nstorePassword='+os.environ['STORE_PASSWORD']+'\nkeyPassword='+os.environ['KEY_PASSWORD']+'\nkeyAlias='+os.environ['KEY_ALIAS']+'\n');props.chmod(0o600)
           PYCODE
       - name: Build APK
-        run: flutter build apk --release --target-platform android-arm64 --build-name=0.5.6-readium-preview.3 --build-number=2289
+        run: flutter build apk --release --target-platform android-arm64 --build-name=0.5.6-readium-preview.3 --build-number=2290
       - name: Verify and package APK
         env:
           EXPECTED_CERT: ${{ vars.READIUM_SIGNING_SHA256 }}

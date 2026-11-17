@@ -20,6 +20,7 @@ class ReadiumControlsPlugin : FlutterPlugin {
                 scope.launch {
                     try {
                         when (call.method) {
+                            "locator" -> result.success(ReadiumReader.appCurrentLocatorJson())
                             "clearSelection" -> {
                                 ReadiumReader.appSelectionMode?.finish()
                                 ReadiumReader.epubEvaluateJavascript("window.getSelection().removeAllRanges();")

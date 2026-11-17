@@ -1577,6 +1577,11 @@ object ReadiumReader :
         currentReaderWidget?.onVisualReaderIsReady()
     }
 
+    suspend fun appCurrentLocatorJson(): String? {
+        val locator = epubFirstVisibleElementLocator() ?: return null
+        return epubEnrichLocatorWithTocHref(locator).toJSON().toString()
+    }
+
     suspend fun epubFirstVisibleElementLocator(): Locator? {
         val navigator =
             epubNavigator ?: run {

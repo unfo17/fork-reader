@@ -7117,24 +7117,26 @@ class _ReaderPageState extends State<ReaderPage>
                       _followLocallyPaused)))
             return;
           final text = content.paragraphs[paragraph];
-          final spoken = text.substring(
-            start.clamp(0, text.length),
-            end.clamp(0, text.length),
-          );
+          final first = start.clamp(0, text.length),
+              last = end.clamp(0, text.length);
+          final spoken = text.substring(first, last);
+          final before = text.substring(math.max(0, first - 100), first);
+          final after = text.substring(last, math.min(text.length, last + 100));
           final mark = _readium!.mark(
             id: 'spoken',
             chapter: chapter,
             text: spoken,
+            before: before,
+            after: after,
           );
           await _readium!.decorations('wenku-listening', [
             if (mark != null) mark,
           ]);
           await _readium!.go(
             chapter,
-            text: text.substring(
-              start.clamp(0, text.length),
-              end.clamp(0, text.length),
-            ),
+            text: spoken,
+            before: before,
+            after: after,
           );
         }),
       );
@@ -7952,6 +7954,12 @@ class _ReaderPageState extends State<ReaderPage>
       if (!_ready || _toolsOpen || _catalogueOpen || _findOpen || _noteOpen)
         return;
       _cancelExitRequest();
+      if (_selection.value) {
+        _selection.clear();
+        unawaited(_readium!.clearSelection());
+        _nativeSelectionEnded();
+        return;
+      }
       _stopAutoScroll();
       _suspendListeningFollow();
       if (direction > 0 && _readium!.atBookEnd) {
@@ -11479,26 +11487,23 @@ class _ReaderPageState extends State<ReaderPage>
         _currentContent != null &&
         match.paragraph < _currentContent!.paragraphs.length) {
       final text = _currentContent!.paragraphs[match.paragraph];
-      final selected = text.substring(
-        match.start.clamp(0, text.length),
-        match.end.clamp(0, text.length),
-      );
+      final first = match.start.clamp(0, text.length),
+          last = match.end.clamp(0, text.length);
+      final selected = text.substring(first, last);
+      final before = text.substring(math.max(0, first - 100), first);
+      final after = text.substring(last, math.min(text.length, last + 100));
       final mark = _readium!.mark(
         id: 'search',
         chapter: _chapter,
         text: selected,
+        before: before,
+        after: after,
       );
       unawaited(
         _readium!.decorations('wenku-search', [if (mark != null) mark]),
       );
       unawaited(
-        _readium!.go(
-          _chapter,
-          text: text.substring(
-            match.start.clamp(0, text.length),
-            match.end.clamp(0, text.length),
-          ),
-        ),
+        _readium!.go(_chapter, text: selected, before: before, after: after),
       );
     }
     _highlightTimer?.cancel();

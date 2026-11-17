@@ -69,6 +69,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
 
   Future<void> _selected(rd.TextSelectionEvent event) async {
     selectedLocator = event.locator;
+    _seekTicket++;
     onUserNavigation();
     if (!Platform.isAndroid) return;
     final ticket = ++_selectionTicket;
@@ -246,41 +247,77 @@ class ReadiumReaderBridge extends ChangeNotifier {
       if (initialLocator == null && first != null)
         initialLocator = publication!.locatorFromLink(first);
       _events = api.onTextLocatorChanged.listen((at) {
-        final locationTicket = ++_locationTicket;
-        if (_disposed || _owner != this) return;
-        if (!_firstLocation.isCompleted) _firstLocation.complete();
-        if (locator?.href != at.href) _scrollAtEnd = false;
-        locator = at;
-        chapter = chapterFor(at);
-        fraction = at.locations?.progression ?? 0;
-        ready = true;
-        progress.value = fraction;
-        onLocation(chapter, fraction, at.text?.highlight);
-        if ((at.text?.highlight ?? '').trim().isEmpty &&
-            Platform.isAndroid &&
-            at.locations?.cssSelector != null) {
-          unawaited(
-            () async {
-              final selector = jsonEncode(at.locations!.cssSelector);
-              final raw = await native.invokeMethod<String>('evaluate', {
-                'script':
-                    '(function(){var e=document.querySelector($selector);if(!e)return null;var c=e.cloneNode(true);c.querySelectorAll("rt,script,style").forEach(function(n){n.remove();});return (c.textContent||"").trim().slice(0,500);})()',
-              });
-              if (_disposed || locationTicket != _locationTicket || raw == null)
-                return;
-              final text = jsonDecode(raw);
-              if (text is String && text.trim().isNotEmpty)
-                onLocation(chapter, fraction, text);
-            }().catchError((Object _) {}),
-          );
-        }
-        persist();
-        notifyListeners();
+        if (!_navigating) _located(at);
       });
       notifyListeners();
     } catch (e) {
       error = 'EPUB 打开失败：$e';
       if (!_disposed) notifyListeners();
+    }
+  }
+
+  bool _navigating = false;
+  void _located(rd.Locator at) {
+    final locationTicket = ++_locationTicket;
+    if (_disposed || _owner != this) return;
+    if (!_firstLocation.isCompleted) _firstLocation.complete();
+    if (locator?.href != at.href) _scrollAtEnd = false;
+    locator = at;
+    chapter = chapterFor(at);
+    fraction =
+        at.locations?.progression ?? (locator?.href == at.href ? fraction : 0);
+    ready = true;
+    progress.value = fraction;
+    onLocation(chapter, fraction, at.text?.highlight);
+    if ((at.text?.highlight ?? '').trim().isEmpty &&
+        Platform.isAndroid &&
+        at.locations?.cssSelector != null) {
+      unawaited(
+        () async {
+          final selector = jsonEncode(at.locations!.cssSelector);
+          final raw = await native.invokeMethod<String>('evaluate', {
+            'script':
+                '(function(){var e=document.querySelector($selector);if(!e)return null;var c=e.cloneNode(true);c.querySelectorAll("rt,script,style").forEach(function(n){n.remove();});return (c.textContent||"").trim().slice(0,500);})()',
+          });
+          if (_disposed || locationTicket != _locationTicket || raw == null)
+            return;
+          final text = jsonDecode(raw);
+          if (text is String && text.trim().isNotEmpty)
+            onLocation(chapter, fraction, text);
+        }().catchError((Object _) {}),
+      );
+    }
+    persist();
+    notifyListeners();
+  }
+
+  Future<void> _navigate(rd.Locator at) async {
+    _navigating = Platform.isAndroid;
+    try {
+      await api.goToLocator(at);
+      if (Platform.isAndroid) {
+        // The request locator may omit progression. Read the actual visual
+        // position after Readium has resolved its text quote and laid it out.
+        await Future<void>.delayed(const Duration(milliseconds: 120));
+        final raw = await native.invokeMethod<String>('locator');
+        if (raw != null && !_disposed && _owner == this) {
+          final json = jsonDecode(raw) as Map<String, dynamic>;
+          final nextLocations =
+              json['locations'] as Map<String, dynamic>? ?? {};
+          if (locator?.href == json['href']) {
+            final previous = locator?.locations?.toJson() ?? {};
+            for (final key in ['currentPage', 'totalPages']) {
+              if (!nextLocations.containsKey(key) && previous.containsKey(key))
+                nextLocations[key] = previous[key];
+            }
+          }
+          json['locations'] = nextLocations;
+          final visible = rd.Locator.fromJson(json);
+          if (visible != null) _located(visible);
+        }
+      }
+    } finally {
+      _navigating = false;
     }
   }
 
@@ -362,7 +399,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
         after: after,
       );
       if (at == null) throw const FormatException('原书目录没有对应的阅读位置');
-      await api.goToLocator(at);
+      await _navigate(at);
     });
   }
 
@@ -380,7 +417,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     try {
       final at = rd.Locator.fromJson(jsonDecode(raw) as Map<String, dynamic>);
       if (at == null) return false;
-      await command(() => api.goToLocator(at));
+      await command(() => _navigate(at));
       return true;
     } catch (_) {
       return false;
@@ -552,7 +589,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
             !_disposed &&
             _owner == this &&
             identical(_layoutAnchor, anchor)) {
-          await api.goToLocator(anchor);
+          await _navigate(anchor);
           _layoutAnchor = null;
         }
       }
@@ -606,6 +643,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
           onReaderTap: onTap,
           onUserNavigation: () {
             _layoutAnchor = null;
+            _seekTicket++;
             onUserNavigation();
           },
           selectionActions: const [
