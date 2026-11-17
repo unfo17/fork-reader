@@ -13,15 +13,17 @@ const releaseProjectNotice =
 const releaseRightsNotice =
     '小说、封面和插图归各自权利人所有。请仅使用有权访问的内容，遵守来源网站规则，不得绕过访问限制、破解 DRM，或未经许可传播、出售内容。';
 const releaseReadingNotice = '**在线内容以轻小说文库开放状态为准，不提供因版权限制而停止开放的在线书籍阅读。**';
-const releaseMaintenanceNotice = '项目以稳定维护为主，后续非必要不再发版。';
-const _interruption = '修复听书被通知等短暂打断后，可能无法恢复播放的问题。';
-const _cache = '修复本地书籍在线听书时，临时缓存被清理后可能出现“缓存失败”的问题。';
-const _retry = '优化在线语音的断线重试；加载失败时保留当前段落，避免跳过正文。';
-const _resources = '修复连续听书时音频资源累积的问题，改善长时间使用的内存占用与流畅度。';
+const releaseMaintenanceNotice =
+    '这是基于 Wenku8_Flutter 的 Readium 本地阅读预览分支，问题与修改反馈请提交到本分支。';
+const _interruption = 'EPUB 使用 Readium 解析和渲染原书 XHTML、CSS、字体及图片。';
+const _cache = '恢复原来的阅读顶栏、底栏、目录、设置、书签和听书面板。';
+const _retry = '原控件通过适配层控制 Readium 的进度、搜索定位、批注与排版。';
+const _resources = '首页仅保留本地和我的；TXT 与手动合订本继续使用原阅读路径。';
 const _changes = [_interruption, _cache, _retry, _resources];
-const _androidInstall = '**Android**：直接覆盖更新，不要先卸载旧版。';
-const _iosInstall = '**iOS**：提供未签名包，主应用与小组件均需自行签名。';
-const _harmonyInstall = '**HarmonyOS**：提供未签名包，需自行签名后安装。';
+const _androidInstall =
+    '**Android**：本版起使用固定签名。前两版临时私钥未保留，不能直接覆盖；请先在旧版导出备份，再迁移安装。固定签名版之间可覆盖更新。';
+const _iosInstall = '**iOS**：本次未提供安装包，阅读控件适配尚未完成设备验证。';
+const _harmonyInstall = '**HarmonyOS**：本次未提供安装包。';
 const _legacyInstall = '**iOS／HarmonyOS 0.5.0 用户**：请先手动更新一次。';
 const _backup = '升级、整理存储或同步前，请先备份重要书籍和阅读记录。';
 const publicReleaseNotes =

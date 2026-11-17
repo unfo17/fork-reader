@@ -5731,6 +5731,7 @@ class _ReaderPageState extends State<ReaderPage>
     }
     _ready = _readium!.ready && _currentContent != null;
     _restoreNativePosition();
+    _syncReadingActivity();
     setState(() {});
   }
 
@@ -7482,6 +7483,7 @@ class _ReaderPageState extends State<ReaderPage>
         if (_readium != null) {
           _ready = _readium!.ready;
           _restoreNativePosition();
+          _syncReadingActivity();
           setState(() {});
         }
         if (findMatch != null) _showFindMatch(findMatch);
