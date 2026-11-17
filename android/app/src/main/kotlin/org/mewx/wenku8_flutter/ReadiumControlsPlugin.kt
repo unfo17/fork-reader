@@ -20,6 +20,11 @@ class ReadiumControlsPlugin : FlutterPlugin {
                 scope.launch {
                     try {
                         when (call.method) {
+                            "clearSelection" -> {
+                                ReadiumReader.appSelectionMode?.finish()
+                                ReadiumReader.epubEvaluateJavascript("window.getSelection().removeAllRanges();")
+                                result.success(null)
+                            }
                             "page" -> {
                                 val animated = call.argument<Boolean>("animated") ?: true
                                 if ((call.argument<Int>("direction") ?: 1) > 0) ReadiumReader.visualGoForward(animated)
@@ -43,8 +48,10 @@ class ReadiumControlsPlugin : FlutterPlugin {
                 }
             }
         }
+        ReadiumReader.appSelectionDidEnd = { channel?.invokeMethod("selectionEnded", null) }
     }
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        ReadiumReader.appSelectionDidEnd = null
         channel?.setMethodCallHandler(null); channel = null; scope.cancel()
     }
 }

@@ -118,6 +118,9 @@ object ReadiumReader :
     CoroutineScope by CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) {
     // App-owned preferences are reapplied to each Readium resource, never to a separate renderer.
     var appReaderStyleScript: String? = null
+    var appSelectionToolbar = false
+    var appSelectionMode: android.view.ActionMode? = null
+    var appSelectionDidEnd: (() -> Unit)? = null
     private var appRef: WeakReference<Application>? = null
 
     private var activityRef: WeakReference<Activity>? = null

@@ -5685,6 +5685,19 @@ class _ReaderPageState extends State<ReaderPage>
   bool _nativeLocationChanging = false;
   double _nativeFraction = 0;
   String? _nativeText;
+  ({String text, Rect bounds})? _nativeSelection;
+  void _nativeSelectionEnded() {
+    if (!mounted) return;
+    _selection.value = false;
+    setState(() => _nativeSelection = null);
+  }
+
+  void _nativeSelected(String text, Rect bounds) {
+    if (!mounted || text.isEmpty) return;
+    _selection.value = true;
+    setState(() => _nativeSelection = (text: text, bounds: bounds));
+  }
+
   String? _nativeReportedError;
   Object? _nativePublication;
   bool _nativeInitialRestored = false;
@@ -5846,6 +5859,9 @@ class _ReaderPageState extends State<ReaderPage>
   }
 
   void _nativeAction(String action, String text) {
+    _selection.clear();
+    if (_nativeSelection != null) setState(() => _nativeSelection = null);
+    unawaited(_readium!.clearSelection());
     if (action == 'copy') {
       Clipboard.setData(ClipboardData(text: text));
       return;
@@ -6610,6 +6626,8 @@ class _ReaderPageState extends State<ReaderPage>
     if (_selection.value) {
       AppHaptics.play(context, HapticCue.selection);
       _selection.clear();
+      unawaited(_readium?.clearSelection());
+      _nativeSelectionEnded();
       return;
     }
     if (_autoRunning) {
@@ -6697,6 +6715,8 @@ class _ReaderPageState extends State<ReaderPage>
         onLocation: _nativeLocation,
         onAction: _nativeAction,
         onAnnotation: _nativeOpenAnnotation,
+        onSelection: _nativeSelected,
+        onSelectionEnd: _nativeSelectionEnded,
         onTap: (point) {
           final box = context.findRenderObject() as RenderBox?;
           _contentTap(
@@ -10676,6 +10696,13 @@ class _ReaderPageState extends State<ReaderPage>
               ),
             ),
           ),
+          if (_nativeSelection case final selected?)
+            Positioned.fill(
+              child: ReaderNativeSelectionToolbar(
+                bounds: selected.bounds,
+                onAction: (action) => _nativeAction(action, selected.text),
+              ),
+            ),
         ],
       ),
     ),

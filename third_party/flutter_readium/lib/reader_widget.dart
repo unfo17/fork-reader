@@ -319,6 +319,7 @@ class _ReadiumReaderWidgetState extends State<ReadiumReaderWidget>
 
     final creationParams = <String, dynamic>{
       'pubIdentifier': publication.identifier,
+      'appSelectionToolbar': widget.onReaderTap != null,
       'preferences': defaultPreferences,
       'initialLocator': widget.initialLocator == null
           ? null

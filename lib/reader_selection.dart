@@ -576,3 +576,68 @@ Widget _selectionAction({
     ),
   ),
 );
+
+/// The same reader action buttons for a native Readium selection.
+class ReaderNativeSelectionToolbar extends StatelessWidget {
+  const ReaderNativeSelectionToolbar({
+    super.key,
+    required this.bounds,
+    required this.onAction,
+  });
+  final Rect bounds;
+  final ValueChanged<String> onAction;
+  @override
+  Widget build(BuildContext context) => CustomSingleChildLayout(
+    delegate: TextSelectionToolbarLayoutDelegate(
+      anchorAbove: bounds.topCenter - const Offset(0, 8),
+      anchorBelow: bounds.bottomCenter + const Offset(0, 8),
+    ),
+    child: Material(
+      type: MaterialType.transparency,
+      child: GlassOverlaySurface(
+        key: const ValueKey('reader-selection-toolbar'),
+        preserveOptics: true,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.sizeOf(context).width - 44,
+            ),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _selectionAction(
+                    key: const ValueKey('reader-selection-copy'),
+                    icon: CupertinoIcons.doc_on_doc,
+                    label: '复制',
+                    onPressed: () => onAction('copy'),
+                  ),
+                  _selectionAction(
+                    key: const ValueKey('reader-selection-bookmark'),
+                    icon: CupertinoIcons.bookmark,
+                    label: '书签',
+                    onPressed: () => onAction('bookmark'),
+                  ),
+                  _selectionAction(
+                    key: const ValueKey('reader-selection-dictionary'),
+                    icon: CupertinoIcons.book,
+                    label: '词典',
+                    onPressed: () => onAction('dictionary'),
+                  ),
+                  _selectionAction(
+                    key: const ValueKey('reader-selection-illustrations'),
+                    icon: CupertinoIcons.photo,
+                    label: '插图',
+                    onPressed: () => onAction('illustrations'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}

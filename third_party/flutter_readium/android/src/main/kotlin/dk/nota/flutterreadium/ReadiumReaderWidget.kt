@@ -106,6 +106,10 @@ class ReadiumReaderWidget(
         @Suppress("UNCHECKED_CAST")
         val initPrefsMap =
             creationParams["preferences"] as Map<String, String>?
+        @Suppress("UNCHECKED_CAST")
+        val initialActions = creationParams["selectionActions"] as? List<Map<String, String>> ?: emptyList()
+        ReadiumReader.selectionActions = initialActions.map { SelectionActionConfig(it["id"] ?: "", it["title"] ?: "") }
+        ReadiumReader.appSelectionToolbar = creationParams["appSelectionToolbar"] == true
         val publication = ReadiumReader.currentPublication
         val locatorString = creationParams["initialLocator"] as String?
         val allowScreenReaderNavigation = creationParams["allowScreenReaderNavigation"] as Boolean?

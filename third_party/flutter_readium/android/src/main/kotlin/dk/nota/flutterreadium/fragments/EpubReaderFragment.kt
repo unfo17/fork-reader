@@ -713,6 +713,8 @@ class EpubReaderFragment :
                 mode: ActionMode?,
                 menu: Menu?,
             ): Boolean {
+                ReadiumReader.appSelectionMode = mode
+                if (ReadiumReader.appSelectionToolbar) menu?.clear()
                 PluginLog.d(TAG, "::onCreateActionMode - text selection detected")
                 // Fire onTextSelected callback.
                 lifecycleScope.launch {
@@ -732,6 +734,15 @@ class EpubReaderFragment :
                 menu: Menu?,
             ): Boolean {
                 if (menu == null) return false
+                if (ReadiumReader.appSelectionToolbar) {
+                    menu.clear()
+                    lifecycleScope.launch {
+                        val nav = navigator as? SelectableNavigator ?: return@launch
+                        val selection = nav.currentSelection() ?: return@launch
+                        ReadiumReader.currentReaderWidget?.channel?.onTextSelected(selection.locator, selection.locator.text.highlight)
+                    }
+                    return true
+                }
                 var changed = false
 
                 // Add configured custom actions to the menu.
@@ -766,14 +777,14 @@ class EpubReaderFragment :
                         selection.locator,
                         selection.locator.text.highlight,
                     )
+                    mode?.finish()
                 }
-
-                mode?.finish()
                 return true
             }
 
             override fun onDestroyActionMode(mode: ActionMode?) {
-                // No-op
+                ReadiumReader.appSelectionMode = null
+                ReadiumReader.appSelectionDidEnd?.invoke()
             }
         }
     }

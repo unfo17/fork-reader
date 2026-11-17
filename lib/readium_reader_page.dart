@@ -22,9 +22,14 @@ class ReadiumReaderBridge extends ChangeNotifier {
     required this.onTap,
     required this.onUserNavigation,
     required this.onAnnotation,
+    required this.onSelection,
+    required this.onSelectionEnd,
     required bool chromeVisible,
   }) {
     controls = ValueNotifier(chromeVisible);
+    native.setMethodCallHandler((call) async {
+      if (call.method == 'selectionEnded') _owner?.onSelectionEnd();
+    });
     chapter = initialChapter;
     opening = _open();
   }
@@ -47,6 +52,42 @@ class ReadiumReaderBridge extends ChangeNotifier {
   final ValueChanged<Offset> onTap;
   final VoidCallback onUserNavigation;
   final ValueChanged<String> onAnnotation;
+  final void Function(String text, Rect bounds) onSelection;
+  final VoidCallback onSelectionEnd;
+  final _viewKey = GlobalKey();
+  int _selectionTicket = 0;
+  Future<void> clearSelection() async {
+    if (Platform.isAndroid && _owner == this)
+      await native.invokeMethod<void>('clearSelection');
+  }
+
+  Future<void> _selected(rd.TextSelectionEvent event) async {
+    selectedLocator = event.locator;
+    onUserNavigation();
+    if (!Platform.isAndroid) return;
+    final ticket = ++_selectionTicket;
+    final raw = await native.invokeMethod<String>('evaluate', {
+      'script':
+          '(function(){var s=window.getSelection();if(!s||!s.rangeCount)return null;var r=s.getRangeAt(0).getBoundingClientRect();return JSON.stringify({x:r.x,y:r.y,w:r.width,h:r.height,v:window.innerWidth});})()',
+    });
+    if (_disposed || ticket != _selectionTicket || raw == null) return;
+    Object? decoded = jsonDecode(raw);
+    if (decoded is String) decoded = jsonDecode(decoded);
+    final box = _viewKey.currentContext?.findRenderObject();
+    if (decoded is! Map || box is! RenderBox || !box.hasSize) return;
+    final scale = box.size.width / (decoded['v'] as num).toDouble();
+    final bounds = Rect.fromLTWH(
+      (decoded['x'] as num) * scale,
+      (decoded['y'] as num) * scale,
+      (decoded['w'] as num) * scale,
+      (decoded['h'] as num) * scale,
+    ).shift(box.localToGlobal(Offset.zero));
+    onSelection(
+      event.selectedText ?? event.locator.text?.highlight ?? '',
+      bounds,
+    );
+  }
+
   rd.Locator? selectedLocator;
   final progress = ValueNotifier<double>(0);
   final api = rd.FlutterReadium();
@@ -551,6 +592,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
               : Text(error!),
         )
       : rd.ReadiumReaderWidget(
+          key: _viewKey,
           publication: publication!,
           initialLocator: initialLocator,
           shouldShowControls: controls,
@@ -562,15 +604,13 @@ class ReadiumReaderBridge extends ChangeNotifier {
           selectionActions: const [
             rd.SelectionAction(id: 'copy', title: '复制'),
             rd.SelectionAction(id: 'bookmark', title: '书签'),
-            rd.SelectionAction(id: 'dictionary', title: '查词'),
-            rd.SelectionAction(id: 'illustrations', title: '本卷插图'),
+            rd.SelectionAction(id: 'dictionary', title: '词典'),
+            rd.SelectionAction(id: 'illustrations', title: '插图'),
           ],
           allowedDefaultActions: const {},
           onImageTapped: (_) => onAction('illustrations', ''),
-          onTextSelected: (e) {
-            selectedLocator = e.locator;
-            onUserNavigation();
-          },
+          onTextSelected: (e) =>
+              unawaited(_selected(e).catchError((Object _) {})),
           onSelectionAction: (e) {
             selectedLocator = e.locator;
             onAction(e.actionId, e.selectedText ?? '');
