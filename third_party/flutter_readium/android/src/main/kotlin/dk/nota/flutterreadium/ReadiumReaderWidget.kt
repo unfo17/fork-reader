@@ -53,6 +53,10 @@ class ReadiumReaderWidget(
     /**
      * Make sure we only sent ready status once.
      */
+    var currentPageIndex: Int? = null
+        private set
+    var currentPageCount: Int? = null
+        private set
     var hasSentReady = false
 
     private val layout: ViewGroup
@@ -202,6 +206,8 @@ class ReadiumReaderWidget(
         totalPages: Int,
         locator: Locator,
     ) {
+        currentPageIndex = pageIndex
+        currentPageCount = totalPages
         val currentKey = "${locator.href}@${locator.progression}"
         PluginLog.d(
             TAG,

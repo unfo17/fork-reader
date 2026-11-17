@@ -261,11 +261,11 @@ class ReadiumReaderBridge extends ChangeNotifier {
     final locationTicket = ++_locationTicket;
     if (_disposed || _owner != this) return;
     if (!_firstLocation.isCompleted) _firstLocation.complete();
-    if (locator?.href != at.href) _scrollAtEnd = false;
+    final sameResource = locator?.href == at.href;
+    if (!sameResource) _scrollAtEnd = false;
     locator = at;
     chapter = chapterFor(at);
-    fraction =
-        at.locations?.progression ?? (locator?.href == at.href ? fraction : 0);
+    fraction = at.locations?.progression ?? (sameResource ? fraction : 0);
     ready = true;
     progress.value = fraction;
     onLocation(chapter, fraction, at.text?.highlight);
@@ -298,7 +298,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       if (Platform.isAndroid) {
         // The request locator may omit progression. Read the actual visual
         // position after Readium has resolved its text quote and laid it out.
-        await Future<void>.delayed(const Duration(milliseconds: 120));
+        await Future<void>.delayed(const Duration(milliseconds: 240));
         final raw = await native.invokeMethod<String>('locator');
         if (raw != null && !_disposed && _owner == this) {
           final json = jsonDecode(raw) as Map<String, dynamic>;

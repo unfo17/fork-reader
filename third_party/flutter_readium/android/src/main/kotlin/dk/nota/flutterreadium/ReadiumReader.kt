@@ -1579,7 +1579,19 @@ object ReadiumReader :
 
     suspend fun appCurrentLocatorJson(): String? {
         val locator = epubFirstVisibleElementLocator() ?: return null
-        return epubEnrichLocatorWithTocHref(locator).toJSON().toString()
+        val json = epubEnrichLocatorWithTocHref(locator).toJSON()
+        // firstVisibleElementLocator is an HTML anchor, not a pagination snapshot.
+        // Merge Readium's computed resource/total progression, never the input request's 0.
+        val current = epubNavigator?.currentLocator?.value
+        val locations = json.optJSONObject("locations") ?: JSONObject().also { json.put("locations", it) }
+        if (current?.href == locator.href) {
+            current.locations.progression?.let { locations.put("progression", it) }
+            current.locations.totalProgression?.let { locations.put("totalProgression", it) }
+            current.locations.position?.let { locations.put("position", it) }
+            currentReaderWidget?.currentPageIndex?.let { locations.put("currentPage", it) }
+            currentReaderWidget?.currentPageCount?.let { locations.put("totalPages", it) }
+        }
+        return json.toString()
     }
 
     suspend fun epubFirstVisibleElementLocator(): Locator? {
