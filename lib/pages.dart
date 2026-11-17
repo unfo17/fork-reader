@@ -5732,6 +5732,11 @@ class _ReaderPageState extends State<ReaderPage>
     _ready = _readium!.ready && _currentContent != null;
     _restoreNativePosition();
     _syncReadingActivity();
+    _scheduleAutoPage();
+    if (_ready && _chapterRevealPending) {
+      _chapterRevealPending = false;
+      _chapterReveal.forward(from: 0);
+    }
     setState(() {});
   }
 
@@ -5897,7 +5902,7 @@ class _ReaderPageState extends State<ReaderPage>
     final hidden = widget.state.hiddenReaderLanguagesFor(widget.novel.id);
     final only = widget.state.onlyReaderLanguageFor(widget.novel.id);
     final key =
-        '${prefs.toJson()}|$_fontSize|$_lineHeight|$_readerFontId|$dark|$hidden|$only';
+        '${prefs.layoutKey}|${prefs.paper.name}|${prefs.nightTextBrightness}|${prefs.backgroundImage}|${prefs.backgroundOpacity}|${prefs.backgroundFit}|${prefs.hideSystemStatus}|${prefs.showStatusInfo}|$_fontSize|$_lineHeight|$_readerFontId|$dark|$hidden|$only';
     if (key != _nativePreferencesKey) {
       _nativePreferencesKey = key;
       // Supply initial defaults synchronously, before creating the native view.
@@ -5944,7 +5949,9 @@ class _ReaderPageState extends State<ReaderPage>
             prefs.marginBottom +
             ReaderScrollLocation.extentOf(context),
       ),
-      child: bridge.view(),
+      child: prefs.chapterEntrance
+          ? FadeTransition(opacity: _chapterReveal, child: bridge.view())
+          : bridge.view(),
     );
   }
 
@@ -6342,12 +6349,16 @@ class _ReaderPageState extends State<ReaderPage>
 
   void _paperChanged() {
     if (_readium != null) {
-      _nativePreferencesKey = null;
+      if (!_readerPreferences.chapterEntrance) {
+        _chapterRevealPending = false;
+        _chapterReveal.value = 1;
+      }
       setState(() {
         _paper = _readerPreferences.paper;
         _readerMode = _readerPreferences.mode;
         _hideSystemStatus = _readerPreferences.hideSystemStatus;
         _showStatusInfo = _readerPreferences.showStatusInfo;
+        _chapterEntrance = _readerPreferences.chapterEntrance;
       });
       return;
     }
@@ -7486,6 +7497,7 @@ class _ReaderPageState extends State<ReaderPage>
           _ready = _readium!.ready;
           _restoreNativePosition();
           _syncReadingActivity();
+          _scheduleAutoPage();
           setState(() {});
         }
         if (findMatch != null) _showFindMatch(findMatch);
@@ -7514,6 +7526,10 @@ class _ReaderPageState extends State<ReaderPage>
         } else {
           _chapterRevealPending = true;
           _chapterReveal.value = 0;
+        }
+        if (_readium != null && _ready && _chapterRevealPending) {
+          _chapterRevealPending = false;
+          _chapterReveal.forward(from: 0);
         }
       }
       return (content: content, error: null);
@@ -8371,6 +8387,9 @@ class _ReaderPageState extends State<ReaderPage>
         offset: _nativeFraction * ReadiumReaderBridge.positionExtent,
         fraction: _nativeFraction,
         fontSize: _fontSize,
+        lineHeight: _lineHeight,
+        typeface: _readerFontId,
+        layout: 'readium:${_readerMode.name}',
         width: _layoutWidth,
         updatedAt: DateTime.now().millisecondsSinceEpoch,
         paragraphIndex: quote.anchor?.paragraph,

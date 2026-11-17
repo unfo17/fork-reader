@@ -143,6 +143,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
   void activate() {
     if (_disposed || !_suspended) return;
     _suspended = false;
+    _layoutAnchor = null;
     _firstLocation = Completer<void>();
     initialLocator = null;
     _commands = Future.value();
@@ -482,7 +483,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
         }
         await native.invokeMethod<String>('style', {
           'script':
-              '(function(){var s=document.getElementById("wenku-reader-preferences");if(!s){s=document.createElement("style");s.id="wenku-reader-preferences";document.head.appendChild(s);}s.textContent=${jsonEncode(css.toString())};})();',
+              '(function(){var s=document.getElementById("wenku-reader-preferences");if(!s){s=document.createElement("style");s.id="wenku-reader-preferences";document.head.appendChild(s);}s.textContent=${jsonEncode(css.toString())};document.documentElement.style.setProperty("background-color","#$paper","important");document.body.style.setProperty("background-color","transparent","important");})();',
         });
       }
       if (anchor != null && ticket == _preferencesTicket) {
@@ -565,6 +566,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
             rd.SelectionAction(id: 'illustrations', title: '本卷插图'),
           ],
           allowedDefaultActions: const {},
+          onImageTapped: (_) => onAction('illustrations', ''),
           onTextSelected: (e) {
             selectedLocator = e.locator;
             onUserNavigation();
