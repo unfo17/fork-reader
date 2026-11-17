@@ -373,6 +373,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
     };
   }
 
+  int _preferencesTicket = 0;
+  rd.Locator? _layoutAnchor;
   Future<void> preferences(
     ReaderPreferences prefs, {
     required double fontSize,
@@ -384,7 +386,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
     Set<String> hiddenLanguages = const {},
     String? onlyLanguage,
   }) {
-    _preferences = rd.EPUBPreferences(
+    final ticket = ++_preferencesTicket;
+    final anchor = _layoutAnchor ??= locator;
+    final nextPreferences = rd.EPUBPreferences(
       publisherStyles: true,
       fontSize: fontSize / 18,
       lineHeight: lineHeight,
@@ -406,9 +410,11 @@ class ReadiumReaderBridge extends ChangeNotifier {
       textColor: prefs.darkPaper(dark) ? prefs.foreground(dark) : null,
     );
     // Set before the platform view is constructed, including its scroll mode.
-    api.setDefaultPreferences(_preferences);
+    _preferences = nextPreferences;
+    api.setDefaultPreferences(nextPreferences);
     return command(() async {
-      await api.setEPUBPreferences(_preferences);
+      if (ticket != _preferencesTicket) return;
+      await api.setEPUBPreferences(nextPreferences);
       if (Platform.isAndroid) {
         final paper = prefs
             .background(dark)
@@ -479,6 +485,28 @@ class ReadiumReaderBridge extends ChangeNotifier {
               '(function(){var s=document.getElementById("wenku-reader-preferences");if(!s){s=document.createElement("style");s.id="wenku-reader-preferences";document.head.appendChild(s);}s.textContent=${jsonEncode(css.toString())};})();',
         });
       }
+      if (anchor != null && ticket == _preferencesTicket) {
+        // Navigator preferences and app fonts/CSS both reflow the same Readium DOM.
+        // Restore its original locator after both have settled.
+        if (Platform.isAndroid && fontFile != null) {
+          for (var i = 0; i < 40 && ticket == _preferencesTicket; i++) {
+            final status = await native.invokeMethod<String>('evaluate', {
+              'script':
+                  '(function(){document.body.offsetHeight;return document.fonts.status;})()',
+            });
+            if (status == '"loaded"') break;
+            await Future<void>.delayed(const Duration(milliseconds: 50));
+          }
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 120));
+        if (ticket == _preferencesTicket &&
+            !_disposed &&
+            _owner == this &&
+            identical(_layoutAnchor, anchor)) {
+          await api.goToLocator(anchor);
+          _layoutAnchor = null;
+        }
+      }
     }, waitForView: false);
   }
 
@@ -526,7 +554,10 @@ class ReadiumReaderBridge extends ChangeNotifier {
           initialLocator: initialLocator,
           shouldShowControls: controls,
           onReaderTap: onTap,
-          onUserNavigation: onUserNavigation,
+          onUserNavigation: () {
+            _layoutAnchor = null;
+            onUserNavigation();
+          },
           selectionActions: const [
             rd.SelectionAction(id: 'copy', title: '复制'),
             rd.SelectionAction(id: 'bookmark', title: '书签'),
