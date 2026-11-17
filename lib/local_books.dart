@@ -3022,6 +3022,19 @@ class LocalBookStore extends ChangeNotifier
     await work;
   }
 
+  bool isReadiumEpub(int id) =>
+      (_sources[id]?['name'] as String? ?? '').toLowerCase().endsWith('.epub');
+
+  /// Stream a byte-identical EPUB while its scoped-storage lease is alive.
+  Future<void> copyEpubForReadium(int id, File target) async {
+    if (!isReadiumEpub(id)) throw const FormatException('本书不是独立 EPUB 原书');
+    await _withOriginalInput(id, (input) async {
+      final sink = target.openWrite();
+      try { await sink.addStream(input.bytes()); }
+      finally { await sink.close(); }
+    });
+  }
+
   Future<LocalBookInput> original(int id) async {
     final source = _sources[id];
     if (source == null) throw const FormatException('本地原书不存在');

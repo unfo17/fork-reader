@@ -1,3 +1,7 @@
+EPUB 样式修复预览版：独立 EPUB 的解析与显示均改用 Readium 原生 Navigator，直接读取原 EPUB 的 XHTML、CSS、字体和图片，默认启用 publisherStyles。已导入的 EPUB 无需重新导入。
+
+支持原书目录、翻页、手动文字缩放，以及独立的 Readium locator 续读。旧 Flutter 的精确段落坐标不直接转换为 Readium 坐标，首次从对应目录章节进入。TXT 仍使用原阅读器；手动合订本暂保留旧路径。旧阅读器的批注、听书及高级设置尚未接入原生 EPUB 视图。
+
 用于查看界面和确定后续修改方向的 Android 预览版。
 
 - 首页仅保留“本地 / 我的”。

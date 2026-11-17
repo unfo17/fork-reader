@@ -3,11 +3,11 @@ package org.mewx.wenku8_flutter
 import android.content.res.Configuration
 import android.os.Bundle
 import android.view.KeyEvent
-import com.ryanheise.audioservice.AudioServiceActivity
+import com.ryanheise.audioservice.AudioServiceFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 
 /** Stable Flutter task host; launcher icon aliases never enable/disable it. */
-class ReaderActivity : AudioServiceActivity() {
+class ReaderActivity : AudioServiceFragmentActivity() {
     private var refreshRate: HighRefreshRateController? = null
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

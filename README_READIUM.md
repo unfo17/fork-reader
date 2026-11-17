@@ -39,3 +39,7 @@ flutter analyze
 18 项 Readium 适配检查及 5 项导入集成测试。新增的 GLSL 前向差分计算同时兼容 SkSL，
 避免上游着色器的 GPU 导数函数阻止资源打包。
 APK 由 `.github/workflows/preview-apk.yml` 编译、校验签名，并发布到 GitHub 预览 Release。
+
+## 原书样式显示（预览版 2）
+
+独立 EPUB 默认直接使用 Readium 原生 Navigator 显示原书，不再将 Flutter 提取正文作为显示输入。默认保留出版方 CSS，工具栏提供原书目录和文字缩放；Readium locator 单独保存。合订本及 TXT 暂保留旧路径，旧批注、听书及高级排版选项尚未迁移。样式回归样书可由 `python3 tools/create_readium_style_fixture.py` 生成，包含外部 CSS、颜色、右对齐、边框、表格、不同字号和 ruby 注音。

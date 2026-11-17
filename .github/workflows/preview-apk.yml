@@ -26,7 +26,7 @@ jobs:
           dart run tools/verify_readium.dart
           dart analyze --no-fatal-warnings lib
       - name: Build APK
-        run: flutter build apk --release --target-platform android-arm64 --build-name=0.5.6-readium-preview.1 --build-number=2278
+        run: flutter build apk --release --target-platform android-arm64 --build-name=0.5.6-readium-preview.2 --build-number=2279
       - name: Verify and package APK
         run: |
           mkdir -p release
@@ -43,4 +43,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create readium-preview-20261105.1 release/* --target "$GITHUB_SHA" --prerelease --title "Readium 本地阅读器预览版 1" --notes-file RELEASE_PREVIEW.md
+          gh release create readium-preview-20261117.2 release/* --target "$GITHUB_SHA" --prerelease --title "Readium 本地阅读器预览版 2" --notes-file RELEASE_PREVIEW.md

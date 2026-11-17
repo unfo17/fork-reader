@@ -9,6 +9,7 @@ import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter/services.dart';
 
 import 'app_ui.dart';
+import 'readium_reader_page.dart';
 import 'app_window_insets.dart';
 import 'app_search_field.dart';
 import 'setting_menu.dart';
@@ -5673,7 +5674,15 @@ class ReaderPage extends StatefulWidget {
   final Duration Function()? verifiedReadingElapsed;
 
   @override
-  State<ReaderPage> createState() => _ReaderPageState();
+  State<ReaderPage> createState() {
+    final source = repository;
+    if ((LocalPlatform.android || LocalPlatform.ios) &&
+        source is OfflineNovelRepository &&
+        source.local?.isReadiumEpub(novel.id) == true) {
+      return NativeEpubReaderState();
+    }
+    return _ReaderPageState();
+  }
 }
 
 class _ReaderPageState extends State<ReaderPage>

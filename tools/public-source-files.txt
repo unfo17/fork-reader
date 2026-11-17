@@ -1025,3 +1025,5 @@ lib/reading_widget_skin.dart
 lib/reading_widget_skin_picker.dart
 android/app/src/main/kotlin/org/mewx/wenku8_flutter/BookArchiveImport.kt
 android/app/src/main/kotlin/org/mewx/wenku8_flutter/BookFolderScanner.kt
+lib/readium_reader_page.dart
+tools/create_readium_style_fixture.py
