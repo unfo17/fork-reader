@@ -792,11 +792,12 @@ class ReadiumReaderBridge extends ChangeNotifier {
           _layoutAnchor = null;
         }
       }
+    }, waitForView: false).whenComplete(() {
       if (!_disposed && ticket == _preferencesTicket) {
         _styleReady = true;
         notifyListeners();
       }
-    }, waitForView: false);
+    });
   }
 
   Future<void> _waitForLayoutStable({int? ticket}) async {

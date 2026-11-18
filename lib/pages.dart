@@ -6006,8 +6006,19 @@ class _ReaderPageState extends State<ReaderPage>
             hiddenLanguages: hidden,
             onlyLanguage: only,
           );
-        }().catchError((Object _) {
-          if (mounted) showNovelFeedback(context, '阅读字体或背景未能加载，请重新选择');
+        }().catchError((Object _) async {
+          if (!mounted || _nativePreferencesKey != key) return;
+          showNovelFeedback(context, '阅读字体或背景未能加载，请重新选择');
+          await bridge.preferences(
+            prefs,
+            fontSize: _fontSize,
+            lineHeight: _lineHeight,
+            dark: dark,
+            fontFamily: null,
+            pageInsets: pageInsets,
+            hiddenLanguages: hidden,
+            onlyLanguage: only,
+          );
         }),
       );
     }
