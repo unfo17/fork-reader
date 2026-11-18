@@ -393,7 +393,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
           '''(function(){
         var w=innerWidth,h=innerHeight,v=${_preferences.verticalText == true};
         var spans=[];
-        document.querySelectorAll('p,li,h1,h2,h3,h4,h5,h6,pre,table,figure,img').forEach(function(e){
+        if(${_appearance.pageEffect == ReaderPageEffect.staggered}) document.querySelectorAll('p,li,h1,h2,h3,h4,h5,h6,pre,table,figure,img').forEach(function(e){
           if(e.closest('rt,script,style,[data-readium]'))return;
           Array.from(e.getClientRects()).forEach(function(r){
             if(r.right<=0||r.left>=w||r.bottom<=0||r.top>=h)return;

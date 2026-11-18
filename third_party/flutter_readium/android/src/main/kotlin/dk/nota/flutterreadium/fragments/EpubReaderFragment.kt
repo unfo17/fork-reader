@@ -260,7 +260,14 @@ class EpubReaderFragment :
 
         PluginLog.d(TAG, "::applyCustomCssVariables - update cssVariables:$cssVariables")
 
-        evaluateJavascript("readium.setCSSProperties(${JSONObject(cssVariables)});")
+        evaluateJavascript("""
+            (function() {
+                var values = ${JSONObject(cssVariables)}, key = JSON.stringify(values);
+                if (window.__wenkuReadiumCss === key) return;
+                readium.setCSSProperties(values);
+                window.__wenkuReadiumCss = key;
+            })();
+        """.trimIndent())
     }
 
     /**
