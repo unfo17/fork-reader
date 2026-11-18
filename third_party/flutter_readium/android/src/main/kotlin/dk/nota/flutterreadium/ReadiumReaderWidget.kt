@@ -142,9 +142,9 @@ class ReadiumReaderWidget(
 
         layout = AppPageGestureLayout(context, attrs,
             ownsGesture = { ReadiumReader.appOwnsPageGestures() },
-            onSwipe = { dx, dy ->
+            onSwipe = { phase, dx, dy ->
                 val density = context.resources.displayMetrics.density
-                emitPageSwipe(dx / density, dy / density)
+                emitPageSwipe(phase, dx / density, dy / density)
             })
         layout.id = generateViewId()
         layout.setBackgroundColor(Color.TRANSPARENT)
@@ -197,7 +197,7 @@ class ReadiumReaderWidget(
         }
     }
 
-    private fun emitPageSwipe(dx: Float, dy: Float) { channel.onReaderDrag("End", dx, dy) }
+    private fun emitPageSwipe(phase: String, dx: Float, dy: Float) { channel.onReaderDrag(phase, dx, dy) }
 
     override fun onPageLoaded() {
         PluginLog.d(TAG, "::onPageLoaded")
@@ -533,7 +533,7 @@ private class AppPageGestureLayout(
     context: Context,
     attrs: AttributeSet?,
     private val ownsGesture: () -> Boolean,
-    private val onSwipe: (Float, Float) -> Unit,
+    private val onSwipe: (String, Float, Float) -> Unit,
 ) : LinearLayout(context, attrs) {
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
     private var downX = 0f
@@ -563,6 +563,7 @@ private class AppPageGestureLayout(
                 if (!multiplePointers && ownsGesture() &&
                     kotlin.math.abs(dx) > slop && kotlin.math.abs(dx) > kotlin.math.abs(dy)) {
                     dragging = true
+                    onSwipe("Start", dx, dy)
                     parent?.requestDisallowInterceptTouchEvent(true)
                     return true
                 }
@@ -574,13 +575,18 @@ private class AppPageGestureLayout(
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (!dragging) return super.onTouchEvent(event)
         when (event.actionMasked) {
-            MotionEvent.ACTION_POINTER_DOWN -> multiplePointers = true
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                multiplePointers = true
+                onSwipe("Cancel", event.x - downX, event.y - downY)
+            }
+            MotionEvent.ACTION_MOVE -> onSwipe("Move", event.x - downX, event.y - downY)
             MotionEvent.ACTION_UP -> {
                 dragging = false
                 parent?.requestDisallowInterceptTouchEvent(false)
-                if (!multiplePointers && ownsGesture()) onSwipe(event.x - downX, event.y - downY)
+                if (!multiplePointers && ownsGesture()) onSwipe("End", event.x - downX, event.y - downY)
             }
             MotionEvent.ACTION_CANCEL -> {
+                onSwipe("Cancel", event.x - downX, event.y - downY)
                 dragging = false
                 parent?.requestDisallowInterceptTouchEvent(false)
             }

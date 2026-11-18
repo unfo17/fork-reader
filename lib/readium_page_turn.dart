@@ -1,4 +1,5 @@
 import 'dart:ui' as ui;
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'reader_preferences.dart';
@@ -16,6 +17,55 @@ class ReadiumPageFrame {
 
 class ReadiumPageTurnController {
   _ReadiumPageSurfaceState? _owner;
+  Completer<bool>? _release;
+  double _progress = 0, _sign = 1, _width = 1, _lastDistance = 0, _velocity = 0;
+  final _watch = Stopwatch();
+  int _lastMicros = 0;
+  void beginDrag(double dx, double width) {
+    _release = Completer<bool>();
+    _progress = 0;
+    _width = width;
+    _sign = dx < 0 ? -1 : 1;
+    _lastDistance = dx * _sign;
+    _velocity = 0;
+    _lastMicros = 0;
+    _watch
+      ..reset()
+      ..start();
+    updateDrag(dx);
+  }
+
+  void updateDrag(double dx) {
+    if (_release == null || _release!.isCompleted) return;
+    final distance = dx * _sign, now = _watch.elapsedMicroseconds;
+    if (now - _lastMicros > 1000) {
+      _velocity = (distance - _lastDistance) * 1000000 / (now - _lastMicros);
+      _lastDistance = distance;
+      _lastMicros = now;
+    }
+    _progress = (distance / _width).clamp(0.0, 1.0);
+    _owner?._scrub();
+  }
+
+  void endDrag({bool cancel = false}) {
+    final release = _release;
+    if (release == null || release.isCompleted) return;
+    _watch.stop();
+    release.complete(
+      !cancel &&
+          (_progress >= .25 || (_progress > .06 && _velocity > 700)) &&
+          _velocity > -600,
+    );
+  }
+
+  Future<void> drag(int direction) async {
+    try {
+      await _owner?._turn(direction, true, gesture: _release);
+    } finally {
+      _release = null;
+    }
+  }
+
   Future<void> turn(int direction, {required bool animated}) async {
     await _owner?._turn(direction, animated);
   }
@@ -32,12 +82,14 @@ class ReadiumPageSurface extends StatefulWidget {
     required this.capture,
     required this.step,
     required this.child,
+    required this.frameKey,
   });
   final ReadiumPageTurnController controller;
   final ReaderPreferences preferences;
   final Color paper;
   final Future<ReadiumPageFrame?> Function() capture;
-  final Future<void> Function(int direction, bool animated) step;
+  final Future<bool> Function(int direction, bool animated) step;
+  final String frameKey;
   final Widget child;
   @override
   State<ReadiumPageSurface> createState() => _ReadiumPageSurfaceState();
@@ -51,39 +103,104 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   double _direction = 1;
   bool _busy = false;
   bool _liveDestination = false;
+  bool _dragPrepared = false;
+  ReadiumPageFrame? _cached;
+  Timer? _warmTimer;
+  bool _warming = false;
+  void _warmLater() {
+    _warmTimer?.cancel();
+    _warmTimer = Timer(const Duration(milliseconds: 180), () async {
+      if (!mounted ||
+          _busy ||
+          _warming ||
+          _cached != null ||
+          !widget.preferences.mode.paginated ||
+          widget.preferences.pageEffect == ReaderPageEffect.none)
+        return;
+      _warming = true;
+      final key = widget.frameKey;
+      try {
+        final frame = await widget.capture();
+        if (mounted && !_busy && key == widget.frameKey) {
+          _cached = frame;
+        } else {
+          frame?.image.dispose();
+        }
+      } catch (_) {
+        /* A warm image is optional. */
+      } finally {
+        _warming = false;
+        if (mounted && key != widget.frameKey) _warmLater();
+      }
+    });
+  }
+
+  void _scrub() {
+    if (_dragPrepared && !widget.controller._release!.isCompleted)
+      _clock.value = widget.controller._progress;
+  }
 
   @override
   void initState() {
     super.initState();
     widget.controller._owner = this;
+    _warmLater();
   }
 
   @override
   void didUpdateWidget(covariant ReadiumPageSurface oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.frameKey != widget.frameKey) {
+      _cached?.image.dispose();
+      _cached = null;
+      _warmLater();
+    }
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller._owner = null;
       widget.controller._owner = this;
     }
   }
 
-  Future<void> _turn(int direction, bool animated) async {
+  Size? _viewport;
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final viewport = MediaQuery.sizeOf(context);
+    if (_viewport != viewport) {
+      _viewport = viewport;
+      widget.controller.endDrag(cancel: true);
+      _cached?.image.dispose();
+      _cached = null;
+      _warmLater();
+    }
+  }
+
+  Future<void> _turn(
+    int direction,
+    bool animated, {
+    Completer<bool>? gesture,
+  }) async {
     if (_busy || !mounted) return;
     final prefs = widget.preferences;
     if (!animated ||
         !prefs.mode.paginated ||
         prefs.pageEffect == ReaderPageEffect.none ||
         MediaQuery.disableAnimationsOf(context)) {
-      await widget.step(direction, false);
+      if (gesture == null || await gesture.future)
+        await widget.step(direction, false);
       return;
     }
     _busy = true;
     ReadiumPageFrame? from, to;
+    var moved = false, committed = false;
     try {
-      from = await widget.capture();
+      from = _cached;
+      _cached = null;
+      from ??= await widget.capture();
       if (!mounted) return;
       if (from == null) {
-        await widget.step(direction, false);
+        if (gesture == null || await gesture.future)
+          await widget.step(direction, false);
         return;
       }
       setState(() {
@@ -97,7 +214,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       // Cover the native view before it moves. Native slide animation is disabled
       // so adjacent page edges cannot bleed through this full-page transition.
       await WidgetsBinding.instance.endOfFrame;
-      await widget.step(direction, false);
+      moved = await widget.step(direction, false);
+      if (!moved) return;
       if (prefs.pageEffect == ReaderPageEffect.paper) {
         // The live navigator already contains the destination. Only the turning
         // old sheet needs pixels: do not capture/decode the destination again.
@@ -108,20 +226,38 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         if (!mounted || to == null || to.location == from.location) return;
         setState(() => _to = to);
       }
+      var finish = true;
+      if (gesture != null) {
+        _dragPrepared = true;
+        _clock.value = widget.controller._progress;
+        finish = await gesture.future;
+        _dragPrepared = false;
+      }
+      final target = finish ? 1.0 : 0.0;
       await _clock
           .animateTo(
-            1,
+            target,
             duration: Duration(
               microseconds:
                   (prefs.pageEffect.duration.inMicroseconds *
-                          prefs.pageSpeed.durationScale)
+                          prefs.pageSpeed.durationScale *
+                          (target - _clock.value).abs())
                       .round(),
             ),
+            curve: Curves.easeOutCubic,
           )
           .orCancel;
+      committed = finish;
+      if (!finish) {
+        await widget.step(-direction, false);
+        moved = false;
+      }
     } on TickerCanceled {
       // The route was closed during a turn.
     } finally {
+      _dragPrepared = false;
+      if (gesture != null && moved && !committed)
+        await widget.step(-direction, false);
       if (mounted) {
         setState(() {
           _from = null;
@@ -133,6 +269,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       from?.image.dispose();
       to?.image.dispose();
       _busy = false;
+      if (mounted) _warmLater();
     }
   }
 
@@ -212,6 +349,9 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   void dispose() {
     if (identical(widget.controller._owner, this))
       widget.controller._owner = null;
+    _warmTimer?.cancel();
+    _cached?.image.dispose();
+    widget.controller.endDrag(cancel: true);
     _clock.dispose();
     super.dispose();
   }
@@ -299,7 +439,7 @@ class _ReadiumCurl extends CustomPainter {
     if (t >= 1) return;
     final w = size.width, h = size.height;
     final radius = w * .13 * math.sin(math.pi * t);
-    final edge = w * (1 - t) - radius;
+    final edge = w * (1 - t);
     c.save();
     if (backwards) {
       c.translate(w, 0);

@@ -104,17 +104,41 @@ class ReadiumReaderBridge extends ChangeNotifier {
     );
   }
 
+  bool _dragInFlight = false;
+  rd.Locator? _dragLocation;
   void _pageDrag(Map<String, dynamic> event) {
-    if (_disposed || _owner != this || event['phase'] != 'End') return;
-    final dx = (event['dx'] as num).toDouble(),
-        dy = (event['dy'] as num).toDouble();
-    final box = _viewKey.currentContext?.findRenderObject();
-    final width = box is RenderBox ? box.size.width : 400.0;
-    if (dx.abs() >= (width * .1).clamp(28, 48) && dx.abs() > dy.abs()) {
+    if (_disposed || _owner != this) return;
+    final phase = event['phase'];
+    final dx = (event['dx'] as num).toDouble();
+    if (phase == 'Start') {
+      if (_pagePending || !ready) return;
+      final box = _viewKey.currentContext?.findRenderObject();
+      final width = box is RenderBox ? box.size.width : 400.0;
       final rtl =
           _preferences.verticalText == true ||
           publication?.metadata.readingProgression == rd.ReadingProgression.rtl;
-      onPage((dx < 0 ? 1 : -1) * (rtl ? -1 : 1));
+      final direction = (dx < 0 ? 1 : -1) * (rtl ? -1 : 1);
+      _pagePending = true;
+      _dragInFlight = true;
+      _dragLocation = null;
+      onUserNavigation();
+      turns.beginDrag(dx, width);
+      unawaited(
+        command(() => turns.drag(direction)).whenComplete(() async {
+          _dragInFlight = false;
+          if (!_disposed && _owner == this) {
+            final at = _dragLocation;
+            if (at != null) _located(at);
+          }
+          _pagePending = false;
+        }),
+      );
+    } else if (_dragInFlight) {
+      if (phase == 'Move') turns.updateDrag(dx);
+      if (phase == 'End' || phase == 'Cancel') {
+        turns.updateDrag(dx);
+        turns.endDrag(cancel: phase == 'Cancel');
+      }
     }
   }
 
@@ -138,7 +162,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
   SharedPreferences? _prefs;
   String? error;
   bool _disposed = false;
-  bool ready = false;
+  bool _navigatorReady = false, _styleReady = false;
+  bool get ready => _navigatorReady && _styleReady;
   int chapter = 0;
   double fraction = 0;
   bool _scrollAtEnd = false;
@@ -222,6 +247,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
   void activate() {
     if (_disposed || !_suspended) return;
     _suspended = false;
+    _styleReady = false;
+    _navigatorReady = false;
     _layoutAnchor = null;
     _firstLocation = Completer<void>();
     initialLocator = null;
@@ -249,7 +276,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
           await previous._commands;
           await api.closePublication();
           previous.publication = null;
-          previous.ready = false;
+          previous._navigatorReady = false;
           previous._suspended = true;
           if (!previous._disposed) previous.notifyListeners();
         }
@@ -291,12 +318,16 @@ class ReadiumReaderBridge extends ChangeNotifier {
     final locationTicket = ++_locationTicket;
     if (_disposed || _owner != this) return;
     if (!_firstLocation.isCompleted) _firstLocation.complete();
+    if (_dragInFlight) {
+      _dragLocation = at;
+      return;
+    }
     final sameResource = locator?.href == at.href;
     if (!sameResource) _scrollAtEnd = false;
     locator = at;
     chapter = chapterFor(at);
     fraction = at.locations?.progression ?? (sameResource ? fraction : 0);
-    ready = true;
+    _navigatorReady = true;
     progress.value = fraction;
     onLocation(chapter, fraction, at.text?.highlight);
     if ((at.text?.highlight ?? '').trim().isEmpty &&
@@ -382,21 +413,24 @@ class ReadiumReaderBridge extends ChangeNotifier {
     }
   }
 
-  Future<void> _stepPage(int direction, bool animated) async {
+  Future<bool> _stepPage(int direction, bool animated) async {
     if (Platform.isAndroid) {
-      await native.invokeMethod<void>('page', {
-        'direction': direction,
-        'animated': animated,
-      });
+      return await native.invokeMethod<bool>('page', {
+            'direction': direction,
+            'animated': animated,
+          }) ??
+          false;
     } else if (direction > 0) {
       await api.goForward();
     } else {
       await api.goBackward();
     }
+    return true;
   }
 
   Future<ReadiumPageFrame?> _capturePage() async {
-    if (!Platform.isAndroid || _disposed || _owner != this) return null;
+    if (!Platform.isAndroid || _disposed || _owner != this || !_styleReady)
+      return null;
     final raw = await native.invokeMethod<String>('evaluate', {
       'script':
           '''(function(){
@@ -532,20 +566,24 @@ class ReadiumReaderBridge extends ChangeNotifier {
     }
   }
 
-  Future<void> decorations(String group, List<Map<String, dynamic>> marks) =>
-      command(() async {
-        if (Platform.isAndroid) {
-          await native.invokeMethod<void>('decorations', {
-            'group': group,
-            'marks': marks,
-          });
-        } else {
-          await api.applyDecorations(
-            group,
-            marks.map(rd.ReaderDecoration.fromJson).toList(),
-          );
-        }
-      });
+  int _marksRevision = 0;
+  Future<void> decorations(String group, List<Map<String, dynamic>> marks) {
+    _marksRevision++;
+    return command(() async {
+      if (Platform.isAndroid) {
+        await native.invokeMethod<void>('decorations', {
+          'group': group,
+          'marks': marks,
+        });
+      } else {
+        await api.applyDecorations(
+          group,
+          marks.map(rd.ReaderDecoration.fromJson).toList(),
+        );
+      }
+    });
+  }
+
   Map<String, dynamic>? mark({
     required String id,
     required int chapter,
@@ -616,6 +654,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
     if (defaultsOnly) return Future<void>.value();
     return command(() async {
       if (ticket != _preferencesTicket) return;
+      _styleReady = false;
+      notifyListeners();
       await api.setEPUBPreferences(nextPreferences);
       if (Platform.isAndroid) {
         final paper = prefs
@@ -722,6 +762,23 @@ class ReadiumReaderBridge extends ChangeNotifier {
               })();''',
         });
       }
+      if (Platform.isAndroid) {
+        String? previous;
+        var stable = 0;
+        for (var i = 0; i < 60 && ticket == _preferencesTicket; i++) {
+          final sample = await native.invokeMethod<String>('evaluate', {
+            'script':
+                '(function(){document.body.offsetHeight;return document.fonts.status+"|"+innerWidth+"|"+innerHeight+"|"+document.documentElement.scrollWidth+"|"+document.documentElement.scrollHeight+"|"+getComputedStyle(document.body).fontSize;})()',
+          });
+          if (sample != null && sample.contains('loaded') && sample == previous)
+            stable++;
+          else
+            stable = 0;
+          if (stable >= 3) break;
+          previous = sample;
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+      }
       if (anchor != null && ticket == _preferencesTicket) {
         // Navigator preferences and app fonts/CSS both reflow the same Readium DOM.
         // Restore its original locator after both have settled.
@@ -743,6 +800,10 @@ class ReadiumReaderBridge extends ChangeNotifier {
           await _navigate(anchor);
           _layoutAnchor = null;
         }
+      }
+      if (!_disposed && ticket == _preferencesTicket) {
+        _styleReady = true;
+        notifyListeners();
       }
     }, waitForView: false);
   }
@@ -788,49 +849,65 @@ class ReadiumReaderBridge extends ChangeNotifier {
         )
       : ReadiumPageSurface(
           controller: turns,
+          frameKey:
+              "${locator?.href}|$fraction|$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady",
           preferences: _appearance,
           paper: _appearance.background(_dark),
           capture: _capturePage,
           step: _stepPage,
-          child: rd.ReadiumReaderWidget(
-            key: _viewKey,
-            publication: publication!,
-            initialLocator: initialLocator,
-            shouldShowControls: controls,
-            // Android forwards only unhandled Readium taps through InputListener.
-            // Links, footnotes, annotations and selection handles retain their taps.
-            onReaderTap: onTap,
-            onReaderDrag: _pageDrag,
-            onFootnote: (markup) {
-              final note = html.parseFragment(markup).text;
-              if (note != null && note.trim().isNotEmpty)
-                onAction('note', note.trim());
-            },
-            onUserNavigation: () {
-              _layoutAnchor = null;
-              _seekTicket++;
-              onUserNavigation();
-            },
-            selectionActions: const [
-              rd.SelectionAction(id: 'copy', title: '复制'),
-              rd.SelectionAction(id: 'bookmark', title: '书签'),
-              rd.SelectionAction(id: 'dictionary', title: '词典'),
-              rd.SelectionAction(id: 'illustrations', title: '插图'),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              IgnorePointer(
+                ignoring: !_styleReady,
+                child: Opacity(
+                  opacity: _styleReady ? 1 : 0,
+                  child: rd.ReadiumReaderWidget(
+                    key: _viewKey,
+                    publication: publication!,
+                    initialLocator: initialLocator,
+                    shouldShowControls: controls,
+                    // Android forwards only unhandled Readium taps through InputListener.
+                    // Links, footnotes, annotations and selection handles retain their taps.
+                    onReaderTap: onTap,
+                    onReaderDrag: _pageDrag,
+                    onFootnote: (markup) {
+                      final note = html.parseFragment(markup).text;
+                      if (note != null && note.trim().isNotEmpty)
+                        onAction('note', note.trim());
+                    },
+                    onUserNavigation: () {
+                      _layoutAnchor = null;
+                      _seekTicket++;
+                      onUserNavigation();
+                    },
+                    selectionActions: const [
+                      rd.SelectionAction(id: 'copy', title: '复制'),
+                      rd.SelectionAction(id: 'bookmark', title: '书签'),
+                      rd.SelectionAction(id: 'dictionary', title: '词典'),
+                      rd.SelectionAction(id: 'illustrations', title: '插图'),
+                    ],
+                    allowedDefaultActions: const {},
+                    onImageTapped: (_) => onAction('illustrations', ''),
+                    onTextSelected: (e) =>
+                        unawaited(_selected(e).catchError((Object _) {})),
+                    onSelectionAction: (e) {
+                      selectedLocator = e.locator;
+                      onAction(e.actionId, e.selectedText ?? '');
+                    },
+                    onDecorationInteraction: (e) {
+                      if (e.group == 'wenku-annotations')
+                        onAnnotation(e.decorationId);
+                    },
+                    goBackwardSemanticLabel: '上一页',
+                    goForwardSemanticLabel: '下一页',
+                    toggleShowControlsSemanticLabel: '切换阅读控件',
+                  ),
+                ),
+              ),
+              if (!_styleReady)
+                const Center(child: CircularProgressIndicator()),
             ],
-            allowedDefaultActions: const {},
-            onImageTapped: (_) => onAction('illustrations', ''),
-            onTextSelected: (e) =>
-                unawaited(_selected(e).catchError((Object _) {})),
-            onSelectionAction: (e) {
-              selectedLocator = e.locator;
-              onAction(e.actionId, e.selectedText ?? '');
-            },
-            onDecorationInteraction: (e) {
-              if (e.group == 'wenku-annotations') onAnnotation(e.decorationId);
-            },
-            goBackwardSemanticLabel: '上一页',
-            goForwardSemanticLabel: '下一页',
-            toggleShowControlsSemanticLabel: '切换阅读控件',
           ),
         );
   @override

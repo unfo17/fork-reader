@@ -124,13 +124,14 @@ object ReadiumReader :
     var appSelectionMode: android.view.ActionMode? = null
     var appSelectionDidEnd: (() -> Unit)? = null
 
-    suspend fun appTurnPage(direction: Int, animated: Boolean) {
+    suspend fun appTurnPage(direction: Int, animated: Boolean): Boolean {
         val previous = epubNavigator?.currentLocator?.value
         if (direction > 0) visualGoForward(animated) else visualGoBackward(animated)
         // Wait on the navigator's actual position, not on a guessed animation delay.
         kotlinx.coroutines.withTimeoutOrNull(1500) {
             epubNavigator?.currentLocator?.first { it != previous }
         }
+        return epubNavigator?.currentLocator?.value != previous
     }
     suspend fun appApplyStyle(script: String): String? {
         appReaderStyleScript = script
