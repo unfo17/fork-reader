@@ -713,6 +713,10 @@ class EpubReaderFragment :
                 override fun onDrag(event: DragEvent): Boolean {
                     if (scrollMode || ReadiumReader.appSelectionMode != null) return false
                     val density = resources.displayMetrics.density
+                    // Readium also emits End for an ordinary tap. Consuming that
+                    // touchend suppresses the WebView's subsequent click entirely.
+                    if (kotlin.math.abs(event.offset.x) < 6 * density ||
+                        kotlin.math.abs(event.offset.x) <= kotlin.math.abs(event.offset.y)) return false
                     ReadiumReader.currentReaderWidget?.channel?.onReaderDrag(event.type.name, event.offset.x / density, event.offset.y / density)
                     return true
                 }
