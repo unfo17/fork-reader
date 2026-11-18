@@ -29,6 +29,9 @@ class ReadiumReaderChannel extends MethodChannel {
     this.onSelectionAction,
     this.onDecorationInteraction,
     this.onImageTapped,
+    this.onReaderTap,
+    this.onReaderDrag,
+    this.onFootnote,
   }) {
     setMethodCallHandler(onMethodCall);
   }
@@ -52,6 +55,9 @@ class ReadiumReaderChannel extends MethodChannel {
 
   /// Called when the user taps an image in the EPUB.
   void Function(ImageTapEvent)? onImageTapped;
+  void Function(Map<String, dynamic>)? onReaderTap;
+  void Function(Map<String, dynamic>)? onReaderDrag;
+  void Function(String)? onFootnote;
 
   /// Go e.g. navigate to a specific locator in the publication.
   Future<void> go(
@@ -114,10 +120,11 @@ class ReadiumReaderChannel extends MethodChannel {
   ]);
 
   /// Configure the native selection context menu actions.
-  Future<void> configureSelectionActions(List<SelectionAction> actions) async => await _invokeMethod(
-    _ReaderChannelMethodInvoke.configureSelectionActions,
-    actions.map((a) => a.toJson()).toList(),
-  );
+  Future<void> configureSelectionActions(List<SelectionAction> actions) async =>
+      await _invokeMethod(
+        _ReaderChannelMethodInvoke.configureSelectionActions,
+        actions.map((a) => a.toJson()).toList(),
+      );
 
   /// Tears down the method channel handler and signals the native side to clean up.
   Future<void> dispose() async {
@@ -134,6 +141,15 @@ class ReadiumReaderChannel extends MethodChannel {
   Future<dynamic> onMethodCall(final MethodCall call) async {
     try {
       switch (call.method) {
+        case 'onReaderTap':
+          onReaderTap?.call(Map<String, dynamic>.from(call.arguments as Map));
+          return null;
+        case 'onReaderDrag':
+          onReaderDrag?.call(Map<String, dynamic>.from(call.arguments as Map));
+          return null;
+        case 'onFootnote':
+          onFootnote?.call(call.arguments as String);
+          return null;
         case 'onPageChanged':
           final args = call.arguments as String;
           final locatorJson = json.decode(args) as Map<String, dynamic>;

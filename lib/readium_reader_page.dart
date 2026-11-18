@@ -35,40 +35,6 @@ class ReadiumReaderBridge extends ChangeNotifier {
     native.setMethodCallHandler((call) async {
       final owner = _owner;
       if (owner == null || owner._disposed) return;
-      if (call.method == 'footnote') {
-        final note = html.parseFragment(call.arguments as String).text;
-        if (note != null && note.trim().isNotEmpty)
-          owner.onAction('note', note.trim());
-      }
-      if (call.method == 'tap') {
-        final point = Map<String, dynamic>.from(call.arguments as Map);
-        final box = owner._viewKey.currentContext?.findRenderObject();
-        if (box is RenderBox)
-          owner.onTap(
-            box.localToGlobal(
-              Offset(
-                (point['x'] as num).toDouble(),
-                (point['y'] as num).toDouble(),
-              ),
-            ),
-          );
-      }
-      if (call.method == 'pageDrag') {
-        final event = Map<String, dynamic>.from(call.arguments as Map);
-        if (event['phase'] == 'End') {
-          final dx = (event['dx'] as num).toDouble();
-          final dy = (event['dy'] as num).toDouble();
-          final box = owner._viewKey.currentContext?.findRenderObject();
-          final width = box is RenderBox ? box.size.width : 400.0;
-          if (dx.abs() >= (width * .1).clamp(28, 48) && dx.abs() > dy.abs()) {
-            final rtl =
-                owner._preferences.verticalText == true ||
-                owner.publication?.metadata.readingProgression ==
-                    rd.ReadingProgression.rtl;
-            owner.onPage((dx < 0 ? 1 : -1) * (rtl ? -1 : 1));
-          }
-        }
-      }
       if (call.method == 'selectionEnded') {
         final owner = _owner;
         if (owner != null) {
@@ -136,6 +102,20 @@ class ReadiumReaderBridge extends ChangeNotifier {
       event.selectedText ?? event.locator.text?.highlight ?? '',
       bounds,
     );
+  }
+
+  void _pageDrag(Map<String, dynamic> event) {
+    if (_disposed || _owner != this || event['phase'] != 'End') return;
+    final dx = (event['dx'] as num).toDouble(),
+        dy = (event['dy'] as num).toDouble();
+    final box = _viewKey.currentContext?.findRenderObject();
+    final width = box is RenderBox ? box.size.width : 400.0;
+    if (dx.abs() >= (width * .1).clamp(28, 48) && dx.abs() > dy.abs()) {
+      final rtl =
+          _preferences.verticalText == true ||
+          publication?.metadata.readingProgression == rd.ReadingProgression.rtl;
+      onPage((dx < 0 ? 1 : -1) * (rtl ? -1 : 1));
+    }
   }
 
   rd.Locator? selectedLocator;
@@ -703,6 +683,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
                 var image=${overrideBackground ? "'none'" : "bg.backgroundImage!=='none'?bg.backgroundImage:html.backgroundImage"};
                 s=document.createElement('style');s.id='wenku-reader-preferences';
                 s.textContent=${jsonEncode(css.toString())} + (image!=='none'&&!${overrideBackground}?'html{background-size:'+bg.backgroundSize+';background-repeat:'+bg.backgroundRepeat+';background-position:'+bg.backgroundPosition+';background-attachment:fixed;}':'');document.head.appendChild(s);
+                // Readium's :root[style] body rule is !important; inline padding
+                // keeps the user's margins inside each page rather than outside it.
+                body.style.setProperty('padding','${pageInsets.top}px ${pageInsets.right}px ${pageInsets.bottom}px ${pageInsets.left}px','important');
                 root.style.setProperty('background-color',color,'important');
                 if(!${backgroundFile != null})root.style.setProperty('background-image',image,'important');
                 body.style.setProperty('background-color','transparent','important');
@@ -787,7 +770,13 @@ class ReadiumReaderBridge extends ChangeNotifier {
             shouldShowControls: controls,
             // Android forwards only unhandled Readium taps through InputListener.
             // Links, footnotes, annotations and selection handles retain their taps.
-            onReaderTap: Platform.isAndroid ? (_) {} : onTap,
+            onReaderTap: onTap,
+            onReaderDrag: _pageDrag,
+            onFootnote: (markup) {
+              final note = html.parseFragment(markup).text;
+              if (note != null && note.trim().isNotEmpty)
+                onAction('note', note.trim());
+            },
             onUserNavigation: () {
               _layoutAnchor = null;
               _seekTicket++;

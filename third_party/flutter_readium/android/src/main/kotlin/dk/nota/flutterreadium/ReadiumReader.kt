@@ -123,9 +123,6 @@ object ReadiumReader :
     var appSelectionToolbar = false
     var appSelectionMode: android.view.ActionMode? = null
     var appSelectionDidEnd: (() -> Unit)? = null
-    var appOnTap: ((Float, Float) -> Unit)? = null
-    var appOnPageDrag: ((String, Float, Float) -> Unit)? = null
-    var appOnFootnote: ((String) -> Unit)? = null
 
     suspend fun appTurnPage(direction: Int, animated: Boolean) {
         val previous = epubNavigator?.currentLocator?.value
@@ -918,53 +915,33 @@ object ReadiumReader :
             return locator
         }
 
-        // This locator already has a tocHref, add title and return it.
-        locator.locations.tocHref?.let { tocHref ->
-            return locator.copy(title = publication.getTitleFromTocHref(tocHref))
+        val cleanHref = locator.href.cleanHref()
+        val tocLinks = publication.tableOfContents.flattenChildren().filter {
+            it.href.resolve().cleanHref().path == cleanHref.path
         }
-
-        val cssSelector =
-            locator.locations.cssSelector ?: run {
-                PluginLog.w(TAG, "::epubEnrichLocatorWithTocHref - missing cssSelector in locator")
-                return locator
-            }
-
-        val resultLocator = locator.copy()
-
-        val cleanHref = resultLocator.href.cleanHref()
-        val tocLinks =
-            publication.tableOfContents.flattenChildren().filter {
-                it.href
-                    .resolve()
-                    .cleanHref()
-                    .path == cleanHref.path
-            }
-
-        val documentCssSelectors = epubGetAllDocumentCssSelectors(resultLocator.href)
-        val idx =
-            documentCssSelectors.indexOf(cssSelector).takeIf { it > -1 } ?: run {
-                // cssSelector wasn't found in the list of document cssSelectors, best effort is to assume first
-                PluginLog.d(
-                    TAG,
-                    "::epubEnrichLocatorWithTocHref - cssSelector:$cssSelector not found in contentIds, assume idx = 0",
-                )
-                0
-            }
-
-        val toc =
-            tocLinks.associateBy { documentCssSelectors.indexOf("#${it.href.resolve().fragment}") }
-
-        val tocItem =
-            toc.entries.lastOrNull { it.key <= idx }?.value ?: toc.entries.firstOrNull()?.value
-                ?: run {
-                    PluginLog.d(TAG, "::epubEnrichLocatorWithTocHref - no tocItem found")
-                    return resultLocator
-                }
-
-        return resultLocator
-            .copy(
-                title = tocItem.title,
-            ).copyWithTocHref(tocItem)
+        if (tocLinks.isEmpty()) return locator
+        // A resource can have many TOC anchors and most paragraphs have no IDs.
+        // Compare actual DOM order; an absent selector must never become index 0.
+        val visible = epubFirstVisibleElementLocator()?.takeIf { it.href.cleanHref() == cleanHref }
+        val selector = visible?.locations?.cssSelector ?: locator.locations.cssSelector ?: return locator
+        val fragments = org.json.JSONArray(tocLinks.map { android.net.Uri.decode(it.href.resolve().fragment ?: "") })
+        val raw = epubEvaluateJavascript(
+            """(function(){
+              var current=document.querySelector(${JSONObject.quote(selector)});
+              if(!current)return -1;
+              var fragments=$fragments,best=-1,bestNode=null;
+              for(var i=0;i<fragments.length;i++){
+                var node=fragments[i]?document.getElementById(fragments[i]):document.documentElement;
+                if(!node)continue;
+                var before=node===current||node.contains(current)||(node.compareDocumentPosition(current)&4);
+                if(before&&(!bestNode||bestNode===node||bestNode.contains(node)||(bestNode.compareDocumentPosition(node)&4))){best=i;bestNode=node;}
+              }
+              return best;
+            })()"""
+        )
+        val index = raw?.toIntOrNull() ?: return locator
+        val tocItem = tocLinks.getOrNull(index) ?: return locator
+        return locator.copy(title = tocItem.title).copyWithTocHref(tocItem)
     }
 
     @OptIn(InternalReadiumApi::class)

@@ -21,6 +21,8 @@ class ReadiumReaderWidget extends StatefulWidget {
     this.initialLocator,
     this.shouldShowControls,
     this.onReaderTap,
+    this.onReaderDrag,
+    this.onFootnote,
     this.onUserNavigation,
     this.onExternalLinkActivated,
     this.onTextSelected,
@@ -53,6 +55,8 @@ class ReadiumReaderWidget extends StatefulWidget {
 
   /// App-owned tap zones and controls; native scrolling and selection stay native.
   final ValueChanged<Offset>? onReaderTap;
+  final ValueChanged<Map<String, dynamic>>? onReaderDrag;
+  final ValueChanged<String>? onFootnote;
   final VoidCallback? onUserNavigation;
 
   /// Callback invoked when the reader activates an external (non-publication) link.
@@ -230,7 +234,8 @@ class _ReadiumReaderWidgetState extends State<ReadiumReaderWidget>
             },
             onPointerUp: (final event) async {
               if (widget.onReaderTap != null) {
-                if (!userSwipe &&
+                if (!Platform.isAndroid &&
+                    !userSwipe &&
                     touchStarted != null &&
                     DateTime.now().difference(touchStarted!).inMilliseconds <
                         400)
@@ -429,6 +434,20 @@ class _ReadiumReaderWidgetState extends State<ReadiumReaderWidget>
       onSelectionAction: widget.onSelectionAction,
       onDecorationInteraction: widget.onDecorationInteraction,
       onImageTapped: widget.onImageTapped,
+      onReaderTap: (point) {
+        final box = context.findRenderObject();
+        if (box is RenderBox)
+          widget.onReaderTap?.call(
+            box.localToGlobal(
+              Offset(
+                (point['x'] as num).toDouble(),
+                (point['y'] as num).toDouble(),
+              ),
+            ),
+          );
+      },
+      onReaderDrag: widget.onReaderDrag,
+      onFootnote: widget.onFootnote,
     );
 
     if (widget.selectionActions.isNotEmpty) {

@@ -108,8 +108,8 @@ class EpubReaderFragment :
     }
 
     override fun shouldFollowInternalLink(link: Link, context: HyperlinkNavigator.LinkContext?): Boolean {
-        if (context is HyperlinkNavigator.FootnoteContext && ReadiumReader.appOnFootnote != null) {
-            ReadiumReader.appOnFootnote?.invoke(context.noteContent)
+        if (context is HyperlinkNavigator.FootnoteContext && ReadiumReader.appSelectionToolbar) {
+            ReadiumReader.currentReaderWidget?.channel?.onFootnote(context.noteContent)
             return false
         }
         return true
@@ -706,12 +706,14 @@ class EpubReaderFragment :
         if (ReadiumReader.appSelectionToolbar) {
             epubNavigator.addInputListener(object : InputListener {
                 override fun onTap(event: TapEvent): Boolean {
-                    ReadiumReader.appOnTap?.invoke(event.point.x, event.point.y)
+                    val density = resources.displayMetrics.density
+                    ReadiumReader.currentReaderWidget?.channel?.onReaderTap(event.point.x / density, event.point.y / density)
                     return true
                 }
                 override fun onDrag(event: DragEvent): Boolean {
                     if (scrollMode || ReadiumReader.appSelectionMode != null) return false
-                    ReadiumReader.appOnPageDrag?.invoke(event.type.name, event.offset.x, event.offset.y)
+                    val density = resources.displayMetrics.density
+                    ReadiumReader.currentReaderWidget?.channel?.onReaderDrag(event.type.name, event.offset.x / density, event.offset.y / density)
                     return true
                 }
             })
