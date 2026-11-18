@@ -416,7 +416,6 @@ lib/book_text_encoding.dart
 lib/bookmark_categories.dart
 lib/bookmark_library_page.dart
 lib/bookshelf_scope.dart
-lib/canvas_halftone.dart
 lib/catalog.dart
 lib/cloud_book_sync_panel.dart
 lib/cloud_library_page.dart
@@ -463,7 +462,6 @@ lib/legacy_transport.dart
 lib/legacy_wenku_repository.dart
 lib/library_backup.dart
 lib/library_reflow.dart
-lib/library_replica.dart
 lib/library_search_repository.dart
 lib/library_state.dart
 lib/library_toolbar.dart
@@ -518,7 +516,6 @@ lib/local_import_settings_page.dart
 lib/local_library_page.dart
 lib/local_library_preferences.dart
 lib/local_linked_text_index.dart
-lib/local_maintenance_page.dart
 lib/local_markup_decode.dart
 lib/local_platform.dart
 lib/local_scan_page.dart
@@ -540,7 +537,6 @@ lib/novel_feed_controller.dart
 lib/offline_cache.dart
 lib/offline_repository.dart
 lib/offline_widgets.dart
-lib/online_book_handoff.dart
 lib/online_component.dart
 lib/pages.dart
 lib/palette_image.dart
@@ -562,7 +558,6 @@ lib/reader_background.dart
 lib/reader_block_spacing.dart
 lib/reader_book_find.dart
 lib/reader_book_layout.dart
-lib/reader_book_progress.dart
 lib/reader_book_style.dart
 lib/reader_bookmark_excerpt.dart
 lib/reader_catalogue.dart
@@ -661,7 +656,6 @@ lib/scroll_edge_blur.dart
 lib/setting_menu.dart
 lib/tag_catalogue.dart
 lib/touch_sampling.dart
-lib/ui_frame_capture.dart
 lib/ui_notifiers.dart
 lib/updates/app_updates.dart
 lib/updates/current_release_content.dart

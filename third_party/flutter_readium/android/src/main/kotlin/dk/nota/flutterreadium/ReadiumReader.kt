@@ -147,8 +147,9 @@ object ReadiumReader :
             return null
         }
         webView(view)?.let { web ->
-            kotlinx.coroutines.withTimeoutOrNull(1000) {
+            kotlinx.coroutines.withTimeoutOrNull(160) {
                 kotlinx.coroutines.suspendCancellableCoroutine<Unit> { c ->
+                    web.invalidate()
                     web.postVisualStateCallback(System.nanoTime(), object : android.webkit.WebView.VisualStateCallback() {
                         override fun onComplete(requestId: Long) { if (c.isActive) c.resumeWith(Result.success(Unit)) }
                     })
@@ -163,8 +164,10 @@ object ReadiumReader :
             canvas.scale(scale.toFloat(), scale.toFloat())
             view.draw(canvas)
             val png = java.io.ByteArrayOutputStream()
-            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, png)
-            png.toByteArray()
+            withContext(Dispatchers.Default) {
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, png)
+                png.toByteArray()
+            }
         } finally { bitmap.recycle() }
     }
 

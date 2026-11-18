@@ -1,8 +1,8 @@
 import 'dart:ui' as ui;
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'reader_preferences.dart';
 import 'reader_sheet_motion.dart';
-import 'reader_spine_turn.dart';
 import 'reader_turn_motion.dart';
 
 /// A retained image of Readium's rendered page, never re-typeset Flutter text.
@@ -139,18 +139,6 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         ),
       );
     }
-    if (_effect == ReaderPageEffect.paper) {
-      return ReaderSpineTurn(
-        animation: _clock,
-        active: true,
-        incoming: incoming,
-        left: false,
-        fromRight: _direction > 0,
-        single: true,
-        paper: frame.paper,
-        child: image,
-      );
-    }
     if (_effect == ReaderPageEffect.slide) {
       return SlideTransition(
         position: _clock.drive(
@@ -190,6 +178,17 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
                     fit: StackFit.expand,
                     children: _to == null
                         ? [RawImage(image: frame.image, fit: BoxFit.fill)]
+                        : _effect == ReaderPageEffect.paper
+                        ? [
+                            CustomPaint(
+                              painter: _ReadiumCurl(
+                                frame,
+                                _to!,
+                                _clock,
+                                _direction,
+                              ),
+                            ),
+                          ]
                         : _direction < 0 &&
                               (_effect == ReaderPageEffect.cover ||
                                   _effect == ReaderPageEffect.fade)
@@ -268,4 +267,102 @@ class _ReadiumParagraphTurn extends CustomPainter {
       old.incoming != incoming ||
       old.direction != direction ||
       old.vertical != vertical;
+}
+
+/// A cylindrical fold of retained native pixels. No WebView transforms or DOM
+/// layout take place while the fold is drawn; the back of the sheet is shaded.
+class _ReadiumCurl extends CustomPainter {
+  _ReadiumCurl(this.from, this.to, this.clock, this.direction)
+    : super(repaint: clock);
+  final ReadiumPageFrame from, to;
+  final Animation<double> clock;
+  final double direction;
+  void _image(Canvas c, ReadiumPageFrame f, Size size) => c.drawImageRect(
+    f.image,
+    Rect.fromLTWH(0, 0, f.image.width.toDouble(), f.image.height.toDouble()),
+    Offset.zero & size,
+    Paint()..filterQuality = FilterQuality.low,
+  );
+  @override
+  void paint(Canvas c, Size size) {
+    final backwards = direction < 0;
+    final t = backwards ? 1 - clock.value : clock.value;
+    final front = backwards ? to : from, back = backwards ? from : to;
+    _image(c, back, size);
+    if (t <= 0) {
+      _image(c, front, size);
+      return;
+    }
+    if (t >= 1) return;
+    final w = size.width, h = size.height;
+    final radius = w * .13 * math.sin(math.pi * t);
+    final edge = w * (1 - t) - radius;
+    c.save();
+    if (backwards) {
+      c.translate(w, 0);
+      c.scale(-1, 1);
+    }
+    // Mirror geometry, not the book's text.
+    void pixels(Rect target) {
+      c.save();
+      c.clipRect(target);
+      if (backwards) {
+        c.translate(w, 0);
+        c.scale(-1, 1);
+        _image(c, front, size);
+      } else {
+        _image(c, front, size);
+      }
+      c.restore();
+    }
+
+    if (edge > 0) pixels(Rect.fromLTWH(0, 0, edge, h));
+    final shadow = Rect.fromLTWH(edge, 0, radius * 1.6, h);
+    c.drawRect(
+      shadow,
+      Paint()
+        ..shader = ui.Gradient.linear(
+          Offset(edge, 0),
+          Offset(shadow.right, 0),
+          [const Color(0x55000000), const Color(0x00000000)],
+        ),
+    );
+    const strips = 40;
+    for (var i = 0; i < strips; i++) {
+      final a = math.pi * i / strips, b = math.pi * (i + 1) / strips;
+      final x1 = edge + radius * math.sin(a), x2 = edge + radius * math.sin(b);
+      final left = math.min(x1, x2), width = (x2 - x1).abs() + .6;
+      final sx = (edge + radius * a).clamp(0.0, w);
+      final sw = math.min(radius * (b - a), w - sx);
+      if (sw <= 0) continue;
+      final source = Rect.fromLTWH(
+        (backwards ? w - sx - sw : sx) / w * front.image.width,
+        0,
+        sw / w * front.image.width,
+        front.image.height.toDouble(),
+      );
+      final dest = Rect.fromLTWH(left, 0, width, h);
+      c.drawImageRect(
+        front.image,
+        source,
+        dest,
+        Paint()..filterQuality = FilterQuality.low,
+      );
+      // Back face is paper with faint ink showing through.
+      c.drawRect(
+        dest,
+        Paint()
+          ..color = front.paper.withValues(alpha: a > math.pi / 2 ? .88 : .08),
+      );
+      c.drawRect(
+        dest,
+        Paint()..color = Colors.black.withValues(alpha: .24 * math.sin(a)),
+      );
+    }
+    c.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _ReadiumCurl old) =>
+      old.from != from || old.to != to || old.direction != direction;
 }

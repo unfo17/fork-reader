@@ -5984,6 +5984,7 @@ class _ReaderPageState extends State<ReaderPage>
           dark: dark,
           fontFamily: null,
           pageInsets: pageInsets,
+          defaultsOnly: true,
         ),
       );
       unawaited(

@@ -33,10 +33,7 @@ import 'updates/app_updates.dart';
 import 'updates/ios_update_platform.dart';
 import 'updates/harmony_update_platform.dart';
 import 'updates/update_page.dart';
-import 'wenku_account.dart';
 import 'wenku_features.dart';
-import 'wenku_shelf_sync.dart';
-import 'publication_catalog.dart';
 import 'reader_handoff_navigation.dart';
 import 'reader_illustrations.dart';
 import 'app_palette.dart';
@@ -76,9 +73,6 @@ Future<void> main() async {
       WidgetsBinding.instance.platformDispatcher.platformBrightness,
   };
   SystemChrome.setSystemUIOverlayStyle(novelSystemUiStyle(brightness));
-  final WenkuAccount? account = LocalPlatform.fileActions
-      ? WenkuAccount()
-      : null;
   const remote = LegacyWenkuRepository();
   final repository = LocalPlatform.fileActions
       ? await openApplicationLibrary(remote: remote, network: network)
@@ -90,20 +84,6 @@ Future<void> main() async {
   if (repository is OfflineNovelRepository && repository.local != null) {
     await reconcileLocalSeries(repository.local!, state);
   }
-  final features = account != null
-      ? WenkuFeatures(
-          account: account,
-          // The authenticated novellist response already contains book metadata.
-          // Reuse its adapter, pagination and the existing account session.
-          publications: remote as PublicationCatalog,
-          shelfSync: WenkuShelfSync(
-            account: account,
-            library: state,
-            preferences: await SharedPreferences.getInstance(),
-            network: network,
-          )..start(),
-        )
-      : null;
   final customSpeech = LocalPlatform.listening ? CustomSpeechSettings() : null;
   await customSpeech?.load();
   final listening = LocalPlatform.listening
@@ -122,7 +102,6 @@ Future<void> main() async {
     NovelApp(
       state: state,
       repository: repository,
-      features: features,
       listening: listening,
       network: network,
       updates: defaultTargetPlatform == TargetPlatform.android
@@ -149,7 +128,6 @@ Future<void> main() async {
     // frame. A service-created engine also gets a handler, with no auto-play.
     unawaited(prepareListeningService(listening).catchError((Object _) {}));
   }
-  if (features != null) unawaited(features.account.initialize());
 }
 
 class NovelApp extends StatefulWidget {

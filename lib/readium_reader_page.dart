@@ -557,6 +557,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     required bool dark,
     required String? fontFamily,
     required EdgeInsets pageInsets,
+    bool defaultsOnly = false,
     File? fontFile,
     File? backgroundFile,
     Set<String> hiddenLanguages = const {},
@@ -593,6 +594,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     // Set before the platform view is constructed, including its scroll mode.
     _preferences = nextPreferences;
     api.setDefaultPreferences(nextPreferences);
+    if (defaultsOnly) return Future<void>.value();
     return command(() async {
       if (ticket != _preferencesTicket) return;
       await api.setEPUBPreferences(nextPreferences);
@@ -670,6 +672,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
               '''(function(){
                 var root=document.documentElement,body=document.body;
                 if(!body)return;
+                var signature=${jsonEncode("${identityHashCode(this)}:$ticket")};
+                if(window.__wenkuAppliedStyle===signature)return;
+                window.__wenkuAppliedStyle=signature;
                 var s=document.getElementById("wenku-reader-preferences");
                 if(s)s.remove();
                 var saved=window.__wenkuRootBackground;
