@@ -12,6 +12,8 @@ class ReadiumReaderWidget extends StatefulWidget {
     this.initialLocator,
     this.shouldShowControls,
     this.onReaderTap,
+    this.onReaderDrag,
+    this.onFootnote,
     this.onUserNavigation,
     this.onExternalLinkActivated,
     this.goBackwardSemanticLabel = 'Go Backward',
@@ -32,6 +34,8 @@ class ReadiumReaderWidget extends StatefulWidget {
   final Locator? initialLocator;
   final ValueNotifier<bool>? shouldShowControls;
   final ValueChanged<Offset>? onReaderTap;
+  final ValueChanged<Map<String, dynamic>>? onReaderDrag;
+  final ValueChanged<String>? onFootnote;
   final VoidCallback? onUserNavigation;
   final Function(String)? onExternalLinkActivated;
   final String goBackwardSemanticLabel;
