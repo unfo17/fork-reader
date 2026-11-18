@@ -52,11 +52,13 @@ class ReadiumControlsPlugin : FlutterPlugin {
         val density = binding.applicationContext.resources.displayMetrics.density
         ReadiumReader.appOnTap = { x, y -> channel?.invokeMethod("tap", mapOf("x" to x / density, "y" to y / density)) }
         ReadiumReader.appOnPageDrag = { phase, dx, dy -> channel?.invokeMethod("pageDrag", mapOf("phase" to phase, "dx" to dx / density, "dy" to dy / density)) }
+        ReadiumReader.appOnFootnote = { html -> channel?.invokeMethod("footnote", html) }
     }
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         ReadiumReader.appSelectionDidEnd = null
         ReadiumReader.appOnTap = null
         ReadiumReader.appOnPageDrag = null
+        ReadiumReader.appOnFootnote = null
         channel?.setMethodCallHandler(null); channel = null; scope.cancel()
     }
 }

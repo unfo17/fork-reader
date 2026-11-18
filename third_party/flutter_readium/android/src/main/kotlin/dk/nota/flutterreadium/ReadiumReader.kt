@@ -125,6 +125,7 @@ object ReadiumReader :
     var appSelectionDidEnd: (() -> Unit)? = null
     var appOnTap: ((Float, Float) -> Unit)? = null
     var appOnPageDrag: ((String, Float, Float) -> Unit)? = null
+    var appOnFootnote: ((String) -> Unit)? = null
 
     suspend fun appTurnPage(direction: Int, animated: Boolean) {
         val previous = epubNavigator?.currentLocator?.value

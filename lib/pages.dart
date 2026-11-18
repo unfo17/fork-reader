@@ -5859,6 +5859,10 @@ class _ReaderPageState extends State<ReaderPage>
   }
 
   void _nativeAction(String action, String text) {
+    if (action == 'note') {
+      unawaited(_showEpubNote(text));
+      return;
+    }
     _selection.clear();
     if (_nativeSelection != null) setState(() => _nativeSelection = null);
     unawaited(_readium!.clearSelection());
@@ -8280,11 +8284,11 @@ class _ReaderPageState extends State<ReaderPage>
       return;
     }
     final note = (content ?? _currentContent)?.notes[id];
-    if (note == null ||
-        _noteOpen ||
-        _toolsOpen ||
-        _catalogueOpen ||
-        _findOpen) {
+    if (note != null) await _showEpubNote(note);
+  }
+
+  Future<void> _showEpubNote(String note) async {
+    if (_noteOpen || _toolsOpen || _catalogueOpen || _findOpen) {
       return;
     }
     AppHaptics.play(context, HapticCue.action);

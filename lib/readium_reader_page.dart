@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_readium/flutter_readium.dart' as rd;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:html/parser.dart' as html;
 import 'catalog.dart';
 import 'local_books.dart';
 import 'reader_preferences.dart';
@@ -34,6 +35,11 @@ class ReadiumReaderBridge extends ChangeNotifier {
     native.setMethodCallHandler((call) async {
       final owner = _owner;
       if (owner == null || owner._disposed) return;
+      if (call.method == 'footnote') {
+        final note = html.parseFragment(call.arguments as String).text;
+        if (note != null && note.trim().isNotEmpty)
+          owner.onAction('note', note.trim());
+      }
       if (call.method == 'tap') {
         final point = Map<String, dynamic>.from(call.arguments as Map);
         final box = owner._viewKey.currentContext?.findRenderObject();

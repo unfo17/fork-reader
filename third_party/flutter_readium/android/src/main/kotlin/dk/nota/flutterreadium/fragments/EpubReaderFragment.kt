@@ -28,6 +28,7 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.readium.r2.navigator.Decoration
 import org.readium.r2.navigator.OverflowableNavigator
+import org.readium.r2.navigator.HyperlinkNavigator
 import org.readium.r2.navigator.SelectableNavigator
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
 import org.readium.r2.navigator.input.InputListener
@@ -40,6 +41,7 @@ import org.readium.r2.shared.ExperimentalReadiumApi
 import org.readium.r2.shared.InternalReadiumApi
 import org.readium.r2.shared.publication.Layout
 import org.readium.r2.shared.publication.Locator
+import org.readium.r2.shared.publication.Link
 import org.readium.r2.shared.publication.Publication
 import org.readium.r2.shared.publication.html.cssSelector
 import org.readium.r2.shared.util.AbsoluteUrl
@@ -103,6 +105,14 @@ class EpubReaderFragment :
     @ExperimentalReadiumApi
     override fun onExternalLinkActivated(url: AbsoluteUrl) {
         listener?.onExternalLinkActivated(url)
+    }
+
+    override fun shouldFollowInternalLink(link: Link, context: HyperlinkNavigator.LinkContext?): Boolean {
+        if (context is HyperlinkNavigator.FootnoteContext && ReadiumReader.appOnFootnote != null) {
+            ReadiumReader.appOnFootnote?.invoke(context.noteContent)
+            return false
+        }
+        return true
     }
 
     override fun onPageChanged(
