@@ -50,6 +50,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   ReaderPageEffect _effect = ReaderPageEffect.none;
   double _direction = 1;
   bool _busy = false;
+  bool _liveDestination = false;
 
   @override
   void initState() {
@@ -88,6 +89,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       setState(() {
         _from = from;
         _to = null;
+        _liveDestination = false;
         _effect = prefs.pageEffect;
         _direction = direction * (prefs.mode == ReaderMode.vertical ? -1 : 1);
         _clock.value = 0;
@@ -96,9 +98,16 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       // so adjacent page edges cannot bleed through this full-page transition.
       await WidgetsBinding.instance.endOfFrame;
       await widget.step(direction, false);
-      to = await widget.capture();
-      if (!mounted || to == null || to.location == from.location) return;
-      setState(() => _to = to);
+      if (prefs.pageEffect == ReaderPageEffect.paper) {
+        // The live navigator already contains the destination. Only the turning
+        // old sheet needs pixels: do not capture/decode the destination again.
+        if (!mounted) return;
+        setState(() => _liveDestination = true);
+      } else {
+        to = await widget.capture();
+        if (!mounted || to == null || to.location == from.location) return;
+        setState(() => _to = to);
+      }
       await _clock
           .animateTo(
             1,
@@ -117,6 +126,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         setState(() {
           _from = null;
           _to = null;
+          _liveDestination = false;
         });
         await WidgetsBinding.instance.endOfFrame;
       }
@@ -173,22 +183,17 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
             child: ExcludeSemantics(
               child: ClipRect(
                 child: ColoredBox(
-                  color: frame.paper,
+                  color: _liveDestination ? Colors.transparent : frame.paper,
                   child: Stack(
                     fit: StackFit.expand,
-                    children: _to == null
-                        ? [RawImage(image: frame.image, fit: BoxFit.fill)]
-                        : _effect == ReaderPageEffect.paper
+                    children: _liveDestination
                         ? [
                             CustomPaint(
-                              painter: _ReadiumCurl(
-                                frame,
-                                _to!,
-                                _clock,
-                                _direction,
-                              ),
+                              painter: _ReadiumCurl(frame, _clock, _direction),
                             ),
                           ]
+                        : _to == null
+                        ? [RawImage(image: frame.image, fit: BoxFit.fill)]
                         : _direction < 0 &&
                               (_effect == ReaderPageEffect.cover ||
                                   _effect == ReaderPageEffect.fade)
@@ -272,9 +277,8 @@ class _ReadiumParagraphTurn extends CustomPainter {
 /// A cylindrical fold of retained native pixels. No WebView transforms or DOM
 /// layout take place while the fold is drawn; the back of the sheet is shaded.
 class _ReadiumCurl extends CustomPainter {
-  _ReadiumCurl(this.from, this.to, this.clock, this.direction)
-    : super(repaint: clock);
-  final ReadiumPageFrame from, to;
+  _ReadiumCurl(this.from, this.clock, this.direction) : super(repaint: clock);
+  final ReadiumPageFrame from;
   final Animation<double> clock;
   final double direction;
   void _image(Canvas c, ReadiumPageFrame f, Size size) => c.drawImageRect(
@@ -286,9 +290,8 @@ class _ReadiumCurl extends CustomPainter {
   @override
   void paint(Canvas c, Size size) {
     final backwards = direction < 0;
-    final t = backwards ? 1 - clock.value : clock.value;
-    final front = backwards ? to : from, back = backwards ? from : to;
-    _image(c, back, size);
+    final t = clock.value;
+    final front = from;
     if (t <= 0) {
       _image(c, front, size);
       return;
@@ -364,5 +367,5 @@ class _ReadiumCurl extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _ReadiumCurl old) =>
-      old.from != from || old.to != to || old.direction != direction;
+      old.from != from || old.direction != direction;
 }
