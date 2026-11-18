@@ -29,7 +29,8 @@ class ReadiumControlsPlugin : FlutterPlugin {
                             }
                             "page" -> {
                                 val animated = call.argument<Boolean>("animated") ?: true
-                                result.success(ReadiumReader.appTurnPage(call.argument<Int>("direction") ?: 1, animated))
+                                val moved = ReadiumReader.appTurnPage(call.argument<Int>("direction") ?: 1, animated)
+                                result.success(mapOf("moved" to moved, "locator" to ReadiumReader.appPageKeyJson()))
                             }
                             "capture" -> result.success(ReadiumReader.appCapturePage())
                             "decorations" -> {

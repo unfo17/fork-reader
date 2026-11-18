@@ -136,7 +136,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     } else if (_dragInFlight) {
       if (phase == 'Move') turns.updateDrag(dx);
       if (phase == 'End' || phase == 'Cancel') {
-        turns.updateDrag(dx);
+        if (phase != 'Cancel') turns.updateDrag(dx);
         turns.endDrag(cancel: phase == 'Cancel');
       }
     }
@@ -415,11 +415,18 @@ class ReadiumReaderBridge extends ChangeNotifier {
 
   Future<bool> _stepPage(int direction, bool animated) async {
     if (Platform.isAndroid) {
-      return await native.invokeMethod<bool>('page', {
-            'direction': direction,
-            'animated': animated,
-          }) ??
-          false;
+      final previousHref = (_dragLocation ?? locator)?.href;
+      final result = await native.invokeMapMethod<String, dynamic>('page', {
+        'direction': direction,
+        'animated': animated,
+      });
+      final raw = result?['locator'] as String?;
+      final at = raw == null ? null : rd.Locator.fromJson(jsonDecode(raw));
+      if (_dragInFlight && at != null) _dragLocation = at;
+      // A newly loaded spine may install the app font after its first layout.
+      // Keep the old sheet covering it until the destination geometry is stable.
+      if (at != null && at.href != previousHref) await _waitForLayoutStable();
+      return result?['moved'] == true;
     } else if (direction > 0) {
       await api.goForward();
     } else {
@@ -762,23 +769,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
               })();''',
         });
       }
-      if (Platform.isAndroid) {
-        String? previous;
-        var stable = 0;
-        for (var i = 0; i < 60 && ticket == _preferencesTicket; i++) {
-          final sample = await native.invokeMethod<String>('evaluate', {
-            'script':
-                '(function(){document.body.offsetHeight;return document.fonts.status+"|"+innerWidth+"|"+innerHeight+"|"+document.documentElement.scrollWidth+"|"+document.documentElement.scrollHeight+"|"+getComputedStyle(document.body).fontSize;})()',
-          });
-          if (sample != null && sample.contains('loaded') && sample == previous)
-            stable++;
-          else
-            stable = 0;
-          if (stable >= 3) break;
-          previous = sample;
-          await Future<void>.delayed(const Duration(milliseconds: 50));
-        }
-      }
+      if (Platform.isAndroid) await _waitForLayoutStable(ticket: ticket);
       if (anchor != null && ticket == _preferencesTicket) {
         // Navigator preferences and app fonts/CSS both reflow the same Readium DOM.
         // Restore its original locator after both have settled.
@@ -806,6 +797,28 @@ class ReadiumReaderBridge extends ChangeNotifier {
         notifyListeners();
       }
     }, waitForView: false);
+  }
+
+  Future<void> _waitForLayoutStable({int? ticket}) async {
+    String? previous;
+    var stable = 0;
+    for (
+      var i = 0;
+      i < 60 && !_disposed && (ticket == null || ticket == _preferencesTicket);
+      i++
+    ) {
+      final sample = await native.invokeMethod<String>('evaluate', {
+        'script':
+            '(function(){document.body.offsetHeight;return document.fonts.status+"|"+innerWidth+"|"+innerHeight+"|"+document.documentElement.scrollWidth+"|"+document.documentElement.scrollHeight+"|"+getComputedStyle(document.body).fontSize+"|"+(window.__wenkuAppliedStyle||"");})()',
+      });
+      if (sample != null && sample.contains('loaded') && sample == previous)
+        stable++;
+      else
+        stable = 0;
+      if (stable >= 3) return;
+      previous = sample;
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
   }
 
   final _dataUrls = <String, Future<String>>{};
