@@ -141,7 +141,7 @@ object ReadiumReader :
     // Snapshot identity must not resolve DOM selectors or traverse the TOC.
     fun appPageKeyJson(): String? = epubNavigator?.currentLocator?.value?.toJSON()?.toString()
 
-    suspend fun appCapturePage(): ByteArray? {
+    suspend fun appCapturePage(): Map<String, Any>? {
         val view = currentReaderWidget?.getView() ?: return null
         if (view.width <= 0 || view.height <= 0) return null
         fun webView(node: android.view.View): android.webkit.WebView? {
@@ -166,10 +166,23 @@ object ReadiumReader :
             val canvas = android.graphics.Canvas(bitmap)
             canvas.scale(scale.toFloat(), scale.toFloat())
             view.draw(canvas)
-            val png = java.io.ByteArrayOutputStream()
+            // Send explicit RGBA pixels: PNG compression and decoding add two
+            // avoidable full-page CPU passes for each side of every turn.
             withContext(Dispatchers.Default) {
-                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, png)
-                png.toByteArray()
+                val width = bitmap.width
+                val height = bitmap.height
+                val colors = IntArray(width * height)
+                bitmap.getPixels(colors, 0, width, 0, 0, width, height)
+                val rgba = ByteArray(colors.size * 4)
+                for (i in colors.indices) {
+                    val argb = colors[i]
+                    val offset = i * 4
+                    rgba[offset] = (argb ushr 16).toByte()
+                    rgba[offset + 1] = (argb ushr 8).toByte()
+                    rgba[offset + 2] = argb.toByte()
+                    rgba[offset + 3] = (argb ushr 24).toByte()
+                }
+                mapOf("width" to width, "height" to height, "pixels" to rgba)
             }
         } finally { bitmap.recycle() }
     }

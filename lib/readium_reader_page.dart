@@ -414,11 +414,21 @@ class ReadiumReaderBridge extends ChangeNotifier {
     Object? info = jsonDecode(raw);
     if (info is String) info = jsonDecode(info);
     if (info is! Map) return null;
-    final bytes = await native.invokeMethod<Uint8List>('capture');
-    if (bytes == null || bytes.isEmpty) return null;
-    final codec = await ui.instantiateImageCodec(bytes);
-    final image = (await codec.getNextFrame()).image;
-    codec.dispose();
+    final pixels = await native.invokeMapMethod<String, dynamic>('capture');
+    if (pixels == null) return null;
+    final bytes = pixels['pixels'] as Uint8List;
+    final width = pixels['width'] as int, height = pixels['height'] as int;
+    if (width <= 0 || height <= 0 || bytes.length != width * height * 4)
+      return null;
+    final decoded = Completer<ui.Image>();
+    ui.decodeImageFromPixels(
+      bytes,
+      width,
+      height,
+      ui.PixelFormat.rgba8888,
+      decoded.complete,
+    );
+    final image = await decoded.future;
     final location = await native.invokeMethod<String>('pageKey');
     final at = location == null
         ? null
