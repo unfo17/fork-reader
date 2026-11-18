@@ -34,6 +34,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -122,6 +123,53 @@ object ReadiumReader :
     var appSelectionToolbar = false
     var appSelectionMode: android.view.ActionMode? = null
     var appSelectionDidEnd: (() -> Unit)? = null
+    var appOnTap: ((Float, Float) -> Unit)? = null
+    var appOnPageDrag: ((String, Float, Float) -> Unit)? = null
+
+    suspend fun appTurnPage(direction: Int, animated: Boolean) {
+        val previous = epubNavigator?.currentLocator?.value
+        if (direction > 0) visualGoForward(animated) else visualGoBackward(animated)
+        // Wait on the navigator's actual position, not on a guessed animation delay.
+        kotlinx.coroutines.withTimeoutOrNull(1500) {
+            epubNavigator?.currentLocator?.first { it != previous }
+        }
+    }
+    suspend fun appApplyStyle(script: String): String? {
+        appReaderStyleScript = script
+        return if (currentPublication?.metadata?.layout == org.readium.r2.shared.publication.Layout.FIXED) null
+        else epubEvaluateJavascript(script)
+    }
+
+    suspend fun appCapturePage(): ByteArray? {
+        val view = currentReaderWidget?.getView() ?: return null
+        if (view.width <= 0 || view.height <= 0) return null
+        fun webView(node: android.view.View): android.webkit.WebView? {
+            if (node is android.webkit.WebView && node.isShown && node.getGlobalVisibleRect(android.graphics.Rect())) return node
+            if (node is android.view.ViewGroup) for (i in 0 until node.childCount) webView(node.getChildAt(i))?.let { return it }
+            return null
+        }
+        webView(view)?.let { web ->
+            kotlinx.coroutines.withTimeoutOrNull(1000) {
+                kotlinx.coroutines.suspendCancellableCoroutine<Unit> { c ->
+                    web.postVisualStateCallback(System.nanoTime(), object : android.webkit.WebView.VisualStateCallback() {
+                        override fun onComplete(requestId: Long) { if (c.isActive) c.resumeWith(Result.success(Unit)) }
+                    })
+                }
+            }
+        }
+        // Bound transient memory on high-resolution tablets; only two pages are retained.
+        val scale = kotlin.math.min(1.0, kotlin.math.sqrt(4000000.0 / view.width / view.height))
+        val bitmap = android.graphics.Bitmap.createBitmap((view.width * scale).toInt().coerceAtLeast(1), (view.height * scale).toInt().coerceAtLeast(1), android.graphics.Bitmap.Config.ARGB_8888)
+        return try {
+            val canvas = android.graphics.Canvas(bitmap)
+            canvas.scale(scale.toFloat(), scale.toFloat())
+            view.draw(canvas)
+            val png = java.io.ByteArrayOutputStream()
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, png)
+            png.toByteArray()
+        } finally { bitmap.recycle() }
+    }
+
     private var appRef: WeakReference<Application>? = null
 
     private var activityRef: WeakReference<Activity>? = null
@@ -769,6 +817,7 @@ object ReadiumReader :
     }
 
     fun closePublication() {
+        appReaderStyleScript = null
         ttsNavigator?.dispose()
         ttsNavigator = null
         audiobookNavigator?.dispose()

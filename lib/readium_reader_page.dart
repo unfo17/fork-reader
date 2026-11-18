@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_readium/flutter_readium.dart' as rd;
@@ -9,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'catalog.dart';
 import 'local_books.dart';
 import 'reader_preferences.dart';
+import 'readium_page_turn.dart';
 
 /// Engine adapter only. ReaderPage retains every Flutter control and panel.
 class ReadiumReaderBridge extends ChangeNotifier {
@@ -18,6 +21,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     required this.initialChapter,
     this.restoreLocator = true,
     required this.onLocation,
+    required this.onPage,
     required this.onAction,
     required this.onTap,
     required this.onUserNavigation,
@@ -28,6 +32,37 @@ class ReadiumReaderBridge extends ChangeNotifier {
   }) {
     controls = ValueNotifier(chromeVisible);
     native.setMethodCallHandler((call) async {
+      final owner = _owner;
+      if (owner == null || owner._disposed) return;
+      if (call.method == 'tap') {
+        final point = Map<String, dynamic>.from(call.arguments as Map);
+        final box = owner._viewKey.currentContext?.findRenderObject();
+        if (box is RenderBox)
+          owner.onTap(
+            box.localToGlobal(
+              Offset(
+                (point['x'] as num).toDouble(),
+                (point['y'] as num).toDouble(),
+              ),
+            ),
+          );
+      }
+      if (call.method == 'pageDrag') {
+        final event = Map<String, dynamic>.from(call.arguments as Map);
+        if (event['phase'] == 'End') {
+          final dx = (event['dx'] as num).toDouble();
+          final dy = (event['dy'] as num).toDouble();
+          final box = owner._viewKey.currentContext?.findRenderObject();
+          final width = box is RenderBox ? box.size.width : 400.0;
+          if (dx.abs() >= (width * .1).clamp(28, 48) && dx.abs() > dy.abs()) {
+            final rtl =
+                owner._preferences.verticalText == true ||
+                owner.publication?.metadata.readingProgression ==
+                    rd.ReadingProgression.rtl;
+            owner.onPage((dx < 0 ? 1 : -1) * (rtl ? -1 : 1));
+          }
+        }
+      }
       if (call.method == 'selectionEnded') {
         final owner = _owner;
         if (owner != null) {
@@ -54,6 +89,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     publisherStyles: true,
   );
   final void Function(int chapter, double fraction, String? text) onLocation;
+  final ValueChanged<int> onPage;
   final void Function(String action, String text) onAction;
   final ValueChanged<Offset> onTap;
   final VoidCallback onUserNavigation;
@@ -99,6 +135,14 @@ class ReadiumReaderBridge extends ChangeNotifier {
   rd.Locator? selectedLocator;
   final progress = ValueNotifier<double>(0);
   final api = rd.FlutterReadium();
+  final turns = ReadiumPageTurnController();
+  ReaderPreferences _appearance = const ReaderPreferences();
+  bool _dark = false;
+  void motionPreferences(ReaderPreferences preferences, bool dark) {
+    _appearance = preferences;
+    _dark = dark;
+  }
+
   late final ValueNotifier<bool> controls;
   late Future<void> opening;
   rd.Publication? publication;
@@ -341,18 +385,77 @@ class ReadiumReaderBridge extends ChangeNotifier {
   }
 
   Future<void> pageBy(int direction, {bool animated = true}) =>
-      command(() async {
-        if (Platform.isAndroid) {
-          await native.invokeMethod<void>('page', {
-            'direction': direction,
-            'animated': animated,
-          });
-        } else if (direction > 0) {
-          await api.goForward();
-        } else {
-          await api.goBackward();
-        }
+      command(() => turns.turn(direction, animated: animated));
+
+  Future<void> _stepPage(int direction, bool animated) async {
+    if (Platform.isAndroid) {
+      await native.invokeMethod<void>('page', {
+        'direction': direction,
+        'animated': animated,
       });
+    } else if (direction > 0) {
+      await api.goForward();
+    } else {
+      await api.goBackward();
+    }
+  }
+
+  Future<ReadiumPageFrame?> _capturePage() async {
+    if (!Platform.isAndroid || _disposed || _owner != this) return null;
+    final raw = await native.invokeMethod<String>('evaluate', {
+      'script':
+          '''(function(){
+        var w=innerWidth,h=innerHeight,v=${_preferences.verticalText == true};
+        var spans=[];
+        document.querySelectorAll('p,li,h1,h2,h3,h4,h5,h6,pre,table,figure,img').forEach(function(e){
+          if(e.closest('rt,script,style,[data-readium]'))return;
+          Array.from(e.getClientRects()).forEach(function(r){
+            if(r.right<=0||r.left>=w||r.bottom<=0||r.top>=h)return;
+            var a=Math.max(0,v?r.left:r.top),b=Math.min(v?w:h,v?r.right:r.bottom);
+            if(b>a)spans.push([a,b]);
+          });
+        });
+        spans.sort(function(a,b){return a[0]-b[0]});
+        var merged=[];
+        spans.forEach(function(s){var last=merged[merged.length-1];if(last&&s[0]<=last[1]+1)last[1]=Math.max(last[1],s[1]);else merged.push(s);});
+        var cuts=[0];for(var i=1;i<merged.length;i++)cuts.push((merged[i-1][1]+merged[i][0])/2/(v?w:h));cuts.push(1);
+        var bands=[];for(var i=1;i<cuts.length;i++)bands.push(v?[cuts[i-1],0,cuts[i],1]:[0,cuts[i-1],1,cuts[i]]);
+        var c=getComputedStyle(document.documentElement).backgroundColor.match(/[\\d.]+/g)||[255,255,255];
+        return JSON.stringify({bands:bands,color:c.slice(0,3).map(Number)});
+      })()''',
+    });
+    if (raw == null) return null;
+    Object? info = jsonDecode(raw);
+    if (info is String) info = jsonDecode(info);
+    if (info is! Map) return null;
+    final bytes = await native.invokeMethod<Uint8List>('capture');
+    if (bytes == null || bytes.isEmpty) return null;
+    final codec = await ui.instantiateImageCodec(bytes);
+    final image = (await codec.getNextFrame()).image;
+    codec.dispose();
+    final location = await native.invokeMethod<String>('locator');
+    final at = location == null
+        ? null
+        : jsonDecode(location) as Map<String, dynamic>;
+    final loc = at?['locations'] as Map?;
+    final bands = (info['bands'] as List).map((e) {
+      final r = (e as List).cast<num>();
+      return Rect.fromLTRB(
+        r[0].toDouble(),
+        r[1].toDouble(),
+        r[2].toDouble(),
+        r[3].toDouble(),
+      );
+    }).toList();
+    final color = (info['color'] as List).cast<num>();
+    return ReadiumPageFrame(
+      image,
+      '${at?['href']}|${loc?['currentPage']}|${loc?['progression']}',
+      bands,
+      Color.fromARGB(255, color[0].round(), color[1].round(), color[2].round()),
+    );
+  }
+
   rd.Locator? locationFor(
     int index, {
     double? progression,
@@ -467,12 +570,15 @@ class ReadiumReaderBridge extends ChangeNotifier {
     required double lineHeight,
     required bool dark,
     required String? fontFamily,
+    required EdgeInsets pageInsets,
     File? fontFile,
     File? backgroundFile,
     Set<String> hiddenLanguages = const {},
     String? onlyLanguage,
   }) {
     final ticket = ++_preferencesTicket;
+    _appearance = prefs;
+    _dark = dark;
     final anchor = _layoutAnchor ??= locator;
     final nextPreferences = rd.EPUBPreferences(
       publisherStyles: true,
@@ -514,7 +620,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
         // In daytime, change only the paper so publisher boxes/tables survive.
         // At night Readium also clears those backgrounds to match its text colour.
         final css = StringBuffer(
-          'html{background-color:#$paper !important;}body{background-color:transparent !important;line-height:$lineHeight !important;}',
+          'body{min-height:100vh;box-sizing:border-box;'
+          'padding:${pageInsets.top}px ${pageInsets.right}px ${pageInsets.bottom}px ${pageInsets.left}px !important;'
+          '-webkit-box-decoration-break:clone;box-decoration-break:clone;line-height:$lineHeight !important;}',
         );
         if (prefs.indent) css.write('p{text-indent:2em !important;}');
         if (prefs.justify) css.write('p{text-align:justify !important;}');
@@ -569,9 +677,31 @@ class ReadiumReaderBridge extends ChangeNotifier {
               'body [lang]:not([lang|="$code"]){display:none !important;}',
             );
         }
+        final overrideBackground =
+            backgroundFile != null || prefs.darkPaper(dark);
         await native.invokeMethod<String>('style', {
           'script':
-              '(function(){var s=document.getElementById("wenku-reader-preferences");if(!s){s=document.createElement("style");s.id="wenku-reader-preferences";document.head.appendChild(s);}s.textContent=${jsonEncode(css.toString())};document.documentElement.style.setProperty("background-color","#$paper","important");document.body.style.setProperty("background-color","transparent","important");})();',
+              '''(function(){
+                var root=document.documentElement,body=document.body;
+                if(!body)return;
+                var s=document.getElementById("wenku-reader-preferences");
+                if(s)s.remove();
+                var saved=window.__wenkuRootBackground;
+                if(!saved){saved={color:root.style.getPropertyValue('background-color'),image:root.style.getPropertyValue('background-image'),bodyColor:body.style.getPropertyValue('background-color'),bodyPriority:body.style.getPropertyPriority('background-color'),bodyImage:body.style.getPropertyValue('background-image'),bodyImagePriority:body.style.getPropertyPriority('background-image')};window.__wenkuRootBackground=saved;}
+                for(var pair of [['background-color',saved.color],['background-image',saved.image]]){if(pair[1])root.style.setProperty(pair[0],pair[1]);else root.style.removeProperty(pair[0]);}
+                if(saved.bodyColor)body.style.setProperty('background-color',saved.bodyColor,saved.bodyPriority);else body.style.removeProperty('background-color');
+                if(saved.bodyImage)body.style.setProperty('background-image',saved.bodyImage,saved.bodyImagePriority);else body.style.removeProperty('background-image');
+                var bg=getComputedStyle(body),html=getComputedStyle(root);
+                var opaque=bg.backgroundColor!=='rgba(0, 0, 0, 0)'&&bg.backgroundColor!=='transparent';
+                var color=${overrideBackground ? jsonEncode('#$paper') : "opaque?bg.backgroundColor:(html.backgroundColor==='rgba(0, 0, 0, 0)'?'#$paper':html.backgroundColor)"};
+                var image=${overrideBackground ? "'none'" : "bg.backgroundImage!=='none'?bg.backgroundImage:html.backgroundImage"};
+                s=document.createElement('style');s.id='wenku-reader-preferences';
+                s.textContent=${jsonEncode(css.toString())} + (image!=='none'&&!${overrideBackground}?'html{background-size:'+bg.backgroundSize+';background-repeat:'+bg.backgroundRepeat+';background-position:'+bg.backgroundPosition+';background-attachment:fixed;}':'');document.head.appendChild(s);
+                root.style.setProperty('background-color',color,'important');
+                if(!${backgroundFile != null})root.style.setProperty('background-image',image,'important');
+                body.style.setProperty('background-color','transparent','important');
+                body.style.setProperty('background-image','none','important');
+              })();''',
         });
       }
       if (anchor != null && ticket == _preferencesTicket) {
@@ -638,37 +768,46 @@ class ReadiumReaderBridge extends ChangeNotifier {
               ? const CircularProgressIndicator()
               : Text(error!),
         )
-      : rd.ReadiumReaderWidget(
-          key: _viewKey,
-          publication: publication!,
-          initialLocator: initialLocator,
-          shouldShowControls: controls,
-          onReaderTap: onTap,
-          onUserNavigation: () {
-            _layoutAnchor = null;
-            _seekTicket++;
-            onUserNavigation();
-          },
-          selectionActions: const [
-            rd.SelectionAction(id: 'copy', title: '复制'),
-            rd.SelectionAction(id: 'bookmark', title: '书签'),
-            rd.SelectionAction(id: 'dictionary', title: '词典'),
-            rd.SelectionAction(id: 'illustrations', title: '插图'),
-          ],
-          allowedDefaultActions: const {},
-          onImageTapped: (_) => onAction('illustrations', ''),
-          onTextSelected: (e) =>
-              unawaited(_selected(e).catchError((Object _) {})),
-          onSelectionAction: (e) {
-            selectedLocator = e.locator;
-            onAction(e.actionId, e.selectedText ?? '');
-          },
-          onDecorationInteraction: (e) {
-            if (e.group == 'wenku-annotations') onAnnotation(e.decorationId);
-          },
-          goBackwardSemanticLabel: '上一页',
-          goForwardSemanticLabel: '下一页',
-          toggleShowControlsSemanticLabel: '切换阅读控件',
+      : ReadiumPageSurface(
+          controller: turns,
+          preferences: _appearance,
+          paper: _appearance.background(_dark),
+          capture: _capturePage,
+          step: _stepPage,
+          child: rd.ReadiumReaderWidget(
+            key: _viewKey,
+            publication: publication!,
+            initialLocator: initialLocator,
+            shouldShowControls: controls,
+            // Android forwards only unhandled Readium taps through InputListener.
+            // Links, footnotes, annotations and selection handles retain their taps.
+            onReaderTap: Platform.isAndroid ? (_) {} : onTap,
+            onUserNavigation: () {
+              _layoutAnchor = null;
+              _seekTicket++;
+              onUserNavigation();
+            },
+            selectionActions: const [
+              rd.SelectionAction(id: 'copy', title: '复制'),
+              rd.SelectionAction(id: 'bookmark', title: '书签'),
+              rd.SelectionAction(id: 'dictionary', title: '词典'),
+              rd.SelectionAction(id: 'illustrations', title: '插图'),
+            ],
+            allowedDefaultActions: const {},
+            onImageTapped: (_) => onAction('illustrations', ''),
+            onTextSelected: (e) =>
+                unawaited(_selected(e).catchError((Object _) {})),
+            onSelectionAction: (e) {
+              selectedLocator = e.locator;
+              onAction(e.actionId, e.selectedText ?? '');
+            },
+            onDecorationInteraction: (e) {
+              if (e.group == 'wenku-annotations') onAnnotation(e.decorationId);
+            },
+            goBackwardSemanticLabel: '上一页',
+            goForwardSemanticLabel: '下一页',
+            toggleShowControlsSemanticLabel: '切换阅读控件',
+          ),
         );
   @override
   void dispose() {

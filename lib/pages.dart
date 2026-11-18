@@ -5955,10 +5955,19 @@ class _ReaderPageState extends State<ReaderPage>
     _nativeAnnotations();
     final prefs = _readerPreferences;
     final dark = Theme.of(context).brightness == Brightness.dark;
+    bridge.motionPreferences(prefs, dark);
     final hidden = widget.state.hiddenReaderLanguagesFor(widget.novel.id);
     final only = widget.state.onlyReaderLanguageFor(widget.novel.id);
+    final safe = MediaQuery.viewPaddingOf(context);
+    final pageInsets = EdgeInsets.fromLTRB(
+      safe.left + prefs.leftMargin,
+      (prefs.hideSystemStatus ? _systemStatusExtent(context) : safe.top) +
+          prefs.marginTop,
+      safe.right + prefs.rightMargin,
+      safe.bottom + prefs.marginBottom + ReaderScrollLocation.extentOf(context),
+    );
     final key =
-        '${prefs.layoutKey}|${prefs.paper.name}|${prefs.nightTextBrightness}|${prefs.backgroundImage}|${prefs.backgroundOpacity}|${prefs.backgroundFit}|${prefs.hideSystemStatus}|${prefs.showStatusInfo}|$_fontSize|$_lineHeight|$_readerFontId|$dark|$hidden|$only';
+        '$pageInsets|${prefs.layoutKey}|${prefs.paper.name}|${prefs.nightTextBrightness}|${prefs.backgroundImage}|${prefs.backgroundOpacity}|${prefs.backgroundFit}|${prefs.hideSystemStatus}|${prefs.showStatusInfo}|$_fontSize|$_lineHeight|$_readerFontId|$dark|$hidden|$only';
     if (key != _nativePreferencesKey) {
       _nativePreferencesKey = key;
       // Supply initial defaults synchronously, before creating the native view.
@@ -5969,6 +5978,7 @@ class _ReaderPageState extends State<ReaderPage>
           lineHeight: _lineHeight,
           dark: dark,
           fontFamily: null,
+          pageInsets: pageInsets,
         ),
       );
       unawaited(
@@ -5984,6 +5994,7 @@ class _ReaderPageState extends State<ReaderPage>
             lineHeight: _lineHeight,
             dark: dark,
             fontFamily: _readerFontFamily,
+            pageInsets: pageInsets,
             fontFile: font,
             backgroundFile: background,
             hiddenLanguages: hidden,
@@ -5994,17 +6005,8 @@ class _ReaderPageState extends State<ReaderPage>
         }),
       );
     }
-    final safe = MediaQuery.viewPaddingOf(context);
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        safe.left + prefs.leftMargin,
-        (prefs.hideSystemStatus ? _systemStatusExtent(context) : safe.top) +
-            prefs.marginTop,
-        safe.right + prefs.rightMargin,
-        safe.bottom +
-            prefs.marginBottom +
-            ReaderScrollLocation.extentOf(context),
-      ),
+    return ReaderTouchSurface(
+      canRecord: () => _activityEligible && !_selection.value,
       child: FadeTransition(opacity: _chapterReveal, child: bridge.view()),
     );
   }
@@ -6713,6 +6715,7 @@ class _ReaderPageState extends State<ReaderPage>
             widget.initialBookmark == null && widget.initialPosition == null,
         chromeVisible: _chromeTarget,
         onLocation: _nativeLocation,
+        onPage: _pageBy,
         onAction: _nativeAction,
         onAnnotation: _nativeOpenAnnotation,
         onSelection: _nativeSelected,
@@ -10501,7 +10504,8 @@ class _ReaderPageState extends State<ReaderPage>
                     showBattery: preferences.hideSystemStatus,
                     statusFontSize: footer ? null : preferences.statusFontSize,
                     statusBand: !footer,
-                    transparentPaper: preferences.backgroundImage != null,
+                    transparentPaper:
+                        preferences.backgroundImage != null || _readium != null,
                     chrome: _chrome,
                     reduceMotion: widget.state.reduceMotion,
                     sourceFraction: _scrollSourceFraction,

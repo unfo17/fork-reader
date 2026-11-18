@@ -28,10 +28,10 @@ class ReadiumControlsPlugin : FlutterPlugin {
                             }
                             "page" -> {
                                 val animated = call.argument<Boolean>("animated") ?: true
-                                if ((call.argument<Int>("direction") ?: 1) > 0) ReadiumReader.visualGoForward(animated)
-                                else ReadiumReader.visualGoBackward(animated)
+                                ReadiumReader.appTurnPage(call.argument<Int>("direction") ?: 1, animated)
                                 result.success(null)
                             }
+                            "capture" -> result.success(ReadiumReader.appCapturePage())
                             "decorations" -> {
                                 val marks = call.argument<List<Map<String, Any>>>("marks") ?: emptyList()
                                 ReadiumReader.applyAppDecorations(marks, call.argument<String>("group") ?: "wenku")
@@ -39,8 +39,7 @@ class ReadiumControlsPlugin : FlutterPlugin {
                             }
                             "style" -> {
                                 val script = call.argument<String>("script") ?: ""
-                                ReadiumReader.appReaderStyleScript = script
-                                result.success(ReadiumReader.epubEvaluateJavascript(script))
+                                result.success(ReadiumReader.appApplyStyle(script))
                             }
                             "evaluate" -> result.success(ReadiumReader.epubEvaluateJavascript(call.argument<String>("script") ?: ""))
                             else -> result.notImplemented()
@@ -50,9 +49,14 @@ class ReadiumControlsPlugin : FlutterPlugin {
             }
         }
         ReadiumReader.appSelectionDidEnd = { channel?.invokeMethod("selectionEnded", null) }
+        val density = binding.applicationContext.resources.displayMetrics.density
+        ReadiumReader.appOnTap = { x, y -> channel?.invokeMethod("tap", mapOf("x" to x / density, "y" to y / density)) }
+        ReadiumReader.appOnPageDrag = { phase, dx, dy -> channel?.invokeMethod("pageDrag", mapOf("phase" to phase, "dx" to dx / density, "dy" to dy / density)) }
     }
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         ReadiumReader.appSelectionDidEnd = null
+        ReadiumReader.appOnTap = null
+        ReadiumReader.appOnPageDrag = null
         channel?.setMethodCallHandler(null); channel = null; scope.cancel()
     }
 }

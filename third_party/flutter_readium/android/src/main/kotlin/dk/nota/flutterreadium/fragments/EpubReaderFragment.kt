@@ -30,6 +30,9 @@ import org.readium.r2.navigator.Decoration
 import org.readium.r2.navigator.OverflowableNavigator
 import org.readium.r2.navigator.SelectableNavigator
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
+import org.readium.r2.navigator.input.InputListener
+import org.readium.r2.navigator.input.TapEvent
+import org.readium.r2.navigator.input.DragEvent
 import org.readium.r2.navigator.html.HtmlDecorationTemplate
 import org.readium.r2.navigator.html.HtmlDecorationTemplates
 import org.readium.r2.navigator.util.DirectionalNavigationAdapter
@@ -119,7 +122,7 @@ class EpubReaderFragment :
         PluginLog.d(TAG, "::onPageLoaded")
         lifecycleScope.launch {
             applyCustomCssVariables()
-            ReadiumReader.appReaderStyleScript?.let { evaluateJavascript(it) }
+            if (!layoutMode.isFixed) ReadiumReader.appReaderStyleScript?.let { evaluateJavascript(it) }
             injectImageTapListeners()
         }
         listener?.onPageLoaded()
@@ -690,6 +693,19 @@ class EpubReaderFragment :
         }
 
         navigator = epubNavigator
+        if (ReadiumReader.appSelectionToolbar) {
+            epubNavigator.addInputListener(object : InputListener {
+                override fun onTap(event: TapEvent): Boolean {
+                    ReadiumReader.appOnTap?.invoke(event.point.x, event.point.y)
+                    return true
+                }
+                override fun onDrag(event: DragEvent): Boolean {
+                    if (scrollMode || ReadiumReader.appSelectionMode != null) return false
+                    ReadiumReader.appOnPageDrag?.invoke(event.type.name, event.offset.x, event.offset.y)
+                    return true
+                }
+            })
+        }
         PluginLog.d(TAG, "::attachNavigator() - $instance - got navigator = $navigator")
 
         started.value = true
