@@ -138,6 +138,10 @@ object ReadiumReader :
         else epubEvaluateJavascript(script)
     }
 
+    fun appOwnsPageGestures(): Boolean = appSelectionToolbar &&
+        epubNavigator != null && epubNavigator?.preferences?.scroll != true &&
+        appSelectionMode == null
+
     // Snapshot identity must not resolve DOM selectors or traverse the TOC.
     fun appPageKeyJson(): String? = epubNavigator?.currentLocator?.value?.toJSON()?.toString()
 

@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.Color
 import android.util.AttributeSet
 import android.view.View
+import android.view.MotionEvent
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.LinearLayout.generateViewId
@@ -138,7 +140,12 @@ class ReadiumReaderWidget(
 
         PluginLog.d(TAG, "publication = $publication")
 
-        layout = LinearLayout(context, attrs)
+        layout = AppPageGestureLayout(context, attrs,
+            ownsGesture = { ReadiumReader.appOwnsPageGestures() },
+            onSwipe = { dx, dy ->
+                val density = context.resources.displayMetrics.density
+                emitPageSwipe(dx / density, dy / density)
+            })
         layout.id = generateViewId()
         layout.setBackgroundColor(Color.TRANSPARENT)
         layout.setPadding(0, 0, 0, 0)
@@ -189,6 +196,8 @@ class ReadiumReaderWidget(
             }
         }
     }
+
+    private fun emitPageSwipe(dx: Float, dy: Float) { channel.onReaderDrag("End", dx, dy) }
 
     override fun onPageLoaded() {
         PluginLog.d(TAG, "::onPageLoaded")
@@ -512,5 +521,70 @@ class ReadiumReaderWidget(
 
     companion object {
         const val NAVIGATOR_FRAGMENT_TAG = "NAVIGATOR_READER_FRAGMENT"
+    }
+}
+
+/** Single owner for paginated horizontal drags. InputListener only handles JS
+ * events: it cannot cancel R2WebView.onTouchEvent's separate native page turn.
+ * Android interception sends ACTION_CANCEL to that child before its ACTION_UP.
+ * Taps, long-press selection, vertical scrolling and multi-touch stay native.
+ */
+private class AppPageGestureLayout(
+    context: Context,
+    attrs: AttributeSet?,
+    private val ownsGesture: () -> Boolean,
+    private val onSwipe: (Float, Float) -> Unit,
+) : LinearLayout(context, attrs) {
+    private val slop = ViewConfiguration.get(context).scaledTouchSlop
+    private var downX = 0f
+    private var downY = 0f
+    private var dragging = false
+    private var multiplePointers = false
+
+    override fun requestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
+        // The child may request exclusivity before it knows the drag direction.
+        // Retain interception only while the app owns paginated page gestures.
+        if (disallowIntercept && ownsGesture()) return
+        super.requestDisallowInterceptTouchEvent(disallowIntercept)
+    }
+
+    override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = event.x
+                downY = event.y
+                dragging = false
+                multiplePointers = false
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> multiplePointers = true
+            MotionEvent.ACTION_MOVE -> {
+                val dx = event.x - downX
+                val dy = event.y - downY
+                if (!multiplePointers && ownsGesture() &&
+                    kotlin.math.abs(dx) > slop && kotlin.math.abs(dx) > kotlin.math.abs(dy)) {
+                    dragging = true
+                    parent?.requestDisallowInterceptTouchEvent(true)
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (!dragging) return super.onTouchEvent(event)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_POINTER_DOWN -> multiplePointers = true
+            MotionEvent.ACTION_UP -> {
+                dragging = false
+                parent?.requestDisallowInterceptTouchEvent(false)
+                if (!multiplePointers && ownsGesture()) onSwipe(event.x - downX, event.y - downY)
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                dragging = false
+                parent?.requestDisallowInterceptTouchEvent(false)
+            }
+        }
+        return true
     }
 }

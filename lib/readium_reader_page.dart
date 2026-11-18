@@ -372,8 +372,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
 
   bool _pagePending = false;
   Future<void> pageBy(int direction, {bool animated = true}) async {
-    // Input can emit repeated drag-end events. Gate before joining the serial
-    // command queue, otherwise the duplicate runs after the first turn finishes.
+    // Keep one page request in flight, matching the original animation lock.
     if (_pagePending || _disposed) return;
     _pagePending = true;
     try {

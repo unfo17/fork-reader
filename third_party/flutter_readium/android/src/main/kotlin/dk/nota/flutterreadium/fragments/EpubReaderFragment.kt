@@ -706,7 +706,7 @@ class EpubReaderFragment :
         (epubNavigator as OverflowableNavigator).apply {
             // This will automatically turn pages when tapping the screen edges or arrow keys.
             // Wenku ReaderPage owns tap zones and hardware keys.
-            // Native swipes and selection remain handled by Readium.
+            // Page swipes belong exclusively to AppPageGestureLayout.
         }
 
         navigator = epubNavigator
@@ -717,16 +717,7 @@ class EpubReaderFragment :
                     ReadiumReader.currentReaderWidget?.channel?.onReaderTap(event.point.x / density, event.point.y / density)
                     return true
                 }
-                override fun onDrag(event: DragEvent): Boolean {
-                    if (scrollMode || ReadiumReader.appSelectionMode != null) return false
-                    val density = resources.displayMetrics.density
-                    // Readium also emits End for an ordinary tap. Consuming that
-                    // touchend suppresses the WebView's subsequent click entirely.
-                    if (kotlin.math.abs(event.offset.x) < 6 * density ||
-                        kotlin.math.abs(event.offset.x) <= kotlin.math.abs(event.offset.y)) return false
-                    ReadiumReader.currentReaderWidget?.channel?.onReaderDrag(event.type.name, event.offset.x / density, event.offset.y / density)
-                    return true
-                }
+
             })
         }
         PluginLog.d(TAG, "::attachNavigator() - $instance - got navigator = $navigator")
