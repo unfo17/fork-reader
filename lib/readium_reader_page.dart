@@ -104,20 +104,6 @@ class ReadiumReaderBridge extends ChangeNotifier {
     );
   }
 
-  void _pageDrag(Map<String, dynamic> event) {
-    if (_disposed || _owner != this || event['phase'] != 'End') return;
-    final dx = (event['dx'] as num).toDouble(),
-        dy = (event['dy'] as num).toDouble();
-    final box = _viewKey.currentContext?.findRenderObject();
-    final width = box is RenderBox ? box.size.width : 400.0;
-    if (dx.abs() >= (width * .1).clamp(28, 48) && dx.abs() > dy.abs()) {
-      final rtl =
-          _preferences.verticalText == true ||
-          publication?.metadata.readingProgression == rd.ReadingProgression.rtl;
-      onPage((dx < 0 ? 1 : -1) * (rtl ? -1 : 1));
-    }
-  }
-
   rd.Locator? selectedLocator;
   final progress = ValueNotifier<double>(0);
   final api = rd.FlutterReadium();
@@ -791,7 +777,6 @@ class ReadiumReaderBridge extends ChangeNotifier {
             // Android forwards only unhandled Readium taps through InputListener.
             // Links, footnotes, annotations and selection handles retain their taps.
             onReaderTap: onTap,
-            onReaderDrag: _pageDrag,
             onFootnote: (markup) {
               final note = html.parseFragment(markup).text;
               if (note != null && note.trim().isNotEmpty)
