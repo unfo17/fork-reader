@@ -606,8 +606,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
         // In daytime, change only the paper so publisher boxes/tables survive.
         // At night Readium also clears those backgrounds to match its text colour.
         final css = StringBuffer(
-          'body{min-height:100vh;box-sizing:border-box;'
-          'padding:${pageInsets.top}px ${pageInsets.right}px ${pageInsets.bottom}px ${pageInsets.left}px !important;'
+          'body{box-sizing:border-box;'
+          'padding:0 ${pageInsets.right}px 0 ${pageInsets.left}px !important;'
           '-webkit-box-decoration-break:clone;box-decoration-break:clone;line-height:$lineHeight !important;}',
         );
         if (prefs.indent) css.write('p{text-indent:2em !important;}');
@@ -685,7 +685,12 @@ class ReadiumReaderBridge extends ChangeNotifier {
                 s.textContent=${jsonEncode(css.toString())} + (image!=='none'&&!${overrideBackground}?'html{background-size:'+bg.backgroundSize+';background-repeat:'+bg.backgroundRepeat+';background-position:'+bg.backgroundPosition+';background-attachment:fixed;}':'');document.head.appendChild(s);
                 // Readium's :root[style] body rule is !important; inline padding
                 // keeps the user's margins inside each page rather than outside it.
-                body.style.setProperty('padding','${pageInsets.top}px ${pageInsets.right}px ${pageInsets.bottom}px ${pageInsets.left}px','important');
+                // The column container owns block insets so every page has them.
+                // Body block padding applies only to the first/last fragment in WebView.
+                root.style.setProperty('box-sizing','border-box','important');
+                root.style.setProperty('padding-top','${pageInsets.top}px','important');
+                root.style.setProperty('padding-bottom','${pageInsets.bottom}px','important');
+                body.style.setProperty('padding','0 ${pageInsets.right}px 0 ${pageInsets.left}px','important');
                 root.style.setProperty('background-color',color,'important');
                 if(!${backgroundFile != null})root.style.setProperty('background-image',image,'important');
                 body.style.setProperty('background-color','transparent','important');

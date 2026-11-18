@@ -5742,7 +5742,8 @@ class _ReaderPageState extends State<ReaderPage>
         if (mounted) showNovelFeedback(context, error);
       });
     }
-    _ready = _readium!.ready && _currentContent != null;
+    // Native paging/chrome need the navigator, not the auxiliary search/TTS index.
+    _ready = _readium!.ready;
     _restoreNativePosition();
     _syncReadingActivity();
     _scheduleAutoPage();
@@ -5764,7 +5765,7 @@ class _ReaderPageState extends State<ReaderPage>
       _go(chapter);
       _nativeLocationChanging = false;
     }
-    _ready = _currentContent != null;
+    _ready = _readium!.ready;
     if (_nativeInitialRestored) _savePosition(notify: false);
   }
 
