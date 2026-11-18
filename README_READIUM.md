@@ -55,3 +55,11 @@ APK 由 `.github/workflows/preview-apk.yml` 编译、校验签名，并发布到
 Release 构建必须提供 `android/key.properties` 和固定 keystore，缺少时直接失败，不回退 debug 签名。CI 从仓库 Secrets 恢复密钥，并用 `READIUM_SIGNING_SHA256` 固定证书指纹；私钥和密码不得进入 Git。推送只生成供验证的 artifact，验证后再发布 Release。
 
 前两版使用了各自构建机器的临时 debug 密钥，私钥没有保留，无法用新密钥覆盖安装。这两版需要先通过应用内备份导出数据，再迁移到固定签名版；从固定签名版开始保持包名、证书一致，并递增 versionCode。
+
+## 全屏页面与翻页效果（预览版 4）
+
+Readium 的平台视图覆盖整个阅读页面，外部不再加正文留白。安全区、阅读边距与页脚空间进入原生文档内部排版，页面背景提升到根画布，保留书内独立色块。
+
+`ReadiumPageSurface` 在翻页期间保留前后两张 Readium 页面图像，并复用 `ReaderTurnScope`、`ReaderSheetMotion` 和 `ReaderSpineTurn` 的动画。段落接续的分段取自当前 Readium DOM 的可见块边界，不另行分页或渲染文字。翻页结束即释放图像。
+
+Android 点击与分页拖动通过 Readium `InputListener` 接入原控件，书内链接、脚注和选区优先由 Readium 处理。

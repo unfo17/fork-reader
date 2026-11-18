@@ -649,6 +649,7 @@ lib/reading_widget_skin_picker.dart
 lib/reading_widget_snapshot.dart
 lib/readium_epub.dart
 lib/readium_epub_manifest.dart
+lib/readium_page_turn.dart
 lib/readium_reader_page.dart
 lib/recent_searches.dart
 lib/review_content.dart

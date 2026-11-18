@@ -44,7 +44,7 @@ jobs:
           props.write_text('storeFile='+str(key)+'\nstorePassword='+os.environ['STORE_PASSWORD']+'\nkeyPassword='+os.environ['KEY_PASSWORD']+'\nkeyAlias='+os.environ['KEY_ALIAS']+'\n');props.chmod(0o600)
           PYCODE
       - name: Build APK
-        run: flutter build apk --release --target-platform android-arm64 --build-name=0.5.6-readium-preview.3 --build-number=2292
+        run: flutter build apk --release --target-platform android-arm64 --build-name=0.5.6-readium-preview.4 --build-number=2293
       - name: Verify and package APK
         env:
           EXPECTED_CERT: ${{ vars.READIUM_SIGNING_SHA256 }}
@@ -84,4 +84,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create readium-preview-20261117.3 release/* --target "$GITHUB_SHA" --prerelease --title "Readium 本地阅读器预览版 3" --notes-file RELEASE_PREVIEW.md
+          gh release create readium-preview-20261118.4 release/* --target "$GITHUB_SHA" --prerelease --title "Readium 全屏阅读预览版 4" --notes-file RELEASE_PREVIEW.md
