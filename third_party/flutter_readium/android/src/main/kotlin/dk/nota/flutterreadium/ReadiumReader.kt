@@ -138,6 +138,9 @@ object ReadiumReader :
         else epubEvaluateJavascript(script)
     }
 
+    // Snapshot identity must not resolve DOM selectors or traverse the TOC.
+    fun appPageKeyJson(): String? = epubNavigator?.currentLocator?.value?.toJSON()?.toString()
+
     suspend fun appCapturePage(): ByteArray? {
         val view = currentReaderWidget?.getView() ?: return null
         if (view.width <= 0 || view.height <= 0) return null
