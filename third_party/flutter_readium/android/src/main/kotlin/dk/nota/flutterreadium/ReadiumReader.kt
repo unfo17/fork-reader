@@ -123,15 +123,72 @@ object ReadiumReader :
     var appSelectionToolbar = false
     var appSelectionMode: android.view.ActionMode? = null
     var appSelectionDidEnd: (() -> Unit)? = null
+    fun appIsFixedLayout(): Boolean = currentPublication?.metadata?.layout == org.readium.r2.shared.publication.Layout.FIXED
 
-    suspend fun appTurnPage(direction: Int, animated: Boolean): Boolean {
-        val previous = epubNavigator?.currentLocator?.value
-        if (direction > 0) visualGoForward(animated) else visualGoBackward(animated)
-        // Wait on the navigator's actual position, not on a guessed animation delay.
-        kotlinx.coroutines.withTimeoutOrNull(1500) {
-            epubNavigator?.currentLocator?.first { it != previous }
+    private fun appVisibleWebView(): android.webkit.WebView? {
+        val root = currentReaderWidget?.getView() ?: return null
+        var selected: android.webkit.WebView? = null
+        var largest = 0L
+        fun visit(node: android.view.View) {
+            if (node is android.webkit.WebView) {
+                val rect = android.graphics.Rect()
+                if (node.isShown && node.getGlobalVisibleRect(rect)) {
+                    val area = rect.width().toLong()*rect.height()
+                    if (area > largest) { largest=area; selected=node }
+                }
+            } else if (node is android.view.ViewGroup) for (i in 0 until node.childCount) visit(node.getChildAt(i))
         }
-        return epubNavigator?.currentLocator?.value != previous
+        visit(root)
+        return selected
+    }
+    private fun appVisualPageKey(): String? = appVisibleWebView()?.let { "${it.url}|${it.scrollX}|${it.scrollY}" }
+    var appPageTurnCrossedResource = false
+    suspend fun appTurnPage(direction: Int, animated: Boolean): Boolean {
+        val navigator = epubNavigator ?: return false
+        val publication = currentPublication ?: return false
+        val previous = navigator.currentLocator.value
+        appPageTurnCrossedResource = false
+        val previousVisual = appVisualPageKey()
+        val previousUrl = appVisibleWebView()?.url
+        // A locator notification alone is not proof that an edge is the end of
+        // the book. Navigate the reading order, including untitled/image items.
+        val visiblePath = appVisibleWebView()?.url?.let { android.net.Uri.parse(it).path }
+        val visibleIndex = publication.readingOrder.indices.filter { i ->
+            val path=android.net.Uri.decode(publication.readingOrder[i].href.resolve().toString().substringBefore('#').substringBefore('?')).trimStart('/')
+            !path.isEmpty() && visiblePath?.endsWith("/$path") == true
+        }.maxByOrNull { publication.readingOrder[it].href.resolve().toString().length }
+        val index = visibleIndex ?: previous?.let { at -> publication.readingOrder.indexOfFirst { it.href.resolve().isEquivalent(at.href) } } ?: -1
+        val geometry = if (appIsFixedLayout()) null else runCatching {
+            val verticalScroll = navigator.preferences.scroll == true
+            val raw = epubEvaluateJavascript("""
+                (function(){var e=document.scrollingElement||document.documentElement,v=$verticalScroll;
+                return JSON.stringify({position:Math.abs(v?scrollY:scrollX),maximum:Math.max(0,v?e.scrollHeight-innerHeight:e.scrollWidth-innerWidth)});})();
+            """.trimIndent()) ?: return@runCatching null
+            JSONObject(org.json.JSONTokener(raw).nextValue() as String)
+        }.getOrNull()
+        val atEdge = geometry?.let {
+            if (direction > 0) it.optDouble("maximum")-it.optDouble("position") <= 2.0
+            else it.optDouble("position") <= 2.0
+        } == true
+        if (atEdge && index >= 0) {
+            val next = index + if (direction > 0) 1 else -1
+            if (next !in publication.readingOrder.indices) return false
+            val link = publication.readingOrder[next]
+            val json = JSONObject().put("href", link.href.resolve().toString())
+                .put("type", link.mediaType?.toString() ?: "application/xhtml+xml")
+                .put("locations", JSONObject().put("progression", if (direction > 0) 0.0 else 1.0))
+            val target = Locator.fromJSON(json) ?: return false
+            appPageTurnCrossedResource = true
+            visualGoToLocator(target, animated)
+        } else {
+            if (direction > 0) visualGoForward(animated) else visualGoBackward(animated)
+        }
+        val changed = kotlinx.coroutines.withTimeoutOrNull(if (appPageTurnCrossedResource) 3000L else 1200L) {
+            while (navigator.currentLocator.value == previous && appVisualPageKey() == previousVisual) kotlinx.coroutines.delay(16)
+            true
+        } == true
+        if (appVisibleWebView()?.url != previousUrl) appPageTurnCrossedResource = true
+        return changed || navigator.currentLocator.value != previous || appVisualPageKey() != previousVisual
     }
     suspend fun appApplyStyle(script: String): String? {
         appReaderStyleScript = script
@@ -156,22 +213,8 @@ object ReadiumReader :
     fun appPageKeyJson(): String? = epubNavigator?.currentLocator?.value?.toJSON()?.toString()
 
     suspend fun appCapturePage(includeBands: Boolean = false, vertical: Boolean = false): Map<String, Any>? {
-        val root = currentReaderWidget?.getView() ?: return null
-        // A preloaded neighbour may still be partly visible during a TOC jump.
-        // Read geometry and pixels from the very same, most visible WebView.
-        var web: android.webkit.WebView? = null
-        var largest = 0L
-        fun visit(node: android.view.View) {
-            if (node is android.webkit.WebView) {
-                val rect = android.graphics.Rect()
-                if (node.isShown && node.getGlobalVisibleRect(rect)) {
-                    val area = rect.width().toLong() * rect.height()
-                    if (area > largest) { largest = area; web = node }
-                }
-            } else if (node is android.view.ViewGroup) for (i in 0 until node.childCount) visit(node.getChildAt(i))
-        }
-        visit(root)
-        val view = web ?: return null
+        // Geometry and pixels belong to the same visible resource.
+        val view = appVisibleWebView() ?: return null
         if (view.width <= 0 || view.height <= 0) return null
         val locator = appPageKeyJson() ?: return null
         kotlinx.coroutines.withTimeoutOrNull(80) {
@@ -221,6 +264,7 @@ object ReadiumReader :
             val canvas = android.graphics.Canvas(bitmap)
             canvas.scale(scale.toFloat(), scale.toFloat())
             view.draw(canvas)
+            val identity = "${view.url}|${view.scrollX}|${view.scrollY}|$locator"
             withContext(Dispatchers.Default) {
                 val width = bitmap.width
                 val height = bitmap.height
@@ -270,7 +314,7 @@ object ReadiumReader :
                 val bands = cuts.zipWithNext { a,b -> if (vertical) listOf(a,0.0,b,1.0) else listOf(0.0,a,1.0,b) }
                 val color = info.getJSONArray("color")
                 mapOf("width" to width, "height" to height, "pixels" to rgba,
-                    "bands" to bands, "color" to (0..2).map { color.getInt(it) }, "locator" to locator)
+                    "bands" to bands, "color" to (0..2).map { color.getInt(it) }, "locator" to locator, "identity" to identity)
             }
         } finally { bitmap.recycle() }
     }

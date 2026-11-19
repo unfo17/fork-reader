@@ -86,6 +86,15 @@ class ReadiumPageTurnController {
   Future<void> turn(int direction, {required bool animated}) async {
     await _owner?._turn(direction, animated);
   }
+
+  Future<void> navigate(
+    Future<void> Function() action, {
+    Future<ReadiumPageFrame?> Function()? capture,
+  }) async {
+    final owner = _owner;
+    if (owner == null) return action();
+    await owner._navigate(action, capture: capture);
+  }
 }
 
 /// Reuses the original page effects over native page images. The live navigator
@@ -228,6 +237,38 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     }
   }
 
+  Future<void> _navigate(
+    Future<void> Function() action, {
+    Future<ReadiumPageFrame?> Function()? capture,
+  }) async {
+    if (_busy || !mounted) return action();
+    _busy = true;
+    ReadiumPageFrame? frame;
+    try {
+      frame = _cached;
+      _cached = null;
+      frame ??= await (capture ?? widget.capture)();
+      if (mounted && frame != null) {
+        setState(() {
+          _from = frame;
+          _effect = ReaderPageEffect.none;
+          _liveDestination = false;
+          _clock.value = 0;
+        });
+        await WidgetsBinding.instance.endOfFrame;
+      }
+      await action();
+    } finally {
+      if (mounted) {
+        setState(() => _from = null);
+        await WidgetsBinding.instance.endOfFrame;
+      }
+      frame?.dispose();
+      _busy = false;
+      if (mounted) _warmLater();
+    }
+  }
+
   Future<void> _turn(
     int direction,
     bool animated, {
@@ -276,16 +317,20 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       final preparing = () async {
         moved = await widget.step(direction, false);
         if (!moved || !mounted) return;
+        setState(() => _liveDestination = true);
         if (prefs.pageEffect == ReaderPageEffect.paper) return;
-        to = await widget.capture();
+        for (var attempt = 0; attempt < 4 && mounted; attempt++) {
+          to = await widget.capture();
+          if (to != null && to!.location != from!.location) break;
+          to?.dispose();
+          to = null;
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
         if (!mounted) return;
         if (to != null && to!.location != from!.location) {
           setState(() => _to = to);
         }
       }();
-      if (prefs.pageEffect == ReaderPageEffect.paper) {
-        setState(() => _liveDestination = true);
-      }
       var finish = true;
       if (gesture != null) {
         finish = await gesture.future;
@@ -398,6 +443,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
                     fit: StackFit.expand,
                     children: _effect == ReaderPageEffect.paper
                         ? [
+                            if (!_liveDestination)
+                              RawImage(image: frame.image, fit: BoxFit.fill),
                             if (_to case final target?)
                               RawImage(image: target.image, fit: BoxFit.fill),
                             CustomPaint(

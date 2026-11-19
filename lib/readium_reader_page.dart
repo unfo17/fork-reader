@@ -165,7 +165,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
   String? error;
   bool _disposed = false;
   bool _navigatorReady = false, _styleReady = false;
-  bool get ready => _navigatorReady && _styleReady;
+  bool get ready => _navigatorReady && _styleReady && !_navigating;
+  bool? _fixedLayout;
+  String? _appliedStyleSignature;
   int chapter = 0;
   double fraction = 0;
   bool _scrollAtEnd = false;
@@ -395,29 +397,32 @@ class ReadiumReaderBridge extends ChangeNotifier {
     _navigating = Platform.isAndroid;
     if (!_disposed) notifyListeners();
     try {
-      await api.goToLocator(at);
-      if (Platform.isAndroid) {
-        await _waitForLayoutStable();
-        // The request locator may omit progression. Read the actual visual
-        // position after Readium has resolved its text quote and laid it out.
-        await Future<void>.delayed(const Duration(milliseconds: 240));
-        final raw = await native.invokeMethod<String>('locator');
-        if (raw != null && !_disposed && _owner == this) {
-          final json = jsonDecode(raw) as Map<String, dynamic>;
-          final nextLocations =
-              json['locations'] as Map<String, dynamic>? ?? {};
-          if (locator?.href == json['href']) {
-            final previous = locator?.locations?.toJson() ?? {};
-            for (final key in ['currentPage', 'totalPages']) {
-              if (!nextLocations.containsKey(key) && previous.containsKey(key))
-                nextLocations[key] = previous[key];
+      await turns.navigate(() async {
+        await api.goToLocator(at);
+        if (Platform.isAndroid) {
+          await _waitForLayoutStable();
+          // The request locator may omit progression. Read the actual visual
+          // position after Readium has resolved its text quote and laid it out.
+          await Future<void>.delayed(const Duration(milliseconds: 240));
+          final raw = await native.invokeMethod<String>('locator');
+          if (raw != null && !_disposed && _owner == this) {
+            final json = jsonDecode(raw) as Map<String, dynamic>;
+            final nextLocations =
+                json['locations'] as Map<String, dynamic>? ?? {};
+            if (locator?.href == json['href']) {
+              final previous = locator?.locations?.toJson() ?? {};
+              for (final key in ['currentPage', 'totalPages']) {
+                if (!nextLocations.containsKey(key) &&
+                    previous.containsKey(key))
+                  nextLocations[key] = previous[key];
+              }
             }
+            json['locations'] = nextLocations;
+            final visible = rd.Locator.fromJson(json);
+            if (visible != null) _located(visible);
           }
-          json['locations'] = nextLocations;
-          final visible = rd.Locator.fromJson(json);
-          if (visible != null) _located(visible);
         }
-      }
+      }, capture: () => _capturePage(allowNavigating: true));
     } finally {
       _navigating = false;
       if (!_disposed) notifyListeners();
@@ -468,7 +473,20 @@ class ReadiumReaderBridge extends ChangeNotifier {
       if (_dragInFlight && at != null) _dragLocation = at;
       // A newly loaded spine may install the app font after its first layout.
       // Keep the old sheet covering it until the destination geometry is stable.
-      if (at != null && at.href != previousHref) await _waitForLayoutStable();
+      if (result?['resourceChanged'] == true ||
+          (at != null && at.href != previousHref)) {
+        await _waitForLayoutStable();
+        final settled = await native.invokeMethod<String>('locator');
+        final visible = settled == null
+            ? null
+            : rd.Locator.fromJson(jsonDecode(settled));
+        if (visible != null) {
+          if (_dragInFlight)
+            _dragLocation = visible;
+          else
+            _located(visible);
+        }
+      }
       return result?['moved'] == true;
     } else if (direction > 0) {
       await api.goForward();
@@ -478,10 +496,10 @@ class ReadiumReaderBridge extends ChangeNotifier {
     return true;
   }
 
-  Future<ReadiumPageFrame?> _capturePage() async {
+  Future<ReadiumPageFrame?> _capturePage({bool allowNavigating = false}) async {
     if (!Platform.isAndroid || _disposed || _owner != this || !_styleReady)
       return null;
-    if (_navigating) return null;
+    if (_navigating && !allowNavigating) return null;
     final revision = _seekTicket, style = _preferencesTicket;
     final pixels = await native.invokeMapMethod<String, dynamic>('capture', {
       'bands': _appearance.pageEffect == ReaderPageEffect.staggered,
@@ -502,7 +520,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     );
     final image = await decoded.future;
     if (_disposed ||
-        _navigating ||
+        (_navigating && !allowNavigating) ||
         revision != _seekTicket ||
         style != _preferencesTicket) {
       image.dispose();
@@ -525,7 +543,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
     final color = (pixels['color'] as List).cast<num>();
     return ReadiumPageFrame(
       image,
-      '${at?['href']}|${loc?['currentPage']}|${loc?['progression']}',
+      pixels['identity'] as String? ??
+          '${at?['href']}|${loc?['currentPage']}|${loc?['progression']}',
       bands,
       Color.fromARGB(255, color[0].round(), color[1].round(), color[2].round()),
     );
@@ -734,6 +753,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
       notifyListeners();
       await api.setEPUBPreferences(nextPreferences);
       if (Platform.isAndroid) {
+        _fixedLayout ??=
+            await native.invokeMethod<bool>('fixedLayout') ?? false;
+        _appliedStyleSignature = '${identityHashCode(this)}:$ticket';
         final paper = prefs
             .background(dark)
             .toARGB32()
@@ -809,7 +831,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
               '''(function(){
                 var root=document.documentElement,body=document.body;
                 if(!body)return;
-                var signature=${jsonEncode("${identityHashCode(this)}:$ticket")};
+                var signature=${jsonEncode(_appliedStyleSignature)};
                 if(window.__wenkuAppliedStyle===signature)return;
                 window.__wenkuAppliedStyle=signature;
                 var s=document.getElementById("wenku-reader-preferences");
@@ -896,7 +918,12 @@ class ReadiumReaderBridge extends ChangeNotifier {
         'script':
             '(function(){document.body.offsetHeight;return document.fonts.status+"|"+innerWidth+"|"+innerHeight+"|"+document.documentElement.scrollWidth+"|"+document.documentElement.scrollHeight+"|"+scrollX+"|"+scrollY+"|"+getComputedStyle(document.body).fontSize+"|"+(window.__wenkuAppliedStyle||"");})()',
       });
-      if (sample != null && sample.contains('loaded') && sample == previous)
+      if (sample != null &&
+          sample.contains('loaded') &&
+          sample == previous &&
+          (_fixedLayout == true ||
+              _appliedStyleSignature == null ||
+              sample.contains(_appliedStyleSignature!)))
         stable++;
       else
         stable = 0;

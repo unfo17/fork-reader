@@ -73,19 +73,22 @@ Future<Uint8List> renderReadingMomentPresentationPng(
     context,
     Localizations.override(
       context: context,
-      child: MediaQuery(
-        data: media,
-        child: Directionality(
-          textDirection: Directionality.of(context),
-          child: TickerMode(
-            enabled: false,
-            child: Material(
-              color: Colors.transparent,
-              child: DefaultTextStyle(
-                style: theme.textTheme.bodyMedium!,
-                child: SizedBox(
-                  width: canvas.width,
-                  child: ReadingMomentContent(presentation: presentation),
+      child: DefaultAssetBundle(
+        bundle: DefaultAssetBundle.of(context),
+        child: MediaQuery(
+          data: media,
+          child: Directionality(
+            textDirection: Directionality.of(context),
+            child: TickerMode(
+              enabled: false,
+              child: Material(
+                color: Colors.transparent,
+                child: DefaultTextStyle(
+                  style: theme.textTheme.bodyMedium!,
+                  child: SizedBox(
+                    width: canvas.width,
+                    child: ReadingMomentContent(presentation: presentation),
+                  ),
                 ),
               ),
             ),

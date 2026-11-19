@@ -44,6 +44,7 @@ import 'reading_widget_settings_page.dart';
 import 'bookmark_library_page.dart';
 import 'reading_statistics_page.dart';
 import 'reading_moments_ui.dart';
+import 'reading_keepsake_theme.dart';
 
 Future<void> main() async {
   final binding = WidgetsFlutterBinding.ensureInitialized();
@@ -99,28 +100,31 @@ Future<void> main() async {
         )
       : null;
   runApp(
-    NovelApp(
-      state: state,
-      repository: repository,
-      listening: listening,
-      network: network,
-      updates: defaultTargetPlatform == TargetPlatform.android
-          ? AppUpdates(preferences: await SharedPreferences.getInstance())
-          : LocalPlatform.ios
-          ? AppUpdates(
-              preferences: await SharedPreferences.getInstance(),
-              platform: IOSUpdatePlatform(),
-              packageUpdates: false,
-              notificationAssetExtension: '.ipa',
-            )
-          : LocalPlatform.harmony
-          ? AppUpdates(
-              preferences: await SharedPreferences.getInstance(),
-              platform: HarmonyUpdatePlatform(),
-              packageUpdates: false,
-              notificationAssetExtension: '.hap',
-            )
-          : null,
+    DefaultAssetBundle(
+      bundle: ReadingArtAssetBundle(),
+      child: NovelApp(
+        state: state,
+        repository: repository,
+        listening: listening,
+        network: network,
+        updates: defaultTargetPlatform == TargetPlatform.android
+            ? AppUpdates(preferences: await SharedPreferences.getInstance())
+            : LocalPlatform.ios
+            ? AppUpdates(
+                preferences: await SharedPreferences.getInstance(),
+                platform: IOSUpdatePlatform(),
+                packageUpdates: false,
+                notificationAssetExtension: '.ipa',
+              )
+            : LocalPlatform.harmony
+            ? AppUpdates(
+                preferences: await SharedPreferences.getInstance(),
+                platform: HarmonyUpdatePlatform(),
+                packageUpdates: false,
+                notificationAssetExtension: '.hap',
+              )
+            : null,
+      ),
     ),
   );
   if (listening != null) {

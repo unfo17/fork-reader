@@ -22,6 +22,7 @@ class ReadiumControlsPlugin : FlutterPlugin {
                         when (call.method) {
                             "locator" -> result.success(ReadiumReader.appCurrentLocatorJson())
                             "pageKey" -> result.success(ReadiumReader.appPageKeyJson())
+                            "fixedLayout" -> result.success(ReadiumReader.appIsFixedLayout())
                             "clearSelection" -> {
                                 ReadiumReader.appSelectionMode?.finish()
                                 ReadiumReader.epubEvaluateJavascript("window.getSelection().removeAllRanges();")
@@ -30,7 +31,7 @@ class ReadiumControlsPlugin : FlutterPlugin {
                             "page" -> {
                                 val animated = call.argument<Boolean>("animated") ?: true
                                 val moved = ReadiumReader.appTurnPage(call.argument<Int>("direction") ?: 1, animated)
-                                result.success(mapOf("moved" to moved, "locator" to ReadiumReader.appPageKeyJson()))
+                                result.success(mapOf("moved" to moved, "locator" to ReadiumReader.appPageKeyJson(), "resourceChanged" to ReadiumReader.appPageTurnCrossedResource))
                             }
                             "capture" -> result.success(ReadiumReader.appCapturePage(call.argument<Boolean>("bands") == true, call.argument<Boolean>("vertical") == true))
                             "decorations" -> {

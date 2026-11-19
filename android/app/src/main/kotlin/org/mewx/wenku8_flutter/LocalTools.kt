@@ -34,6 +34,35 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
+            "loadReadingArtwork" -> {
+                val id = when (call.argument<String>("resource")) {
+                    "reading_widget_art_archive_117" -> R.drawable.reading_widget_art_archive_117
+                    "reading_widget_art_shelf_117" -> R.drawable.reading_widget_art_shelf_117
+                    "reading_widget_art_editorial_117" -> R.drawable.reading_widget_art_editorial_117
+                    "reading_widget_art_constellation_117" -> R.drawable.reading_widget_art_constellation_117
+                    "reading_widget_art_signal_117" -> R.drawable.reading_widget_art_signal_117
+                    "reading_widget_art_score_117" -> R.drawable.reading_widget_art_score_117
+                    "reading_widget_art_ink_117" -> R.drawable.reading_widget_art_ink_117
+                    "reading_widget_art_festival_117" -> R.drawable.reading_widget_art_festival_117
+                    "widget_season_spring" -> R.drawable.widget_season_spring
+                    "widget_season_summer" -> R.drawable.widget_season_summer
+                    "widget_season_autumn" -> R.drawable.widget_season_autumn
+                    "widget_season_winter" -> R.drawable.widget_season_winter
+                    else -> null
+                }
+                if (id == null || closed) {
+                    result.error("artwork", "Unknown reading artwork", null)
+                    return
+                }
+                io.execute {
+                    try {
+                        val bytes=activity.resources.openRawResource(id).use { it.readBytes() }
+                        activity.runOnUiThread { result.success(bytes) }
+                    } catch (_: Exception) {
+                        activity.runOnUiThread { result.error("artwork", "Reading artwork could not be loaded", null) }
+                    }
+                }
+            }
             "getKeepScreenOn" -> result.success(
                 activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON != 0
             )
