@@ -534,13 +534,13 @@ class AppUpdatePage extends StatelessWidget {
                       ] else if (service.checked && !available) ...[
                         const SizedBox(height: 12),
                         AppText(
-                          service.release == null ? '暂未发布可用的正式版本' : '已是最新版本',
+                          service.release == null ? '暂未发布适用于本设备的版本' : '已是最新版本',
                         ),
                       ],
                       if (service.checked && service.release != null) ...[
                         const SizedBox(height: 8),
                         AppText(
-                          '最新正式版 ${service.release!.version.name}',
+                          '最新版本 ${service.release!.version.name}',
                           key: const ValueKey('latest-app-version'),
                           style: TextStyle(
                             fontSize: 13,

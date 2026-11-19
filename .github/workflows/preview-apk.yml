@@ -1,6 +1,15 @@
 name: Build Readium preview APK
 on:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish the verified APK as a prerelease
+        type: boolean
+        default: false
+      build_update_bootstrap:
+        description: Build a private previous-version APK for updater smoke testing
+        type: boolean
+        default: false
   push:
     branches: [feat/readium-local-reader]
 permissions:
@@ -20,6 +29,10 @@ jobs:
           flutter-version: '3.47.9'
           channel: stable
           cache: true
+      - name: Prepare matching release metadata
+        id: version
+        run: |
+          python3 tools/prepare_release.py --notes "$RUNNER_TEMP/readium-notes.md" --github-output "$GITHUB_OUTPUT"
       - name: Resolve dependencies and verify parser
         run: |
           flutter pub get
@@ -62,7 +75,7 @@ jobs:
           props.write_text('storeFile='+str(key)+'\nstorePassword='+os.environ['STORE_PASSWORD']+'\nkeyPassword='+os.environ['KEY_PASSWORD']+'\nkeyAlias='+os.environ['KEY_ALIAS']+'\n');props.chmod(0o600)
           PYCODE
       - name: Build APK
-        run: flutter build apk --release --target-platform android-arm64 --build-name=0.5.6-readium-preview.9 --build-number=2317
+        run: flutter build apk --release --target-platform android-arm64 --build-name="${{ steps.version.outputs.version }}" --build-number="${{ steps.version.outputs.build }}"
       - name: Verify and package APK
         env:
           EXPECTED_CERT: ${{ vars.READIUM_SIGNING_SHA256 }}
@@ -92,14 +105,25 @@ jobs:
           PYCODE
           cd release
           sha256sum *.apk > SHA256SUMS.txt
+      - name: Build private updater bootstrap
+        if: inputs.build_update_bootstrap == true
+        run: |
+          flutter build apk --release --target-platform android-arm64 --build-name=0.5.6-readium-preview.9 --build-number=2317
+          mkdir -p updater-qa
+          cp build/app/outputs/flutter-apk/app-release.apk updater-qa/bootstrap.apk
+      - uses: actions/upload-artifact@v4
+        if: inputs.build_update_bootstrap == true
+        with:
+          name: readium-updater-bootstrap
+          path: updater-qa/bootstrap.apk
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: readium-preview-apk
           path: release/*
       - name: Publish preview release
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create readium-preview-20261119.9 release/* --target "$GITHUB_SHA" --prerelease --title "Readium 阅读体验预览版 9" --notes-file RELEASE_PREVIEW.md
+          gh release create "v${{ steps.version.outputs.version }}+${{ steps.version.outputs.build }}" release/* --target "$GITHUB_SHA" --prerelease --title "Readium ${{ steps.version.outputs.version }}" --notes-file "$RUNNER_TEMP/readium-notes.md"

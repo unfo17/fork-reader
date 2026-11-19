@@ -13,28 +13,43 @@ export 'current_release_content.dart'
     show currentReleaseNotes, publicReleaseNotes;
 
 const officialUpdateRepository = 'mikufoxxx/Wenku8_Flutter';
+const readiumUpdateRepository = 'unfo17/fork-reader';
 const updateMirrorOrigin = 'https://git.3952039.xyz';
 const updateRepository = String.fromEnvironment(
   'UPDATE_REPOSITORY',
-  defaultValue: officialUpdateRepository,
+  defaultValue: readiumUpdateRepository,
 );
-const currentAppVersion = '0.5.6';
-const currentAppBuild = 2277;
+const currentAppVersion = '0.5.6-readium-preview.10';
+const currentAppBuild = 2318;
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {
-  const ReleaseVersion(this.major, this.minor, this.patch, [this.build = 0]);
+  const ReleaseVersion(
+    this.major,
+    this.minor,
+    this.patch, [
+    this.build = 0,
+    this.preview,
+  ]);
   final int major, minor, patch, build;
+  final int? preview;
   static ReleaseVersion? parse(String value) {
     final match = RegExp(
-      r'^v?(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?$',
+      r'^v?(\d+)\.(\d+)\.(\d+)(?:-readium-preview\.(\d+))?(?:\+(\d+))?$',
     ).firstMatch(value);
     if (match == null) return null;
-    final parts = [for (var i = 1; i <= 4; i++) int.tryParse(match[i] ?? '0')];
+    final parts = [
+      for (final i in [1, 2, 3, 5]) int.tryParse(match[i] ?? '0'),
+    ];
     if (parts.any((n) => n == null || n > 2100000000)) return null;
-    return ReleaseVersion(parts[0]!, parts[1]!, parts[2]!, parts[3]!);
+    final preview = match[4] == null ? null : int.tryParse(match[4]!);
+    if (match[4] != null &&
+        (preview == null || preview <= 0 || preview > 2100000000))
+      return null;
+    return ReleaseVersion(parts[0]!, parts[1]!, parts[2]!, parts[3]!, preview);
   }
 
-  String get name => '$major.$minor.$patch';
+  String get name =>
+      '$major.$minor.$patch${preview == null ? '' : '-readium-preview.$preview'}';
   @override
   int compareTo(ReleaseVersion other) {
     for (final pair in [
@@ -105,10 +120,13 @@ class AppRelease {
     if (!RegExp(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$').hasMatch(repository)) {
       throw const FormatException('更新仓库格式错误');
     }
-    if (json['draft'] == true || json['prerelease'] == true) return null;
+    final readium = repository == readiumUpdateRepository;
+    if (json['draft'] == true || (!readium && json['prerelease'] == true)) {
+      return null;
+    }
     final tag = json['tag_name'];
     final version = tag is String ? ReleaseVersion.parse(tag) : null;
-    if (version == null) return null;
+    if (version == null || (readium && version.build <= 0)) return null;
     final assets = <UpdateAsset>[];
     for (final raw in (json['assets'] as List? ?? const [])) {
       if (raw is! Map) continue;
@@ -116,13 +134,16 @@ class AppRelease {
       final url = Uri.tryParse(raw['browser_download_url']?.toString() ?? '');
       final size = raw['size'];
       if (name is! String ||
-          !name.startsWith('wenku8-${version.name}-') ||
+          !(name.startsWith('wenku8-${version.name}-') ||
+              (readium && name.startsWith('wenku8-readium-preview-'))) ||
           !const ['.apk', '.ipa', '.hap'].any(name.endsWith) ||
           url == null ||
           url.scheme != 'https' ||
           url.host != 'github.com' ||
           url.userInfo.isNotEmpty ||
           url.port != 443 ||
+          url.hasQuery ||
+          url.hasFragment ||
           !listEquals(url.pathSegments, [
             ...repository.split('/'),
             'releases',
@@ -161,7 +182,10 @@ class AppRelease {
 
   bool isNewerThan(InstalledApp app) {
     final installed = app.releaseVersion;
-    if (installed == null) return false;
+    if (installed == null ||
+        (version.build > 0 && version.build <= app.build)) {
+      return false;
+    }
     final semantic = ReleaseVersion(version.major, version.minor, version.patch)
         .compareTo(
           ReleaseVersion(installed.major, installed.minor, installed.patch),
@@ -330,6 +354,9 @@ class GithubUpdateSource implements UpdateSource {
     );
   }
 
+  bool get _listsReleases =>
+      assetExtension != null || repository == readiumUpdateRepository;
+
   @override
   Future<AppRelease?> latest() => _release('latest');
 
@@ -349,10 +376,10 @@ class GithubUpdateSource implements UpdateSource {
             gateway == null
                 ? Uri.https(
                     'api.github.com',
-                    assetExtension != null && suffix == 'latest'
+                    _listsReleases && suffix == 'latest'
                         ? '/repos/$repository/releases'
                         : '/repos/$repository/releases/$suffix',
-                    assetExtension != null && suffix == 'latest'
+                    _listsReleases && suffix == 'latest'
                         ? {'per_page': '100'}
                         : null,
                   )
@@ -383,14 +410,14 @@ class GithubUpdateSource implements UpdateSource {
         Duration(seconds: gateway == null ? 20 : 6),
       )) {
         data.addAll(chunk);
-        if (data.length > (assetExtension == null ? 1 : 4) * 1024 * 1024) {
+        if (data.length > (_listsReleases ? 4 : 1) * 1024 * 1024) {
           throw const FormatException('版本说明过大');
         }
       }
       Map<String, dynamic> metadata;
       try {
         final value = jsonDecode(utf8.decode(data));
-        if (assetExtension != null && gateway == null && suffix == 'latest') {
+        if (_listsReleases && gateway == null && suffix == 'latest') {
           if (value is! List) throw const FormatException('版本列表格式错误');
           final candidates =
               value
@@ -399,7 +426,7 @@ class GithubUpdateSource implements UpdateSource {
                   .whereType<AppRelease>()
                   .where(
                     (item) => item.assets.any(
-                      (asset) => asset.name.endsWith(assetExtension!),
+                      (asset) => asset.name.endsWith(assetExtension ?? '.apk'),
                     ),
                   )
                   .toList()
@@ -703,10 +730,11 @@ class AppUpdates extends ChangeNotifier {
       checksEnabled &&
       release != null &&
       installed != null &&
-      (packageUpdates ||
-          release!.assets.any(
-            (asset) => asset.name.endsWith(notificationAssetExtension!),
-          )) &&
+      ((packageUpdates && asset != null) ||
+          (!packageUpdates &&
+              release!.assets.any(
+                (asset) => asset.name.endsWith(notificationAssetExtension!),
+              ))) &&
       release!.isNewerThan(installed!);
   UpdateAsset? get asset => !packageUpdates || installed == null
       ? null

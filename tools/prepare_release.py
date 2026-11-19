@@ -8,7 +8,7 @@ import re
 
 
 def metadata(root: Path, tag: str | None = None) -> tuple[str, int, str]:
-    version = re.search(r"^version:\s*(\d+\.\d+\.\d+)\+(\d+)\s*$",
+    version = re.search(r"^version:\s*(\d+\.\d+\.\d+(?:-readium-preview\.\d+)?)\+(\d+)\s*$",
                         (root / "pubspec.yaml").read_text(), re.M)
     if version is None or not 0 < int(version[2]) < 2100000000:
         raise ValueError("pubspec.yaml needs a semantic version and a positive Android build number")

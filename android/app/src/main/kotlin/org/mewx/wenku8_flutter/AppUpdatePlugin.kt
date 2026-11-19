@@ -45,7 +45,9 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
             }
             "openRelease" -> withActivity(result) { page ->
                 val uri = Uri.parse(call.arguments as? String ?: "")
-                require(uri.scheme == "https" && uri.host == "github.com" && uri.userInfo == null && uri.path.orEmpty().contains("/releases/"))
+                require(uri.scheme == "https" && uri.host == "github.com" && uri.userInfo == null && uri.port in listOf(-1, 443) &&
+                    uri.query == null && uri.fragment == null &&
+                    Regex("^/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/releases(?:/.*)?)?/?$").matches(uri.path.orEmpty()))
                 page.startActivity(Intent(Intent.ACTION_VIEW, uri))
                 result.success(null)
             }
