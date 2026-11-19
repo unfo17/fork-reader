@@ -5975,9 +5975,9 @@ class _ReaderPageState extends State<ReaderPage>
       safe.right + prefs.rightMargin,
       safe.bottom +
           prefs.marginBottom +
-          ((prefs.showChapterInfo || prefs.showReadingProgress)
-              ? ReaderScrollLocation.extentOf(context)
-              : 0),
+          // Visibility belongs to the footer overlay. Keep its page margin
+          // stable so toggling information never reflows the native chapter.
+          ReaderScrollLocation.extentOf(context),
     );
     final key =
         '$pageInsets|${prefs.layoutKey}|${prefs.paper.name}|${prefs.nightTextBrightness}|${prefs.backgroundImage}|${prefs.backgroundOpacity}|${prefs.backgroundFit}|${prefs.hideSystemStatus}|${prefs.showStatusInfo}|$_fontSize|$_lineHeight|$_readerFontId|$dark|$hidden|$only';
@@ -10691,10 +10691,7 @@ class _ReaderPageState extends State<ReaderPage>
                               _toggleChrome,
                         },
                         child: _readium != null
-                            ? ActiveListenableBuilder(
-                                listenable: widget.state.readerSettingsChanges,
-                                builder: _nativeBody,
-                              )
+                            ? _nativeBody(context)
                             : ReaderSelection(
                                 controller: _selection,
                                 vertical: _readerMode == ReaderMode.vertical,
