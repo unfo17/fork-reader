@@ -139,7 +139,7 @@ class EpubReaderFragment :
     }
 
     private suspend fun injectImageTapListeners() {
-        evaluateJavascript(
+        ReadiumReader.appEvaluateAllWebViews(
             """
             (function() {
                 if (window.__flutterImageBridgeReady) return;
@@ -149,6 +149,10 @@ class EpubReaderFragment :
                     var img = e.target && e.target.closest ? e.target.closest('img,image,svg') : null;
                     if (img && img.tagName && img.tagName.toLowerCase()==='svg') img=img.querySelector('image');
                     if (!img) return;
+                    var anchor=img.closest ? img.closest('a') : null;
+                    if(anchor && ((anchor.getAttribute('epub:type')||'').indexOf('noteref')>=0 || anchor.getAttribute('role')==='doc-noteref'))return;
+                    // Viewing an illustration is a handled content interaction.
+                    e.preventDefault();e.stopPropagation();
                     var figure = img.closest ? img.closest('figure') : null;
                     var comicContainer = img.closest ? img.closest('.nota-comicbook-page-container') : null;
                     var r = img.getBoundingClientRect();

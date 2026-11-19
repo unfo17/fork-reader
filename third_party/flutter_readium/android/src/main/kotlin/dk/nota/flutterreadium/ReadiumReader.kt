@@ -136,14 +136,16 @@ object ReadiumReader :
     suspend fun appApplyStyle(script: String): String? {
         appReaderStyleScript = script
         if (currentPublication?.metadata?.layout == org.readium.r2.shared.publication.Layout.FIXED) return null
-        // Include off-screen/preloaded spines. Styling only the current WebView
-        // lets a preloaded chapter appear once with default fonts on arrival.
+        appEvaluateAllWebViews(script)
+        return null
+    }
+
+    fun appEvaluateAllWebViews(script: String) {
         fun apply(node: android.view.View) {
             if (node is android.webkit.WebView) node.evaluateJavascript(script, null)
             else if (node is android.view.ViewGroup) for (i in 0 until node.childCount) apply(node.getChildAt(i))
         }
         currentReaderWidget?.getView()?.let { apply(it) }
-        return null
     }
 
     fun appOwnsPageGestures(): Boolean = appSelectionToolbar &&
