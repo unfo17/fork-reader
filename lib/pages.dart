@@ -10691,7 +10691,10 @@ class _ReaderPageState extends State<ReaderPage>
                               _toggleChrome,
                         },
                         child: _readium != null
-                            ? _nativeBody(context)
+                            ? ActiveListenableBuilder(
+                                listenable: widget.state.readerSettingsChanges,
+                                builder: _nativeBody,
+                              )
                             : ReaderSelection(
                                 controller: _selection,
                                 vertical: _readerMode == ReaderMode.vertical,
