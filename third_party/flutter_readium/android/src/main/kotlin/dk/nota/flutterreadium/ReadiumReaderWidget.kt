@@ -575,7 +575,7 @@ private class AppPageGestureLayout(
                     // Own that same displacement before its native scroller starts.
                     kotlin.math.abs(dx) > slop) {
                     dragging = true
-                    onSwipe("Start", dx, dy, (event.y / height.coerceAtLeast(1)).coerceIn(0f, 1f))
+                    onSwipe("Start", dx, dy, (downY / height.coerceAtLeast(1)).coerceIn(0f, 1f))
                     parent?.requestDisallowInterceptTouchEvent(true)
                     return true
                 }

@@ -33,9 +33,10 @@ class ReadiumPageTurnController {
   double _progress = 0, _sign = 1, _width = 1, _lastDistance = 0, _velocity = 0;
   final _watch = Stopwatch();
   int _lastMicros = 0;
-  double _touchY = .5;
+  double _touchY = .5, _startY = .5;
+  final _shape = ValueNotifier<int>(0);
   void beginDrag(double dx, double width, double touchY) {
-    _touchY = touchY;
+    _touchY = _startY = touchY;
     _release = Completer<bool>();
     _progress = 0;
     _width = width;
@@ -60,7 +61,8 @@ class ReadiumPageTurnController {
       _lastMicros = now;
     }
     _progress = (distance / _width).clamp(0.0, 1.0);
-    _owner?._scrub(shapeChanged: previousY != _touchY);
+    if (previousY != _touchY) _shape.value++;
+    _owner?._scrub();
   }
 
   void endDrag({bool cancel = false}) {
@@ -87,6 +89,11 @@ class ReadiumPageTurnController {
     await _owner?._turn(direction, animated);
   }
 
+  void dispose() {
+    endDrag(cancel: true);
+    _shape.dispose();
+  }
+
   Future<void> navigate(
     Future<void> Function() action, {
     Future<ReadiumPageFrame?> Function()? capture,
@@ -109,6 +116,7 @@ class ReadiumPageSurface extends StatefulWidget {
     required this.step,
     required this.child,
     required this.frameKey,
+    this.canTurn,
   });
   final ReadiumPageTurnController controller;
   final ReaderPreferences preferences;
@@ -116,6 +124,7 @@ class ReadiumPageSurface extends StatefulWidget {
   final Future<ReadiumPageFrame?> Function() capture;
   final Future<bool> Function(int direction, bool animated) step;
   final String frameKey;
+  final Future<bool> Function(int direction)? canTurn;
   final Widget child;
   @override
   State<ReadiumPageSurface> createState() => _ReadiumPageSurfaceState();
@@ -129,6 +138,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   double _direction = 1;
   bool _busy = false;
   bool _liveDestination = false;
+  bool _destinationReady = false;
   bool _dragPrepared = false;
   Future<void>? _settling;
   ReadiumPageFrame? _cached;
@@ -138,7 +148,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   int _warmRetries = 0;
   void _warmLater() {
     _warmTimer?.cancel();
-    _warmTimer = Timer(const Duration(milliseconds: 180), () async {
+    _warmTimer = Timer(const Duration(milliseconds: 48), () async {
       if (!mounted ||
           _busy ||
           _warming ||
@@ -186,14 +196,15 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       if (shapeChanged && _clock.value == widget.controller._progress) {
         setState(() {});
       }
-      _clock.value = widget.controller._progress;
+      _clock.value = math.min(widget.controller._progress, _destinationReady ? 1.0 : .92);
     }
   }
 
   void _finishDrag(bool commit) {
     if (!_dragPrepared || _settling != null || !mounted) return;
     _dragPrepared = false;
-    final remaining = ((commit ? 1.0 : 0.0) - _clock.value).abs();
+    final target = commit ? (_destinationReady ? 1.0 : .92) : 0.0;
+    final remaining = (target - _clock.value).abs();
     var micros =
         widget.preferences.pageSpeed.durationFor(_effect).inMicroseconds *
         remaining;
@@ -206,7 +217,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     }
     _settling = _clock
         .animateTo(
-          commit ? 1 : 0,
+          target,
           duration: Duration(microseconds: micros.round().clamp(24000, 600000)),
           curve: Curves.easeOutCubic,
         )
@@ -288,6 +299,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     Completer<bool>? gesture,
   }) async {
     if (_busy || !mounted) return;
+    if (widget.canTurn != null && !await widget.canTurn!(direction)) return;
+    if (!mounted || _busy) return;
     final prefs = widget.preferences;
     if (!animated ||
         !prefs.mode.paginated ||
@@ -313,12 +326,13 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         _from = from;
         _to = null;
         _liveDestination = false;
+        _destinationReady = false;
         _effect = prefs.pageEffect;
         _direction = direction * (prefs.mode == ReaderMode.vertical ? -1 : 1);
         _clock.value = 0;
       });
       _dragPrepared = gesture != null;
-      if (gesture != null) _clock.value = widget.controller._progress;
+      if (gesture != null) _clock.value = math.min(widget.controller._progress, .92);
       if (gesture?.isCompleted == true) _finishDrag(await gesture!.future);
       // Cover the native view before it moves. Native slide animation is disabled
       // so adjacent page edges cannot bleed through this full-page transition.
@@ -328,8 +342,11 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       final preparing = () async {
         moved = await widget.step(direction, false);
         if (!moved || !mounted) return;
-        setState(() => _liveDestination = true);
-        if (prefs.pageEffect == ReaderPageEffect.paper) return;
+        if (prefs.pageEffect == ReaderPageEffect.paper) {
+          setState(() { _liveDestination = true; _destinationReady = true; });
+          _scrub();
+          return;
+        }
         for (var attempt = 0; attempt < 4 && mounted; attempt++) {
           to = await widget.capture();
           if (to != null && to!.location != from!.location) break;
@@ -339,7 +356,11 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         }
         if (!mounted) return;
         if (to != null && to!.location != from!.location) {
-          setState(() => _to = to);
+          setState(() { _to = to; _liveDestination = true; _destinationReady = true; });
+          _scrub();
+        } else {
+          setState(() { _liveDestination = true; _destinationReady = true; });
+          _scrub();
         }
       }();
       var finish = true;
@@ -360,6 +381,12 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       final target = finish ? 1.0 : 0.0;
       if (gesture != null) {
         await _settling;
+        if (finish && _clock.value < 1) {
+          _settling = null;
+          _dragPrepared = true;
+          _finishDrag(true);
+          await _settling;
+        }
       } else {
         await _clock
             .animateTo(
@@ -456,8 +483,6 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
                     fit: StackFit.expand,
                     children: _effect == ReaderPageEffect.paper
                         ? [
-                            if (!_liveDestination)
-                              RawImage(image: frame.image, fit: BoxFit.fill),
                             if (_to case final target?)
                               RawImage(image: target.image, fit: BoxFit.fill),
                             CustomPaint(
@@ -466,6 +491,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
                                 _clock,
                                 _direction,
                                 () => widget.controller._touchY,
+                                () => widget.controller._startY,
+                                widget.controller._shape,
                               ),
                             ),
                           ]
@@ -531,12 +558,7 @@ class _ReadiumParagraphTurn extends CustomPainter {
         b.right * size.width,
         b.bottom * size.height,
       );
-      final motion = scope.displacementFor(i, bands.length, bounds: bounds);
-      // Translate rasterized text by physical pixels, preserving its glyph
-      // coverage instead of filtering it again at every fractional offset.
-      final sx = frame.image.width / size.width;
-      final sy = frame.image.height / size.height;
-      final offset = Offset((motion.dx * sx).round() / sx, (motion.dy * sy).round() / sy);
+      final offset = scope.displacementFor(i, bands.length, bounds: bounds);
       canvas.drawImageRect(
         frame.image,
         Rect.fromLTRB(
@@ -546,7 +568,7 @@ class _ReadiumParagraphTurn extends CustomPainter {
           b.bottom * frame.image.height,
         ),
         bounds.shift(offset),
-        Paint()..filterQuality = FilterQuality.none,
+        Paint()..filterQuality = FilterQuality.low,
       );
     }
   }
@@ -562,12 +584,12 @@ class _ReadiumParagraphTurn extends CustomPainter {
 /// Textured fold around a tilted cylindrical axis. One image shader and three
 /// mesh draws replace per-strip image draws; the flat page stays pixel-stable.
 class _ReadiumCurl extends CustomPainter {
-  _ReadiumCurl(this.from, this.clock, this.direction, this.touchY)
-    : super(repaint: clock);
+  _ReadiumCurl(this.from, this.clock, this.direction, this.touchY, this.startY, Listenable shape)
+    : super(repaint: Listenable.merge([clock, shape]));
   final ReadiumPageFrame from;
   final Animation<double> clock;
   final double direction;
-  final double Function() touchY;
+  final double Function() touchY, startY;
   static const columns = 32, rows = 8, count = (columns + 1) * (rows + 1);
   final _positions = Float32List(count * 2),
       _texture = Float32List(count * 2),
@@ -597,10 +619,22 @@ class _ReadiumCurl extends CustomPainter {
       return;
     }
     final w = size.width, h = size.height, backwards = direction < 0;
-    final grip = touchY().clamp(.05, .95), wave = math.sin(math.pi * t);
-    final radius = w * (.085 + .045 * (grip - .5).abs()) * wave;
-    final edge = w * (1 - t), tilt = (.5 - grip) * .65 * w / h * wave;
-    final nx = 1 / math.sqrt(1 + tilt * tilt), ny = -tilt * nx;
+    final initial = startY().clamp(0.0, 1.0);
+    final anchorY = initial < .25 ? 0.0 : initial > .75 ? h : initial * h;
+    final gripWeight = (t / .12).clamp(0.0, 1.0) * ((1 - t) / .15).clamp(0.0, 1.0);
+    final fingerY = anchorY + (touchY() * h - anchorY) * gripWeight;
+    // The touch travels across two sheet widths. The reflected back leaves
+    // the screen at mid-turn instead of collapsing towards the page centre.
+    final drag = Offset(w * (1 - 2 * t), fingerY);
+    final anchor = Offset(w, anchorY);
+    final delta = anchor - drag;
+    final length = delta.distance.clamp(.001, double.infinity);
+    final nx = delta.dx / length, ny = delta.dy / length;
+    final centre = (anchor + drag) / 2;
+    final radius = w * .045 * math.sin(math.pi * t);
+    final edge = centre.dx;
+    final top = centre.dx + ny * centre.dy / nx;
+    final bottom = centre.dx - ny * (h - centre.dy) / nx;
     final positions = _positions, texture = _texture, angles = _angles;
     final frontColors = _frontColors,
         backColors = _backColors,
@@ -612,19 +646,18 @@ class _ReadiumCurl extends CustomPainter {
     for (var j = 0; j <= rows; j++)
       for (var i = 0; i <= columns; i++) {
         final k = j * (columns + 1) + i, x = w * i / columns, y = h * j / rows;
-        final crease = edge + tilt * (y - grip * h), d = (x - crease) * nx;
-        double xx = x, yy = y, z = 0, angle = 0;
+        final d = (x - centre.dx) * nx + (y - centre.dy) * ny;
+        double xx = x, yy = y, angle = 0;
         if (d > 0) {
           angle = math.min(math.pi, d / radius);
           final along = d > math.pi * radius
               ? -(d - math.pi * radius)
               : radius * math.sin(angle);
-          z = radius * (1 - math.cos(angle));
           xx += nx * (along - d);
           yy += ny * (along - d);
-          final perspective = 4 * w / (4 * w + z);
-          xx = edge + (xx - edge) * perspective;
-          yy = grip * h + (yy - grip * h) * perspective;
+          // No projection towards the touch point: a developable sheet keeps
+          // its top/bottom lengths and may protrude beyond the viewport.
+
         }
         positions[k * 2] = xx;
         positions[k * 2 + 1] = yy;
@@ -668,8 +701,6 @@ class _ReadiumCurl extends CustomPainter {
       c.translate(w, 0);
       c.scale(-1, 1);
     }
-    final top = edge + tilt * (-grip * h),
-        bottom = edge + tilt * (h - grip * h);
     final flat = Path()
       ..moveTo(0, 0)
       ..lineTo(top, 0)
@@ -686,23 +717,19 @@ class _ReadiumCurl extends CustomPainter {
       Rect.fromLTWH(0, 0, from.image.width.toDouble(), from.image.height.toDouble()),
       Offset.zero & size, Paint()..filterQuality = FilterQuality.none);
     c.restore();
-    final spread = radius * .8;
-    final shadow = Path()
-      ..moveTo(top - spread, 0)
-      ..lineTo(bottom - spread, h)
-      ..lineTo(bottom + spread, h)
-      ..lineTo(top + spread, 0)
-      ..close();
-    c.drawPath(
-      shadow,
-      Paint()
-        ..shader = ui.Gradient.linear(
-          Offset(edge - spread, 0),
-          Offset(edge + spread, 0),
-          const [Color(0x00000000), Color(0x48000000), Color(0x00000000)],
-          const [0, .5, 1],
-        ),
-    );
+    final spread = radius * .9;
+    if (spread > .01) {
+      final shadow = Path()
+        ..moveTo(top, 0)..lineTo(bottom, h)
+        ..lineTo(bottom + spread / nx, h)..lineTo(top + spread / nx, 0)..close();
+      c.save();
+      c.clipPath(Path.combine(ui.PathOperation.difference, Path()..addRect(Offset.zero & size), flat));
+      c.drawPath(shadow, Paint()..shader = ui.Gradient.linear(
+        centre, centre + Offset(nx, ny) * spread,
+        const [Color(0x40000000), Color(0x00000000)],
+      ));
+      c.restore();
+    }
     void mesh(Uint16List indices, int count, Int32List colors, bool textured) {
       if (count == 0) return;
       final vertices = ui.Vertices.raw(

@@ -92,6 +92,19 @@ class ReaderIllustrationCache {
     return bytes == null ? null : _sizes[bytes];
   }
 
+  Future<void> prepare(BuildContext context, String url) async {
+    final bytes = await load(url);
+    if (!context.mounted) return;
+    final entry = _cache[url];
+    if (entry == null || !_current(url, entry.source)) return;
+    final size = await _rememberSize(url, bytes, entry.source);
+    if (!context.mounted) return;
+    final width = readerIllustrationDecodeWidth(imageSize: size,
+      available: MediaQuery.sizeOf(context),
+      devicePixelRatio: MediaQuery.devicePixelRatioOf(context), fullScreen: true);
+    await precacheImage(_decodeProvider(url, bytes, entry.source, width), context);
+  }
+
   Future<Size> dimensions(String url) async {
     if (sizeOf(url) case final size?) return size;
     final request = _requestFor(url);

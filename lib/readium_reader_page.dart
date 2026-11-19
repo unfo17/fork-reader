@@ -221,6 +221,22 @@ class ReadiumReaderBridge extends ChangeNotifier {
     return book.chapters[chapter.clamp(0, book.chapters.length - 1)].title;
   }
 
+  Future<List<String>> visibleImages() async {
+    if (!Platform.isAndroid || _disposed) return const [];
+    final raw = await native.invokeMethod<String>('evaluate', {'script':
+      "(function(){return JSON.stringify(Array.from(document.querySelectorAll('img,image')).filter(function(i){var r=i.getBoundingClientRect();return r.right>0&&r.left<innerWidth&&r.bottom>0&&r.top<innerHeight;}).slice(0,2).map(function(i){return new URL(i.currentSrc||(typeof i.src==='string'?i.src:null)||(i.href&&i.href.baseVal)||'',document.baseURI).href;}));})()"});
+    if (raw == null || raw == 'null') return const [];
+    final paths = (jsonDecode(jsonDecode(raw) as String) as List).cast<String>();
+    final links = [...?publication?.resources, ...?publication?.readingOrder];
+    return [for (final source in paths)
+      ...links.where((link) {
+        try { return Uri.parse(source).path.endsWith('/'+Uri.decodeFull(link.href).split('#').first); }
+        catch (_) { return false; }
+      }).take(1).map((link)=>link.href)];
+  }
+
+  bool get turnBusy => _pagePending;
+
   Future<Uint8List> imageBytes(String href) async {
     if (href.startsWith("data:image/") && !href.startsWith("data:image/svg"))
       return Uri.parse(href).data!.contentAsBytes();
@@ -460,6 +476,13 @@ class ReadiumReaderBridge extends ChangeNotifier {
     } finally {
       _pagePending = false;
     }
+  }
+
+  Future<bool> _canTurnPage(int direction) async {
+    if (!Platform.isAndroid) return true;
+    final allowed = await native.invokeMethod<bool>('canTurn', {'direction': direction}) ?? true;
+    if (!allowed && !_disposed) onAction('boundary', direction < 0 ? '已到书籍首页' : '已到书籍末页');
+    return allowed;
   }
 
   Future<bool> _stepPage(int direction, bool animated) async {
@@ -838,12 +861,15 @@ class ReadiumReaderBridge extends ChangeNotifier {
                   var ready=true,w=innerWidth,h=innerHeight;
                   for(var img of Array.from(document.images)){
                     var r=img.getBoundingClientRect();
-                    if(r.right<=0||r.left>=w||r.bottom<=0||r.top>=h)continue;
-                    if(!img.complete){ready=false;continue;}
+                    var visible=r.right>0&&r.left<w&&r.bottom>0&&r.top<h;
+                    var nearby=r.right>-w&&r.left<2*w&&r.bottom>-h&&r.top<2*h;
+                    if(!nearby)continue;
+                    if(img.loading==='lazy')img.loading='eager';
+                    if(!img.complete){if(visible)ready=false;continue;}
                     if(!img.naturalWidth||!img.decode)continue;
                     var src=img.currentSrc||img.src;
                     if(img.__wenkuDecoded===src)continue;
-                    ready=false;
+                    if(visible)ready=false;
                     if(img.__wenkuDecoding!==src){
                       img.__wenkuDecoding=src;
                       (function(image,url){image.decode().catch(function(){}).then(function(){image.__wenkuDecoded=url;});})(img,src);
@@ -940,7 +966,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     ) {
       final sample = await native.invokeMethod<String>('evaluate', {
         'script':
-            '(function(){document.body.offsetHeight;return (window.__wenkuPageReady&&!window.__wenkuPageReady()?"pending":document.fonts.status)+"|"+innerWidth+"|"+innerHeight+"|"+document.documentElement.scrollWidth+"|"+document.documentElement.scrollHeight+"|"+scrollX+"|"+scrollY+"|"+getComputedStyle(document.body).fontSize+"|"+(window.__wenkuAppliedStyle||"")+"|"+getComputedStyle(document.documentElement).backgroundColor;})()',
+            '(function(){document.body.offsetHeight;return (window.__wenkuPageReady&&!window.__wenkuPageReady()?"pending":document.fonts.status)+"|"+innerWidth+"|"+innerHeight+"|"+document.documentElement.scrollWidth+"|"+document.documentElement.scrollHeight+"|"+scrollX+"|"+scrollY+"|"+getComputedStyle(document.body).fontSize+"|"+(window.__wenkuAppliedStyle||"")+"|"+getComputedStyle(document.documentElement).backgroundColor+"|"+(document.body.textContent.trim()?"text":"image");})()',
       });
       if (sample != null &&
           sample.contains('loaded') &&
@@ -951,7 +977,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
         stable++;
       else
         stable = 0;
-      if (stable >= 3) {
+      if (stable >= (sample?.contains('|image') == true ? 1 : 3)) {
         final rgb = RegExp(r'rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)').firstMatch(sample!);
         if (rgb != null) {
           final paper = rgb[4] != null && double.parse(rgb[4]!) == 0
@@ -1017,6 +1043,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
           paper: pagePaper,
           capture: _capturePage,
           step: _stepPage,
+          canTurn: _canTurnPage,
           child: Stack(
             fit: StackFit.expand,
             children: [
@@ -1092,6 +1119,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
         _lifecycle = release.catchError((Object _) {});
       }),
     );
+    turns.dispose();
     controls.dispose();
     progress.dispose();
     super.dispose();

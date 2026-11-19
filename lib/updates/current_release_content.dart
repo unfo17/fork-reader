@@ -15,9 +15,9 @@ const releaseRightsNotice =
 const releaseReadingNotice = '**在线内容以轻小说文库开放状态为准，不提供因版权限制而停止开放的在线书籍阅读。**';
 const releaseMaintenanceNotice =
     '这是基于 Wenku8_Flutter 的 Readium 本地阅读预览分支，问题与修改反馈请提交到本分支。';
-const _interruption = '翻页截图恢复原生像素尺寸，改善仿真翻页与段落接续中的文字清晰度。';
-const _cache = '复用正在预热的图片页截图，等待可见图片解码完成后再显示新页面。';
-const _retry = '将 EPUB 实际纸色同步到原生外围和阅读页面底色。';
+const _interruption = '段落接续按实际段落、原版时序和连续位移移动，减少文字跳动。';
+const _cache = '纸页从起始角跟随触点折叠，修正投影收缩、纸背范围及阴影。';
+const _retry = '首尾页提前提示；预热邻近图片及插图查看缓存，改善快速操作时的等待。';
 const _resources = '保留原阅读控件及当前仓库自动更新，沿用固定签名覆盖安装。';
 const _changes = [_interruption, _cache, _retry, _resources];
 const _androidInstall =

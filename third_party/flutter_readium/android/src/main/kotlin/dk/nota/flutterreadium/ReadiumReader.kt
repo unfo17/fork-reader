@@ -143,13 +143,8 @@ object ReadiumReader :
     }
     private fun appVisualPageKey(): String? = appVisibleWebView()?.let { "${it.url}|${it.scrollX}|${it.scrollY}" }
     var appPageTurnCrossedResource = false
-    suspend fun appTurnPage(direction: Int, animated: Boolean): Boolean {
-        val navigator = epubNavigator ?: return false
-        val publication = currentPublication ?: return false
-        val previous = navigator.currentLocator?.value
-        appPageTurnCrossedResource = false
-        val previousVisual = appVisualPageKey()
-        val previousUrl = appVisibleWebView()?.url
+    private suspend fun appPageEdge(direction: Int): Pair<Int, Boolean> {
+        val publication = currentPublication ?: return -1 to false
         // A locator notification alone is not proof that an edge is the end of
         // the book. Navigate the reading order, including untitled/image items.
         val visiblePath = appVisibleWebView()?.url?.let { android.net.Uri.parse(it).path }
@@ -157,9 +152,9 @@ object ReadiumReader :
             val path=android.net.Uri.decode(publication.readingOrder[i].href.resolve().toString().substringBefore('#').substringBefore('?')).trimStart('/')
             !path.isEmpty() && visiblePath?.endsWith("/$path") == true
         }.maxByOrNull { publication.readingOrder[it].href.resolve().toString().length }
-        val index = visibleIndex ?: previous?.let { at -> publication.readingOrder.indexOfFirst { it.href.resolve().isEquivalent(at.href) } } ?: -1
+        val index = visibleIndex ?: epubNavigator?.currentLocator?.value?.let { at -> publication.readingOrder.indexOfFirst { it.href.resolve().isEquivalent(at.href) } } ?: -1
         val geometry = if (appIsFixedLayout()) null else runCatching {
-            val verticalScroll = navigator.preferences.scroll == true
+            val verticalScroll = epubNavigator?.preferences?.scroll == true
             val raw = epubEvaluateJavascript("""
                 (function(){var e=document.scrollingElement||document.documentElement,v=$verticalScroll;
                 return JSON.stringify({position:Math.abs(v?scrollY:scrollX),maximum:Math.max(0,v?e.scrollHeight-innerHeight:e.scrollWidth-innerWidth)});})();
@@ -170,6 +165,23 @@ object ReadiumReader :
             if (direction > 0) it.optDouble("maximum")-it.optDouble("position") <= 2.0
             else it.optDouble("position") <= 2.0
         } == true
+        return index to atEdge
+    }
+
+    suspend fun appCanTurnPage(direction: Int): Boolean {
+        val publication = currentPublication ?: return false
+        val (index, edge) = appPageEdge(direction)
+        return !(edge || appIsFixedLayout()) || index < 0 || index + (if (direction > 0) 1 else -1) in publication.readingOrder.indices
+    }
+
+    suspend fun appTurnPage(direction: Int, animated: Boolean): Boolean {
+        val navigator = epubNavigator ?: return false
+        val publication = currentPublication ?: return false
+        val previous = navigator.currentLocator?.value
+        appPageTurnCrossedResource = false
+        val previousVisual = appVisualPageKey()
+        val previousUrl = appVisibleWebView()?.url
+        val (index, atEdge) = appPageEdge(direction)
         if (atEdge && index >= 0) {
             val next = index + if (direction > 0) 1 else -1
             if (next !in publication.readingOrder.indices) return false
@@ -251,12 +263,15 @@ object ReadiumReader :
                             if(b>a)spans.push([a,b]);
                         }
                         if($includeBands){
-                            var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT),node,range=document.createRange();
+                            var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT),node,range=document.createRange(),groups=new Set();
                             while(node=walker.nextNode()){
                                 if(!node.textContent.trim()||!node.parentElement||node.parentElement.closest('script,style,[data-readium]'))continue;
                                 var visible=Array.from(node.parentElement.getClientRects()).some(function(r){return r.right>0&&r.left<w&&r.bottom>0&&r.top<h;});
                                 if(!visible)continue;
-                                range.selectNodeContents(node);Array.from(range.getClientRects()).forEach(add);
+                                var group=node.parentElement.closest('p,li,blockquote,pre,h1,h2,h3,h4,h5,h6,figure,table')||node.parentElement;
+                                if(groups.has(group))continue;groups.add(group);
+                                Array.from(group.getClientRects()).forEach(add);
+                                range.selectNodeContents(group);Array.from(range.getClientRects()).forEach(add);
                             }
                             document.querySelectorAll('img,svg,table,video,canvas').forEach(function(e){Array.from(e.getClientRects()).forEach(add);});
                         }

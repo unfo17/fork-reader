@@ -28,6 +28,7 @@ class ReadiumControlsPlugin : FlutterPlugin {
                                 ReadiumReader.epubEvaluateJavascript("window.getSelection().removeAllRanges();")
                                 result.success(null)
                             }
+                            "canTurn" -> result.success(ReadiumReader.appCanTurnPage(call.argument<Int>("direction") ?: 1))
                             "page" -> {
                                 val animated = call.argument<Boolean>("animated") ?: true
                                 val moved = ReadiumReader.appTurnPage(call.argument<Int>("direction") ?: 1, animated)

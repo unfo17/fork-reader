@@ -5681,6 +5681,9 @@ class ReaderPage extends StatefulWidget {
 class _ReaderPageState extends State<ReaderPage>
     with TickerProviderStateMixin, WidgetsBindingObserver {
   ReadiumReaderBridge? _readium;
+  ReaderIllustrationCache? _nativeImages;
+  Timer? _nativeImageTimer;
+  String? _nativeImageKey;
   String? _nativePreferencesKey;
   bool _nativeLocationChanging = false;
   double _nativeFraction = 0;
@@ -5731,6 +5734,9 @@ class _ReaderPageState extends State<ReaderPage>
   void _nativeChanged() {
     if (!mounted) return;
     if (!identical(_nativePublication, _readium!.publication)) {
+      _nativeImages?.clearMemory();
+      _nativeImages = null;
+      _nativeImageKey = null;
       _nativePublication = _readium!.publication;
       _nativePreferencesKey = null;
       _nativeMarksKey = null;
@@ -5750,6 +5756,24 @@ class _ReaderPageState extends State<ReaderPage>
     if (_ready && _chapterRevealPending) {
       _chapterRevealPending = false;
       _chapterReveal.forward(from: 0);
+    }
+    final engine = _readium!;
+    final key = '${engine.locator?.href}|${engine.fraction}';
+    if (_ready && _nativeImageKey != key) {
+      _nativeImageKey = key;
+      _nativeImageTimer?.cancel();
+      _nativeImageTimer = Timer(const Duration(milliseconds: 300), () async {
+        if (!mounted || _readium != engine || engine.turnBusy) return;
+        final cache = _nativeImages ??= ReaderIllustrationCache(request: engine.imageBytes);
+        try {
+          final urls = await engine.visibleImages();
+          if (!mounted || _readium != engine || engine.turnBusy) return;
+          for (final url in urls) {
+            if (!mounted || engine.turnBusy) break;
+            await cache.prepare(context, url);
+          }
+        } catch (_) { /* Gallery keeps its normal local-read retry. */ }
+      });
     }
     setState(() {});
   }
@@ -5860,8 +5884,16 @@ class _ReaderPageState extends State<ReaderPage>
   }
 
   void _nativeAction(String action, String text) {
+    if (action == 'boundary') {
+      showNovelFeedback(context, text);
+      return;
+    }
     if (action == 'note') {
       unawaited(_showEpubNote(text));
+      return;
+    }
+    if (action == 'image') {
+      unawaited(_openNativeImage(text));
       return;
     }
     _selection.clear();
@@ -5869,10 +5901,6 @@ class _ReaderPageState extends State<ReaderPage>
     unawaited(_readium!.clearSelection());
     if (action == 'copy') {
       Clipboard.setData(ClipboardData(text: text));
-      return;
-    }
-    if (action == 'image') {
-      unawaited(_openNativeImage(text));
       return;
     }
     if (action == 'illustrations') {
@@ -6838,6 +6866,8 @@ class _ReaderPageState extends State<ReaderPage>
 
   @override
   void dispose() {
+    _nativeImageTimer?.cancel();
+    _nativeImages?.clearMemory();
     _readium?.removeListener(_nativeChanged);
     _readium?.controls.removeListener(_syncNativeChrome);
     _readium?.dispose();
@@ -9457,7 +9487,7 @@ class _ReaderPageState extends State<ReaderPage>
     _cancelExitRequest();
     _stopAutoScroll();
     _suspendListeningFollow();
-    final cache = ReaderIllustrationCache(request: engine.imageBytes);
+    final cache = _nativeImages ??= ReaderIllustrationCache(request: engine.imageBytes);
     await pushNovelPage<void>(
       context,
       _readerSurface(
