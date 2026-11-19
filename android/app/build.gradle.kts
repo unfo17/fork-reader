@@ -77,6 +77,9 @@ android {
                 else -> error("Unsupported Flutter target platform: $platform")
             }
         }
+        if (targetAbis == listOf("arm64-v8a")) {
+            packaging.jniLibs.excludes.addAll(listOf("**/x86_64/**", "**/armeabi-v7a/**", "**/armeabi/**"))
+        }
         buildTypes.configureEach {
             ndk.abiFilters.clear()
             ndk.abiFilters.addAll(targetAbis)

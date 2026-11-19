@@ -146,13 +146,14 @@ class EpubReaderFragment :
                 if (typeof FlutterImageBridge === 'undefined') return;
                 window.__flutterImageBridgeReady = true;
                 document.addEventListener('click', function(e) {
-                    var img = e.target && e.target.closest ? e.target.closest('img') : null;
+                    var img = e.target && e.target.closest ? e.target.closest('img,image,svg') : null;
+                    if (img && img.tagName && img.tagName.toLowerCase()==='svg') img=img.querySelector('image');
                     if (!img) return;
                     var figure = img.closest ? img.closest('figure') : null;
                     var comicContainer = img.closest ? img.closest('.nota-comicbook-page-container') : null;
                     var r = img.getBoundingClientRect();
                     FlutterImageBridge.onImageTapped(JSON.stringify({
-                        srcUrl: img.src || '',
+                        srcUrl: img.currentSrc || (typeof img.src==='string'?img.src:null) || (img.href && img.href.baseVal) || '',
                         alt: img.getAttribute('alt') || null,
                         notaComicPageImage: !!((img.classList && img.classList.contains('page') && figure && figure.querySelector('.area')) || comicContainer),
                         rect: { x: r.left, y: r.top, width: r.width, height: r.height },

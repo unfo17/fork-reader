@@ -127,6 +127,8 @@ class ReaderPreferences {
     this.pageSpeed = ReaderPageSpeed.normal,
     this.hideSystemStatus = false,
     this.showStatusInfo = true,
+    this.showChapterInfo = true,
+    this.showReadingProgress = true,
     this.chapterEntrance = false,
     this.nightTextBrightness = .82,
     this.letterSpacing = .1,
@@ -156,7 +158,7 @@ class ReaderPreferences {
   final ReaderPageEffect pageEffect;
   final ReaderPageSpeed pageSpeed;
   final bool hideSystemStatus;
-  final bool showStatusInfo;
+  final bool showStatusInfo, showChapterInfo, showReadingProgress;
   bool get showReaderStatus => hideSystemStatus && showStatusInfo;
   final bool chapterEntrance;
   final double nightTextBrightness;
@@ -240,6 +242,8 @@ class ReaderPreferences {
     'pageSpeed': pageSpeed.name,
     'hideSystemStatus': hideSystemStatus,
     'showStatusInfo': showStatusInfo,
+    'showChapterInfo': showChapterInfo,
+    'showReadingProgress': showReadingProgress,
     'chapterEntrance': chapterEntrance,
     'nightTextBrightness': nightTextBrightness,
     'letterSpacing': letterSpacing,
@@ -270,6 +274,8 @@ class ReaderPreferences {
       'edgeBrightness',
       'hideSystemStatus',
       'showStatusInfo',
+      'showChapterInfo',
+      'showReadingProgress',
       'chapterEntrance',
       'paragraphGapOverride',
       'catalogueReversed',
@@ -330,6 +336,8 @@ class ReaderPreferences {
       edgeBrightness: json['edgeBrightness'] == true,
       hideSystemStatus: json['hideSystemStatus'] == true,
       showStatusInfo: json['showStatusInfo'] != false,
+      showChapterInfo: json['showChapterInfo'] != false,
+      showReadingProgress: json['showReadingProgress'] != false,
       chapterEntrance: json['chapterEntrance'] == true,
       pageEffect: ReaderPageEffect.values.byName(
         json['pageEffect'] ?? 'staggered',
@@ -371,6 +379,8 @@ class ReaderPreferences {
     ReaderPageSpeed? pageSpeed,
     bool? hideSystemStatus,
     bool? showStatusInfo,
+    bool? showChapterInfo,
+    bool? showReadingProgress,
     bool? chapterEntrance,
     double? nightTextBrightness,
     double? letterSpacing,
@@ -408,6 +418,8 @@ class ReaderPreferences {
     pageSpeed: pageSpeed ?? this.pageSpeed,
     hideSystemStatus: hideSystemStatus ?? this.hideSystemStatus,
     showStatusInfo: showStatusInfo ?? this.showStatusInfo,
+    showChapterInfo: showChapterInfo ?? this.showChapterInfo,
+    showReadingProgress: showReadingProgress ?? this.showReadingProgress,
     chapterEntrance: chapterEntrance ?? this.chapterEntrance,
     nightTextBrightness: nightTextBrightness ?? this.nightTextBrightness,
     letterSpacing: letterSpacing ?? this.letterSpacing,
@@ -455,6 +467,8 @@ class ReaderPreferences {
     pageSpeed: pageSpeed,
     hideSystemStatus: hideSystemStatus,
     showStatusInfo: showStatusInfo,
+    showChapterInfo: showChapterInfo,
+    showReadingProgress: showReadingProgress,
     chapterEntrance: chapterEntrance,
     statusSideInset: statusSideInset,
     statusFontSize: statusFontSize,

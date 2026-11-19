@@ -1,5 +1,6 @@
 import 'dart:ui' as ui;
 import 'dart:async';
+import 'dart:typed_data';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'reader_preferences.dart';
@@ -13,6 +14,17 @@ class ReadiumPageFrame {
   final String location;
   final List<Rect> bands;
   final Color paper;
+  ui.ImageShader? _shader;
+  ui.ImageShader get shader => _shader ??= ui.ImageShader(
+    image,
+    TileMode.clamp,
+    TileMode.clamp,
+    Float64List.fromList([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]),
+  );
+  void dispose() {
+    _shader?.dispose();
+    image.dispose();
+  }
 }
 
 class ReadiumPageTurnController {
@@ -21,7 +33,9 @@ class ReadiumPageTurnController {
   double _progress = 0, _sign = 1, _width = 1, _lastDistance = 0, _velocity = 0;
   final _watch = Stopwatch();
   int _lastMicros = 0;
-  void beginDrag(double dx, double width) {
+  double _touchY = .5;
+  void beginDrag(double dx, double width, double touchY) {
+    _touchY = touchY;
     _release = Completer<bool>();
     _progress = 0;
     _width = width;
@@ -35,7 +49,8 @@ class ReadiumPageTurnController {
     updateDrag(dx);
   }
 
-  void updateDrag(double dx) {
+  void updateDrag(double dx, {double? touchY}) {
+    if (touchY != null) _touchY = touchY.clamp(0.0, 1.0);
     if (_release == null || _release!.isCompleted) return;
     final distance = dx * _sign, now = _watch.elapsedMicroseconds;
     if (now - _lastMicros > 1000) {
@@ -124,7 +139,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         if (mounted && !_busy && key == widget.frameKey) {
           _cached = frame;
         } else {
-          frame?.image.dispose();
+          frame?.dispose();
         }
       } catch (_) {
         /* A warm image is optional. */
@@ -151,7 +166,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   void didUpdateWidget(covariant ReadiumPageSurface oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.frameKey != widget.frameKey) {
-      _cached?.image.dispose();
+      _cached?.dispose();
       _cached = null;
       _warmLater();
     }
@@ -169,7 +184,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     if (_viewport != viewport) {
       _viewport = viewport;
       widget.controller.endDrag(cancel: true);
-      _cached?.image.dispose();
+      _cached?.dispose();
       _cached = null;
       _warmLater();
     }
@@ -211,11 +226,19 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         _direction = direction * (prefs.mode == ReaderMode.vertical ? -1 : 1);
         _clock.value = 0;
       });
+      _dragPrepared = gesture != null;
+      if (gesture != null) _clock.value = widget.controller._progress;
       // Cover the native view before it moves. Native slide animation is disabled
       // so adjacent page edges cannot bleed through this full-page transition.
       await WidgetsBinding.instance.endOfFrame;
       moved = await widget.step(direction, false);
-      if (!moved) return;
+      if (!moved) {
+        _dragPrepared = false;
+        await _clock
+            .animateTo(0, duration: const Duration(milliseconds: 140))
+            .orCancel;
+        return;
+      }
       if (prefs.pageEffect == ReaderPageEffect.paper) {
         // The live navigator already contains the destination. Only the turning
         // old sheet needs pixels: do not capture/decode the destination again.
@@ -266,8 +289,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         });
         await WidgetsBinding.instance.endOfFrame;
       }
-      from?.image.dispose();
-      to?.image.dispose();
+      from?.dispose();
+      to?.dispose();
       _busy = false;
       if (mounted) _warmLater();
     }
@@ -323,14 +346,29 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
                   color: _liveDestination ? Colors.transparent : frame.paper,
                   child: Stack(
                     fit: StackFit.expand,
-                    children: _liveDestination
+                    children:
+                        (_liveDestination ||
+                            (_dragPrepared &&
+                                _effect == ReaderPageEffect.paper))
                         ? [
                             CustomPaint(
-                              painter: _ReadiumCurl(frame, _clock, _direction),
+                              painter: _ReadiumCurl(
+                                frame,
+                                _clock,
+                                _direction,
+                                () => widget.controller._touchY,
+                              ),
                             ),
                           ]
                         : _to == null
-                        ? [RawImage(image: frame.image, fit: BoxFit.fill)]
+                        ? [
+                            _dragPrepared
+                                ? _leaf(frame, false)
+                                : RawImage(
+                                    image: frame.image,
+                                    fit: BoxFit.fill,
+                                  ),
+                          ]
                         : _direction < 0 &&
                               (_effect == ReaderPageEffect.cover ||
                                   _effect == ReaderPageEffect.fade)
@@ -350,7 +388,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     if (identical(widget.controller._owner, this))
       widget.controller._owner = null;
     _warmTimer?.cancel();
-    _cached?.image.dispose();
+    _cached?.dispose();
     widget.controller.endDrag(cancel: true);
     _clock.dispose();
     super.dispose();
@@ -414,94 +452,146 @@ class _ReadiumParagraphTurn extends CustomPainter {
       old.vertical != vertical;
 }
 
-/// A cylindrical fold of retained native pixels. No WebView transforms or DOM
-/// layout take place while the fold is drawn; the back of the sheet is shaded.
+/// Textured fold around a tilted cylindrical axis. One image shader and three
+/// mesh draws replace per-strip image draws; the flat page stays pixel-stable.
 class _ReadiumCurl extends CustomPainter {
-  _ReadiumCurl(this.from, this.clock, this.direction) : super(repaint: clock);
+  _ReadiumCurl(this.from, this.clock, this.direction, this.touchY)
+    : super(repaint: clock);
   final ReadiumPageFrame from;
   final Animation<double> clock;
   final double direction;
-  void _image(Canvas c, ReadiumPageFrame f, Size size) => c.drawImageRect(
-    f.image,
-    Rect.fromLTWH(0, 0, f.image.width.toDouble(), f.image.height.toDouble()),
-    Offset.zero & size,
-    Paint()..filterQuality = FilterQuality.low,
-  );
+  final double Function() touchY;
+  static const columns = 48, rows = 24, count = (columns + 1) * (rows + 1);
+  final _positions = Float32List(count * 2),
+      _texture = Float32List(count * 2),
+      _angles = Float32List(count);
+  final _frontColors = Uint32List(count),
+      _backColors = Uint32List(count),
+      _ghostColors = Uint32List(count);
+  final _frontIndices = Uint16List(columns * rows * 6),
+      _backIndices = Uint16List(columns * rows * 6);
+
   @override
   void paint(Canvas c, Size size) {
-    final backwards = direction < 0;
-    final t = clock.value;
-    final front = from;
+    final t = clock.value.clamp(0.0, 1.0);
+    if (t >= 1) return;
     if (t <= 0) {
-      _image(c, front, size);
+      c.drawImageRect(
+        from.image,
+        Rect.fromLTWH(
+          0,
+          0,
+          from.image.width.toDouble(),
+          from.image.height.toDouble(),
+        ),
+        Offset.zero & size,
+        Paint(),
+      );
       return;
     }
-    if (t >= 1) return;
-    final w = size.width, h = size.height;
-    final radius = w * .13 * math.sin(math.pi * t);
-    final edge = w * (1 - t);
+    final w = size.width, h = size.height, backwards = direction < 0;
+    final grip = touchY().clamp(.05, .95), wave = math.sin(math.pi * t);
+    final radius = w * (.085 + .045 * (grip - .5).abs()) * wave;
+    final edge = w * (1 - t), tilt = (.5 - grip) * .65 * w / h * wave;
+    final nx = 1 / math.sqrt(1 + tilt * tilt), ny = -tilt * nx;
+    final positions = _positions, texture = _texture, angles = _angles;
+    final frontColors = _frontColors,
+        backColors = _backColors,
+        ghostColors = _ghostColors;
+    for (var j = 0; j <= rows; j++)
+      for (var i = 0; i <= columns; i++) {
+        final k = j * (columns + 1) + i, x = w * i / columns, y = h * j / rows;
+        final crease = edge + tilt * (y - grip * h), d = (x - crease) * nx;
+        double xx = x, yy = y, z = 0, angle = 0;
+        if (d > 0) {
+          angle = math.min(math.pi, d / radius);
+          final along = d > math.pi * radius
+              ? -(d - math.pi * radius)
+              : radius * math.sin(angle);
+          z = radius * (1 - math.cos(angle));
+          xx += nx * (along - d);
+          yy += ny * (along - d);
+          final perspective = 4 * w / (4 * w + z);
+          xx = edge + (xx - edge) * perspective;
+          yy = grip * h + (yy - grip * h) * perspective;
+        }
+        positions[k * 2] = xx;
+        positions[k * 2 + 1] = yy;
+        texture[k * 2] = (backwards ? w - x : x) / w * from.image.width;
+        texture[k * 2 + 1] = y / h * from.image.height;
+        angles[k] = angle;
+        final shade = (255 * (1 - .22 * math.sin(angle))).round();
+        frontColors[k] = 0xff000000 | (shade << 16) | (shade << 8) | shade;
+        final paper = from.paper;
+        backColors[k] = Color.fromARGB(
+          255,
+          (paper.r * shade).round(),
+          (paper.g * shade).round(),
+          (paper.b * shade).round(),
+        ).toARGB32();
+        ghostColors[k] = 0x16ffffff;
+      }
+    var frontCount = 0, backCount = 0;
+    for (var j = 0; j < rows; j++)
+      for (var i = 0; i < columns; i++) {
+        final a = j * (columns + 1) + i,
+            b = a + 1,
+            d = a + columns + 1,
+            e = d + 1;
+        final rear =
+            (angles[a] + angles[b] + angles[d] + angles[e]) / 4 > math.pi / 2;
+        final out = rear ? _backIndices : _frontIndices;
+        var at = rear ? backCount : frontCount;
+        out[at++] = a;
+        out[at++] = b;
+        out[at++] = d;
+        out[at++] = b;
+        out[at++] = e;
+        out[at++] = d;
+        if (rear)
+          backCount = at;
+        else
+          frontCount = at;
+      }
     c.save();
+    c.clipRect(Offset.zero & size);
     if (backwards) {
       c.translate(w, 0);
       c.scale(-1, 1);
     }
-    // Mirror geometry, not the book's text.
-    void pixels(Rect target) {
-      c.save();
-      c.clipRect(target);
-      if (backwards) {
-        c.translate(w, 0);
-        c.scale(-1, 1);
-        _image(c, front, size);
-      } else {
-        _image(c, front, size);
-      }
-      c.restore();
-    }
-
-    if (edge > 0) pixels(Rect.fromLTWH(0, 0, edge, h));
-    final shadow = Rect.fromLTWH(edge, 0, radius * 1.6, h);
-    c.drawRect(
+    final shadow = Path()
+      ..moveTo(edge + tilt * (-grip * h), 0)
+      ..lineTo(edge + tilt * (h - grip * h), h);
+    c.drawPath(
       shadow,
       Paint()
-        ..shader = ui.Gradient.linear(
-          Offset(edge, 0),
-          Offset(shadow.right, 0),
-          [const Color(0x55000000), const Color(0x00000000)],
-        ),
+        ..color = const Color(0x48000000)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = radius * .7
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, radius * .24),
     );
-    const strips = 40;
-    for (var i = 0; i < strips; i++) {
-      final a = math.pi * i / strips, b = math.pi * (i + 1) / strips;
-      final x1 = edge + radius * math.sin(a), x2 = edge + radius * math.sin(b);
-      final left = math.min(x1, x2), width = (x2 - x1).abs() + .6;
-      final sx = (edge + radius * a).clamp(0.0, w);
-      final sw = math.min(radius * (b - a), w - sx);
-      if (sw <= 0) continue;
-      final source = Rect.fromLTWH(
-        (backwards ? w - sx - sw : sx) / w * front.image.width,
-        0,
-        sw / w * front.image.width,
-        front.image.height.toDouble(),
+    void mesh(Uint16List indices, int count, Uint32List colors, bool textured) {
+      if (count == 0) return;
+      final vertices = ui.Vertices.raw(
+        VertexMode.triangles,
+        positions,
+        textureCoordinates: textured ? texture : null,
+        colors: colors,
+        indices: Uint16List.sublistView(indices, 0, count),
       );
-      final dest = Rect.fromLTWH(left, 0, width, h);
-      c.drawImageRect(
-        front.image,
-        source,
-        dest,
-        Paint()..filterQuality = FilterQuality.low,
-      );
-      // Back face is paper with faint ink showing through.
-      c.drawRect(
-        dest,
+      c.drawVertices(
+        vertices,
+        BlendMode.modulate,
         Paint()
-          ..color = front.paper.withValues(alpha: a > math.pi / 2 ? .88 : .08),
-      );
-      c.drawRect(
-        dest,
-        Paint()..color = Colors.black.withValues(alpha: .24 * math.sin(a)),
+          ..color = Colors.white
+          ..shader = textured ? from.shader : null
+          ..filterQuality = FilterQuality.low,
       );
     }
+
+    mesh(_frontIndices, frontCount, frontColors, true);
+    mesh(_backIndices, backCount, backColors, false);
+    mesh(_backIndices, backCount, ghostColors, true);
     c.restore();
   }
 

@@ -1821,7 +1821,7 @@ class _ReaderToolsState extends State<ReaderTools>
                 (v) => _preferences(prefs.copyWith(hideSystemStatus: v)),
               ),
               const AppText(
-                '章节名始终显示在底部。隐藏系统状态栏后，可单独选择是否显示阅读时间和电量。',
+                '底部章节名称与进度可分别关闭。隐藏系统状态栏后，可单独选择是否显示阅读时间和电量。',
                 style: TextStyle(fontSize: 12, height: 1.6),
               ),
               FutureBuilder<bool>(
@@ -1856,6 +1856,30 @@ class _ReaderToolsState extends State<ReaderTools>
             ],
           ),
         ),
+      if (category == 'screen') ...[
+        _adjustment(
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: _switch(
+              context,
+              '显示章节名称',
+              prefs.showChapterInfo,
+              (v) => _preferences(prefs.copyWith(showChapterInfo: v)),
+            ),
+          ),
+        ),
+        _adjustment(
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: _switch(
+              context,
+              '显示阅读进度',
+              prefs.showReadingProgress,
+              (v) => _preferences(prefs.copyWith(showReadingProgress: v)),
+            ),
+          ),
+        ),
+      ],
       if (category == 'screen')
         AnimatedOptionSection(
           expanded: prefs.hideSystemStatus,

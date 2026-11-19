@@ -67,13 +67,14 @@ class EpubImageTapBridge {
 
     private fun resolvePublicationHref(srcUrl: String): String? {
         if (srcUrl.isEmpty()) return null
+        if (srcUrl.startsWith("data:image/")) return srcUrl
         val publication = ReadiumReader.currentPublication ?: return null
         return try {
             val imgPath = URI(srcUrl).path
             val allLinks = publication.readingOrder + publication.resources
             allLinks
                 .find { link ->
-                    val linkHref = link.href.toString()
+                    val linkHref = URI(link.href.toString()).path.trimStart('/')
                     imgPath.endsWith("/$linkHref") || imgPath == linkHref
                 }?.href
                 ?.toString()

@@ -1611,7 +1611,9 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
                   ),
                 ),
               ),
-            if (widget.bookTitle != null)
+            if (widget.bookTitle != null &&
+                (widget.preferences.showChapterInfo ||
+                    widget.preferences.showReadingProgress))
               Positioned(
                 left: padding.left,
                 right: padding.right,
@@ -1623,18 +1625,20 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
                     Row(
                       key: key('reader-bottom-location'),
                       children: [
-                        Expanded(
-                          child: ReaderChapterTitle(
-                            text: title,
-                            key: key('reader-bottom-chapter-title'),
-                            style: informationStyle,
-                            active: spread == _restingSpread,
-                            chrome: widget.chrome,
-                            showWithChrome: false,
-                            reduceMotion: widget.reduceMotion,
+                        if (widget.preferences.showChapterInfo)
+                          Expanded(
+                            child: ReaderChapterTitle(
+                              text: title,
+                              key: key('reader-bottom-chapter-title'),
+                              style: informationStyle,
+                              active: spread == _restingSpread,
+                              chrome: widget.chrome,
+                              showWithChrome: false,
+                              reduceMotion: widget.reduceMotion,
+                            ),
                           ),
-                        ),
-                        if (widget.showPageCount) ...[
+                        if (widget.showPageCount &&
+                            widget.preferences.showReadingProgress) ...[
                           const SizedBox(width: 12),
                           AppText(
                             count,

@@ -25,7 +25,7 @@ internal class ReadiumReaderChannel(
 
     fun onExternalLinkActivated(url: AbsoluteUrl) = launch { invokeMethod("onExternalLinkActivated", url.toString()) }
     fun onReaderTap(x: Float, y: Float) = launch { invokeMethod("onReaderTap", mapOf("x" to x, "y" to y)) }
-    fun onReaderDrag(phase: String, dx: Float, dy: Float) = launch { invokeMethod("onReaderDrag", mapOf("phase" to phase, "dx" to dx, "dy" to dy)) }
+    fun onReaderDrag(phase: String, dx: Float, dy: Float, y: Float = .5f) = launch { invokeMethod("onReaderDrag", mapOf("phase" to phase, "dx" to dx, "dy" to dy, "y" to y)) }
     fun onFootnote(html: String) = launch { invokeMethod("onFootnote", html) }
 
     fun onTextSelected(

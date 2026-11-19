@@ -122,7 +122,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       _dragInFlight = true;
       _dragLocation = null;
       onUserNavigation();
-      turns.beginDrag(dx, width);
+      turns.beginDrag(dx, width, (event['y'] as num?)?.toDouble() ?? .5);
       unawaited(
         command(() => turns.drag(direction)).whenComplete(() async {
           _dragInFlight = false;
@@ -134,9 +134,11 @@ class ReadiumReaderBridge extends ChangeNotifier {
         }),
       );
     } else if (_dragInFlight) {
-      if (phase == 'Move') turns.updateDrag(dx);
+      if (phase == 'Move')
+        turns.updateDrag(dx, touchY: (event['y'] as num?)?.toDouble());
       if (phase == 'End' || phase == 'Cancel') {
-        if (phase != 'Cancel') turns.updateDrag(dx);
+        if (phase != 'Cancel')
+          turns.updateDrag(dx, touchY: (event['y'] as num?)?.toDouble());
         turns.endDrag(cancel: phase == 'Cancel');
       }
     }
@@ -203,6 +205,43 @@ class ReadiumReaderBridge extends ChangeNotifier {
           .map((e) => e.title),
     };
     return pub.tocFlattened.where((l) => names.contains(l.title)).firstOrNull;
+  }
+
+  String get chapterTitle {
+    final tocHref = locator?.locations?.toJson()['tocHref'];
+    final title = publication?.tocFlattened
+        .where((l) => l.href == tocHref)
+        .firstOrNull
+        ?.title;
+    if (title != null && title.trim().isNotEmpty) return title.trim();
+    return book.chapters[chapter.clamp(0, book.chapters.length - 1)].title;
+  }
+
+  Future<Uint8List> imageBytes(String href) async {
+    if (href.startsWith("data:image/") && !href.startsWith("data:image/svg"))
+      return Uri.parse(href).data!.contentAsBytes();
+    if (href.toLowerCase().split('?').first.endsWith('.svg') &&
+        Platform.isAndroid) {
+      final path = jsonEncode(href);
+      final raw = await native.invokeMethod<String>('evaluate', {
+        'script':
+            '''(function(){
+        var path=$path;
+        var img=Array.from(document.images).find(i=>{try{return decodeURI(new URL(i.currentSrc||i.src).pathname).endsWith('/'+decodeURI(path));}catch(e){return false;}});
+        if(!img||!img.complete||!img.naturalWidth)return null;
+        var ratio=Math.min(1,2048/Math.max(img.naturalWidth,img.naturalHeight));
+        var c=document.createElement('canvas');c.width=Math.max(1,Math.round(img.naturalWidth*ratio));c.height=Math.max(1,Math.round(img.naturalHeight*ratio));
+        c.getContext('2d').drawImage(img,0,0,c.width,c.height);return c.toDataURL('image/png').split(',')[1];
+      })()''',
+      });
+      if (raw != null && raw != 'null') {
+        final value = jsonDecode(raw);
+        if (value is String) return base64Decode(value);
+      }
+    }
+    final url = Uri.parse(await api.getResourceUrl(href));
+    if (url.scheme != 'file') throw StateError('原书插图未能缓存到本地');
+    return File.fromUri(url).readAsBytes();
   }
 
   int chapterFor(rd.Locator at) {
@@ -902,7 +941,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
                       rd.SelectionAction(id: 'illustrations', title: '插图'),
                     ],
                     allowedDefaultActions: const {},
-                    onImageTapped: (_) => onAction('illustrations', ''),
+                    onImageTapped: (image) => onAction('image', image.href),
                     onTextSelected: (e) =>
                         unawaited(_selected(e).catchError((Object _) {})),
                     onSelectionAction: (e) {

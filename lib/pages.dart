@@ -5871,6 +5871,10 @@ class _ReaderPageState extends State<ReaderPage>
       Clipboard.setData(ClipboardData(text: text));
       return;
     }
+    if (action == 'image') {
+      unawaited(_openNativeImage(text));
+      return;
+    }
     if (action == 'illustrations') {
       _volumeIllustrations();
       return;
@@ -5969,10 +5973,14 @@ class _ReaderPageState extends State<ReaderPage>
       (prefs.hideSystemStatus ? _systemStatusExtent(context) : safe.top) +
           prefs.marginTop,
       safe.right + prefs.rightMargin,
-      safe.bottom + prefs.marginBottom + ReaderScrollLocation.extentOf(context),
+      safe.bottom +
+          prefs.marginBottom +
+          ((prefs.showChapterInfo || prefs.showReadingProgress)
+              ? ReaderScrollLocation.extentOf(context)
+              : 0),
     );
     final key =
-        '$pageInsets|${prefs.layoutKey}|${prefs.paper.name}|${prefs.nightTextBrightness}|${prefs.backgroundImage}|${prefs.backgroundOpacity}|${prefs.backgroundFit}|${prefs.hideSystemStatus}|${prefs.showStatusInfo}|$_fontSize|$_lineHeight|$_readerFontId|$dark|$hidden|$only';
+        '$pageInsets|${prefs.layoutKey}|${prefs.paper.name}|${prefs.nightTextBrightness}|${prefs.backgroundImage}|${prefs.backgroundOpacity}|${prefs.backgroundFit}|${prefs.hideSystemStatus}|${prefs.showStatusInfo}|${prefs.showChapterInfo}|${prefs.showReadingProgress}|$_fontSize|$_lineHeight|$_readerFontId|$dark|$hidden|$only';
     if (key != _nativePreferencesKey) {
       _nativePreferencesKey = key;
       // Supply initial defaults synchronously, before creating the native view.
@@ -9412,6 +9420,28 @@ class _ReaderPageState extends State<ReaderPage>
     }
   }
 
+  Future<void> _openNativeImage(String href) async {
+    final engine = _readium;
+    if (engine == null || href.isEmpty) return;
+    _cancelExitRequest();
+    _stopAutoScroll();
+    _suspendListeningFollow();
+    final cache = ReaderIllustrationCache(request: engine.imageBytes);
+    await pushNovelPage<void>(
+      context,
+      _readerSurface(
+        ReaderIllustrationGallery(
+          urls: [href],
+          initialUrl: href,
+          cache: cache,
+          title: '原书插图',
+        ),
+      ),
+      slot: ReaderIllustrationGallery,
+      reduceMotion: widget.state.reduceMotion,
+    );
+  }
+
   Future<void> _volumeIllustrations() async {
     _cancelExitRequest();
     _selection.clear();
@@ -10457,6 +10487,10 @@ class _ReaderPageState extends State<ReaderPage>
     builder: (context) {
       if (_paginated && _readium == null) return const SizedBox.shrink();
       final preferences = _readerPreferences;
+      if (footer &&
+          !preferences.showChapterInfo &&
+          !preferences.showReadingProgress)
+        return const SizedBox.shrink();
       if (!footer && !preferences.showReaderStatus) {
         return const SizedBox.shrink();
       }
@@ -10511,10 +10545,14 @@ class _ReaderPageState extends State<ReaderPage>
                     ),
                     controller: _scroll,
                     externalProgress: _readium?.progress,
-                    title: readerInformationTitle(
-                      chapter.title,
-                      _sourceBook.directoryIndexFor(_chapter) + 1,
-                    ),
+                    title:
+                        _readium?.chapterTitle ??
+                        readerInformationTitle(
+                          chapter.title,
+                          _sourceBook.directoryIndexFor(_chapter) + 1,
+                        ),
+                    showTitle: preferences.showChapterInfo,
+                    showProgress: preferences.showReadingProgress,
                     bookTitle: null,
                     footer: footer,
                     showClock: !footer,
@@ -10534,7 +10572,7 @@ class _ReaderPageState extends State<ReaderPage>
                               _reportChromeSourceProgress(value);
                             }
                           },
-                    sourceTitle: _authoredDirectory
+                    sourceTitle: _readium == null && _authoredDirectory
                         ? (offset) {
                             final anchor = _paragraphRegistry.capture(
                               offset + _readingInset,

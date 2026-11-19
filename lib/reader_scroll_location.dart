@@ -21,6 +21,8 @@ class ReaderScrollLocation extends StatefulWidget {
     this.sourceTitle,
     this.bookTitle,
     this.footer = false,
+    this.showTitle = true,
+    this.showProgress = true,
     this.showClock = false,
     this.showBattery = false,
     this.onFractionChanged,
@@ -38,7 +40,7 @@ class ReaderScrollLocation extends StatefulWidget {
   final double? Function(double viewportOffset)? sourceFraction;
   final String? Function(double viewportOffset)? sourceTitle;
   final String? bookTitle;
-  final bool footer, showClock, showBattery;
+  final bool footer, showClock, showBattery, showTitle, showProgress;
   final ValueChanged<double>? onFractionChanged;
   final Animation<double>? chrome;
   final bool reduceMotion;
@@ -177,36 +179,44 @@ class _ReaderScrollLocationState extends State<ReaderScrollLocation> {
                     showBattery: widget.showBattery,
                     interactiveLeading: true,
                     ink: widget.ink.withValues(alpha: .72),
-                    leading: ReaderChapterTitle(
-                      text: _title ?? widget.title,
-                      key: const ValueKey('reader-scroll-chapter-title'),
-                      chrome: widget.chrome,
-                      showWithChrome: false,
-                      reduceMotion: widget.reduceMotion,
-                    ),
+                    leading: !widget.showTitle
+                        ? null
+                        : ReaderChapterTitle(
+                            text: _title ?? widget.title,
+                            key: const ValueKey('reader-scroll-chapter-title'),
+                            chrome: widget.chrome,
+                            showWithChrome: false,
+                            reduceMotion: widget.reduceMotion,
+                          ),
                   )
                 : Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
                     children: [
-                      Expanded(
-                        child: widget.footer && widget.bookTitle != null
-                            ? AppText(
-                                widget.bookTitle!,
-                                key: const ValueKey('reader-scroll-book-title'),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              )
-                            : ReaderChapterTitle(
-                                text: _title ?? widget.title,
-                                chrome: widget.chrome,
-                                showWithChrome: false,
-                                reduceMotion: widget.reduceMotion,
-                              ),
-                      ),
-                      const SizedBox(width: 12),
-                      AppText(
-                        '$_percent%',
-                        key: const ValueKey('reader-scroll-percent'),
-                      ),
+                      if (widget.showTitle)
+                        Expanded(
+                          child: widget.footer && widget.bookTitle != null
+                              ? AppText(
+                                  widget.bookTitle!,
+                                  key: const ValueKey(
+                                    'reader-scroll-book-title',
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                )
+                              : ReaderChapterTitle(
+                                  text: _title ?? widget.title,
+                                  chrome: widget.chrome,
+                                  showWithChrome: false,
+                                  reduceMotion: widget.reduceMotion,
+                                ),
+                        ),
+                      if (widget.showTitle && widget.showProgress)
+                        const SizedBox(width: 12),
+                      if (widget.showProgress)
+                        AppText(
+                          '$_percent%',
+                          key: const ValueKey('reader-scroll-percent'),
+                        ),
                     ],
                   ),
           ),
