@@ -119,6 +119,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
           publication?.metadata.readingProgression == rd.ReadingProgression.rtl;
       final direction = (dx < 0 ? 1 : -1) * (rtl ? -1 : 1);
       _pagePending = true;
+      _pageIdle = Completer<void>();
       _dragInFlight = true;
       _dragLocation = null;
       onUserNavigation();
@@ -131,6 +132,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
             if (at != null) _located(at);
           }
           _pagePending = false;
+          if (_pageIdle?.isCompleted == false) _pageIdle!.complete();
         }),
       );
     } else if (_dragInFlight) {
@@ -236,6 +238,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
   }
 
   bool get turnBusy => _pagePending;
+  Completer<void>? _pageIdle;
+  Future<void> get whenPageIdle => _pageIdle?.future ?? Future<void>.value();
 
   Future<Uint8List> imageBytes(String href) async {
     if (href.startsWith("data:image/") && !href.startsWith("data:image/svg"))
@@ -471,10 +475,12 @@ class ReadiumReaderBridge extends ChangeNotifier {
     // Keep one page request in flight, matching the original animation lock.
     if (_pagePending || _disposed) return;
     _pagePending = true;
+    _pageIdle = Completer<void>();
     try {
       await command(() => turns.turn(direction, animated: animated));
     } finally {
       _pagePending = false;
+      if (_pageIdle?.isCompleted == false) _pageIdle!.complete();
     }
   }
 

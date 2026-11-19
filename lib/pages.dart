@@ -5763,7 +5763,8 @@ class _ReaderPageState extends State<ReaderPage>
       _nativeImageKey = key;
       _nativeImageTimer?.cancel();
       _nativeImageTimer = Timer(const Duration(milliseconds: 300), () async {
-        if (!mounted || _readium != engine || engine.turnBusy) return;
+        if (engine.turnBusy) await engine.whenPageIdle;
+        if (!mounted || _readium != engine || _nativeImageKey != key) return;
         final cache = _nativeImages ??= ReaderIllustrationCache(request: engine.imageBytes);
         try {
           final urls = await engine.visibleImages();
