@@ -5886,6 +5886,7 @@ class _ReaderPageState extends State<ReaderPage>
 
   void _nativeAction(String action, String text) {
     if (action == 'boundary') {
+      if (text == '已到书籍末页') unawaited(_completeReadingAtEnd(present: false));
       showNovelFeedback(context, text);
       return;
     }
@@ -6235,7 +6236,7 @@ class _ReaderPageState extends State<ReaderPage>
     _saveWhenIdle();
   }
 
-  Future<void> _completeReadingAtEnd() async {
+  Future<void> _completeReadingAtEnd({bool present = true}) async {
     if (_completionPending ||
         !_verifiedEligible ||
         _chapter != _sourceBook.chapters.length - 1 ||
@@ -6274,7 +6275,7 @@ class _ReaderPageState extends State<ReaderPage>
         );
         rethrow;
       }
-      await _presentReadingMoment();
+      if (present) await _presentReadingMoment();
     } catch (_) {
       if (mounted) showNovelFeedback(context, '阅读纪念暂未保存，请稍后重试');
     } finally {
@@ -8044,7 +8045,8 @@ class _ReaderPageState extends State<ReaderPage>
       _suspendListeningFollow();
       if (direction > 0 && _readium!.atBookEnd) {
         AppHaptics.play(context, HapticCue.boundary);
-        unawaited(_completeReadingAtEnd());
+        showNovelFeedback(context, '已到书籍末页');
+        unawaited(_completeReadingAtEnd(present: false));
       } else {
         AppHaptics.play(context, HapticCue.pageTurn);
         unawaited(
