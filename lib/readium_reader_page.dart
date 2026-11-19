@@ -393,6 +393,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
 
   Future<void> _navigate(rd.Locator at) async {
     _navigating = Platform.isAndroid;
+    if (!_disposed) notifyListeners();
     try {
       await api.goToLocator(at);
       if (Platform.isAndroid) {
@@ -418,6 +419,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       }
     } finally {
       _navigating = false;
+      if (!_disposed) notifyListeners();
     }
   }
 
@@ -453,6 +455,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
   }
 
   Future<bool> _stepPage(int direction, bool animated) async {
+    if (_disposed || _owner != this) return false;
     if (Platform.isAndroid) {
       final previousHref = (_dragLocation ?? locator)?.href;
       final result = await native.invokeMapMethod<String, dynamic>('page', {
@@ -477,33 +480,12 @@ class ReadiumReaderBridge extends ChangeNotifier {
   Future<ReadiumPageFrame?> _capturePage() async {
     if (!Platform.isAndroid || _disposed || _owner != this || !_styleReady)
       return null;
-    final raw = await native.invokeMethod<String>('evaluate', {
-      'script':
-          '''(function(){
-        var w=innerWidth,h=innerHeight,v=${_preferences.verticalText == true};
-        var spans=[];
-        if(${_appearance.pageEffect == ReaderPageEffect.staggered}) document.querySelectorAll('p,li,h1,h2,h3,h4,h5,h6,pre,table,figure,img').forEach(function(e){
-          if(e.closest('rt,script,style,[data-readium]'))return;
-          Array.from(e.getClientRects()).forEach(function(r){
-            if(r.right<=0||r.left>=w||r.bottom<=0||r.top>=h)return;
-            var a=Math.max(0,v?r.left:r.top),b=Math.min(v?w:h,v?r.right:r.bottom);
-            if(b>a)spans.push([a,b]);
-          });
-        });
-        spans.sort(function(a,b){return a[0]-b[0]});
-        var merged=[];
-        spans.forEach(function(s){var last=merged[merged.length-1];if(last&&s[0]<=last[1]+1)last[1]=Math.max(last[1],s[1]);else merged.push(s);});
-        var cuts=[0];for(var i=1;i<merged.length;i++)cuts.push((merged[i-1][1]+merged[i][0])/2/(v?w:h));cuts.push(1);
-        var bands=[];for(var i=1;i<cuts.length;i++)bands.push(v?[cuts[i-1],0,cuts[i],1]:[0,cuts[i-1],1,cuts[i]]);
-        var c=getComputedStyle(document.documentElement).backgroundColor.match(/[\\d.]+/g)||[255,255,255];
-        return JSON.stringify({bands:bands,color:c.slice(0,3).map(Number)});
-      })()''',
+    if (_navigating) return null;
+    final revision = _seekTicket, style = _preferencesTicket;
+    final pixels = await native.invokeMapMethod<String, dynamic>('capture', {
+      'bands': _appearance.pageEffect == ReaderPageEffect.staggered,
+      'vertical': _preferences.verticalText == true,
     });
-    if (raw == null) return null;
-    Object? info = jsonDecode(raw);
-    if (info is String) info = jsonDecode(info);
-    if (info is! Map) return null;
-    final pixels = await native.invokeMapMethod<String, dynamic>('capture');
     if (pixels == null) return null;
     final bytes = pixels['pixels'] as Uint8List;
     final width = pixels['width'] as int, height = pixels['height'] as int;
@@ -518,12 +500,19 @@ class ReadiumReaderBridge extends ChangeNotifier {
       decoded.complete,
     );
     final image = await decoded.future;
-    final location = await native.invokeMethod<String>('pageKey');
+    if (_disposed ||
+        _navigating ||
+        revision != _seekTicket ||
+        style != _preferencesTicket) {
+      image.dispose();
+      return null;
+    }
+    final location = pixels['locator'] as String?;
     final at = location == null
         ? null
         : jsonDecode(location) as Map<String, dynamic>;
     final loc = at?['locations'] as Map?;
-    final bands = (info['bands'] as List).map((e) {
+    final bands = (pixels['bands'] as List).map((e) {
       final r = (e as List).cast<num>();
       return Rect.fromLTRB(
         r[0].toDouble(),
@@ -532,7 +521,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
         r[3].toDouble(),
       );
     }).toList();
-    final color = (info['color'] as List).cast<num>();
+    final color = (pixels['color'] as List).cast<num>();
     return ReadiumPageFrame(
       image,
       '${at?['href']}|${loc?['currentPage']}|${loc?['progression']}',
@@ -771,7 +760,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
             );
         }
         final overrideBackground =
-            backgroundFile != null || prefs.darkPaper(dark);
+            backgroundFile != null ||
+            prefs.paper != ReaderPaper.system ||
+            prefs.darkPaper(dark);
         await native.invokeMethod<String>('style', {
           'script':
               '''(function(){
@@ -789,7 +780,20 @@ class ReadiumReaderBridge extends ChangeNotifier {
                 if(saved.bodyImage)body.style.setProperty('background-image',saved.bodyImage,saved.bodyImagePriority);else body.style.removeProperty('background-image');
                 var bg=getComputedStyle(body),html=getComputedStyle(root);
                 var opaque=bg.backgroundColor!=='rgba(0, 0, 0, 0)'&&bg.backgroundColor!=='transparent';
-                var color=${overrideBackground ? jsonEncode('#$paper') : "opaque?bg.backgroundColor:(html.backgroundColor==='rgba(0, 0, 0, 0)'?'#$paper':html.backgroundColor)"};
+                // Readium's default white root is not an authored book colour.
+                // Keep the original app paper unless the book paints html/body.
+                var authoredRoot=!!saved.color;
+                function paintsRoot(rules){
+                  for(var r of Array.from(rules||[])){
+                    if(r.selectorText&&r.style){try{if(root.matches(r.selectorText)&&(r.style.background||r.style.backgroundColor))return true;}catch(e){}}
+                    if(r.cssRules&&(!r.media||matchMedia(r.conditionText||'all').matches)&&paintsRoot(r.cssRules))return true;
+                  }return false;
+                }
+                for(var sheet of Array.from(document.styleSheets)){
+                  if(/readium_assets|readium-css/i.test(sheet.href||'')||/readium|wenku/i.test(sheet.ownerNode&&sheet.ownerNode.id||''))continue;
+                  try{if(paintsRoot(sheet.cssRules))authoredRoot=true;}catch(e){}
+                }
+                var color=${overrideBackground ? jsonEncode('#$paper') : "opaque?bg.backgroundColor:(authoredRoot?html.backgroundColor:'#$paper')"};
                 var image=${overrideBackground ? "'none'" : "bg.backgroundImage!=='none'?bg.backgroundImage:html.backgroundImage"};
                 s=document.createElement('style');s.id='wenku-reader-preferences';
                 s.textContent=${jsonEncode(css.toString())} + (image!=='none'&&!${overrideBackground}?'html{background-size:'+bg.backgroundSize+';background-repeat:'+bg.backgroundRepeat+';background-position:'+bg.backgroundPosition+';background-attachment:fixed;}':'');document.head.appendChild(s);
@@ -903,7 +907,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       : ReadiumPageSurface(
           controller: turns,
           frameKey:
-              "${locator?.href}|$fraction|$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady",
+              "${locator?.href}|$fraction|$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|$_seekTicket|$_navigating|${_appearance.pageEffect}",
           preferences: _appearance,
           paper: _appearance.background(_dark),
           capture: _capturePage,

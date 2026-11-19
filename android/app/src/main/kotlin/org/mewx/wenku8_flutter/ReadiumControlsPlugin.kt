@@ -32,7 +32,7 @@ class ReadiumControlsPlugin : FlutterPlugin {
                                 val moved = ReadiumReader.appTurnPage(call.argument<Int>("direction") ?: 1, animated)
                                 result.success(mapOf("moved" to moved, "locator" to ReadiumReader.appPageKeyJson()))
                             }
-                            "capture" -> result.success(ReadiumReader.appCapturePage())
+                            "capture" -> result.success(ReadiumReader.appCapturePage(call.argument<Boolean>("bands") == true, call.argument<Boolean>("vertical") == true))
                             "decorations" -> {
                                 val marks = call.argument<List<Map<String, Any>>>("marks") ?: emptyList()
                                 ReadiumReader.applyAppDecorations(marks, call.argument<String>("group") ?: "wenku")

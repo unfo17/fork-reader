@@ -155,48 +155,122 @@ object ReadiumReader :
     // Snapshot identity must not resolve DOM selectors or traverse the TOC.
     fun appPageKeyJson(): String? = epubNavigator?.currentLocator?.value?.toJSON()?.toString()
 
-    suspend fun appCapturePage(): Map<String, Any>? {
-        val view = currentReaderWidget?.getView() ?: return null
-        if (view.width <= 0 || view.height <= 0) return null
-        fun webView(node: android.view.View): android.webkit.WebView? {
-            if (node is android.webkit.WebView && node.isShown && node.getGlobalVisibleRect(android.graphics.Rect())) return node
-            if (node is android.view.ViewGroup) for (i in 0 until node.childCount) webView(node.getChildAt(i))?.let { return it }
-            return null
-        }
-        webView(view)?.let { web ->
-            kotlinx.coroutines.withTimeoutOrNull(160) {
-                kotlinx.coroutines.suspendCancellableCoroutine<Unit> { c ->
-                    web.invalidate()
-                    web.postVisualStateCallback(System.nanoTime(), object : android.webkit.WebView.VisualStateCallback() {
-                        override fun onComplete(requestId: Long) { if (c.isActive) c.resumeWith(Result.success(Unit)) }
-                    })
+    suspend fun appCapturePage(includeBands: Boolean = false, vertical: Boolean = false): Map<String, Any>? {
+        val root = currentReaderWidget?.getView() ?: return null
+        // A preloaded neighbour may still be partly visible during a TOC jump.
+        // Read geometry and pixels from the very same, most visible WebView.
+        var web: android.webkit.WebView? = null
+        var largest = 0L
+        fun visit(node: android.view.View) {
+            if (node is android.webkit.WebView) {
+                val rect = android.graphics.Rect()
+                if (node.isShown && node.getGlobalVisibleRect(rect)) {
+                    val area = rect.width().toLong() * rect.height()
+                    if (area > largest) { largest = area; web = node }
                 }
+            } else if (node is android.view.ViewGroup) for (i in 0 until node.childCount) visit(node.getChildAt(i))
+        }
+        visit(root)
+        val view = web ?: return null
+        if (view.width <= 0 || view.height <= 0) return null
+        val locator = appPageKeyJson() ?: return null
+        kotlinx.coroutines.withTimeoutOrNull(80) {
+            kotlinx.coroutines.suspendCancellableCoroutine<Unit> { c ->
+                view.postVisualStateCallback(System.nanoTime(), object : android.webkit.WebView.VisualStateCallback() {
+                    override fun onComplete(requestId: Long) { if (c.isActive) c.resumeWith(Result.success(Unit)) }
+                })
             }
         }
-        // Bound transient memory on high-resolution tablets; only two pages are retained.
-        val scale = kotlin.math.min(1.0, kotlin.math.sqrt(4000000.0 / view.width / view.height))
+        val metadata = kotlinx.coroutines.withTimeoutOrNull(200) {
+            kotlinx.coroutines.suspendCancellableCoroutine<String?> { c ->
+                view.evaluateJavascript("""
+                    (function(){
+                        if(document.fonts && document.fonts.status!=='loaded')return null;
+                        var w=innerWidth,h=innerHeight,v=$vertical,spans=[];
+                        function add(r){
+                            if(r.right<=0||r.left>=w||r.bottom<=0||r.top>=h)return;
+                            var a=Math.max(0,(v?r.left:r.top)-.8),b=Math.min(v?w:h,(v?r.right:r.bottom)+.8);
+                            if(b>a)spans.push([a,b]);
+                        }
+                        if($includeBands){
+                            var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT),node,range=document.createRange();
+                            while(node=walker.nextNode()){
+                                if(!node.textContent.trim()||!node.parentElement||node.parentElement.closest('script,style,[data-readium]'))continue;
+                                var visible=Array.from(node.parentElement.getClientRects()).some(function(r){return r.right>0&&r.left<w&&r.bottom>0&&r.top<h;});
+                                if(!visible)continue;
+                                range.selectNodeContents(node);Array.from(range.getClientRects()).forEach(add);
+                            }
+                            document.querySelectorAll('img,svg,table,video,canvas').forEach(function(e){Array.from(e.getClientRects()).forEach(add);});
+                        }
+                        spans.sort(function(a,b){return a[0]-b[0]});
+                        var merged=[];spans.forEach(function(s){var last=merged[merged.length-1];if(last&&s[0]<=last[1]+.5)last[1]=Math.max(last[1],s[1]);else merged.push(s);});
+                        var gaps=[];for(var i=1;i<merged.length;i++)if(merged[i][0]>merged[i-1][1])gaps.push([merged[i-1][1]/(v?w:h),merged[i][0]/(v?w:h)]);
+                        var color=getComputedStyle(document.documentElement).backgroundColor.match(/[\d.]+/g)||[255,255,255];
+                        return JSON.stringify({gaps:gaps,color:color.slice(0,3).map(Number)});
+                    })();
+                """.trimIndent()) { value -> if (c.isActive) c.resumeWith(Result.success(value)) }
+            }
+        } ?: return null
+        if (metadata == "null" || locator != appPageKeyJson()) return null
+        val info = JSONObject(org.json.JSONTokener(metadata).nextValue() as String)
+        // Animation textures need not match the device's full framebuffer. A
+        // 1600px long edge bounds transfer/upload work; live reading stays native.
+        val scale = kotlin.math.min(1.0, 1600.0 / kotlin.math.max(view.width, view.height))
         val bitmap = android.graphics.Bitmap.createBitmap((view.width * scale).toInt().coerceAtLeast(1), (view.height * scale).toInt().coerceAtLeast(1), android.graphics.Bitmap.Config.ARGB_8888)
         return try {
             val canvas = android.graphics.Canvas(bitmap)
             canvas.scale(scale.toFloat(), scale.toFloat())
             view.draw(canvas)
-            // Send explicit RGBA pixels: PNG compression and decoding add two
-            // avoidable full-page CPU passes for each side of every turn.
             withContext(Dispatchers.Default) {
                 val width = bitmap.width
                 val height = bitmap.height
-                val colors = IntArray(width * height)
-                bitmap.getPixels(colors, 0, width, 0, 0, width, height)
-                val rgba = ByteArray(colors.size * 4)
-                for (i in colors.indices) {
-                    val argb = colors[i]
-                    val offset = i * 4
-                    rgba[offset] = (argb ushr 16).toByte()
-                    rgba[offset + 1] = (argb ushr 8).toByte()
-                    rgba[offset + 2] = argb.toByte()
-                    rgba[offset + 3] = (argb ushr 24).toByte()
+                // Android's software ARGB_8888 buffer is RGBA byte order. Copy
+                // once in native code rather than allocating an IntArray and
+                // converting every pixel in a Kotlin loop.
+                val rgba = ByteArray(bitmap.byteCount)
+                bitmap.copyPixelsToBuffer(java.nio.ByteBuffer.wrap(rgba))
+                val length = if (vertical) width else height
+                val breadth = if (vertical) height else width
+                val empty = ByteArray(length) { -1 }
+                fun blank(line: Int): Boolean {
+                    if (line !in 0 until length) return false
+                    if (empty[line] >= 0) return empty[line].toInt() == 1
+                    val first = if (vertical) line * 4 else line * width * 4
+                    val r = rgba[first].toInt() and 255
+                    val g = rgba[first+1].toInt() and 255
+                    val b = rgba[first+2].toInt() and 255
+                    for (i in 1 until breadth) {
+                        val offset = if (vertical) (i * width + line) * 4 else (line * width + i) * 4
+                        if (kotlin.math.abs((rgba[offset].toInt() and 255)-r)>12 || kotlin.math.abs((rgba[offset+1].toInt() and 255)-g)>12 || kotlin.math.abs((rgba[offset+2].toInt() and 255)-b)>12) {
+                            empty[line]=0; return false
+                        }
+                    }
+                    empty[line]=1; return true
                 }
-                mapOf("width" to width, "height" to height, "pixels" to rgba)
+                val cuts = mutableListOf(0.0)
+                val gaps = info.getJSONArray("gaps")
+                for (i in 0 until gaps.length()) {
+                    val gap = gaps.getJSONArray(i)
+                    val low = kotlin.math.ceil(gap.getDouble(0)*length).toInt().coerceIn(1,length-1)
+                    val high = kotlin.math.floor(gap.getDouble(1)*length).toInt().coerceIn(1,length-1)
+                    if (low > high) continue
+                    val middle = (low+high)/2
+                    var found = -1
+                    for (distance in 0..(high-low)) {
+                        for (line in intArrayOf(middle-distance,middle+distance)) {
+                            if (line in low..high && blank(line-1) && blank(line)) { found=line; break }
+                        }
+                        if (found >= 0) break
+                    }
+                    // An uncertain line is kept intact with its neighbour.
+                    // Never trust a stale DOM midpoint enough to slice ink.
+                    if (found >= 0 && found.toDouble()/length > cuts.last()) cuts.add(found.toDouble()/length)
+                }
+                cuts.add(1.0)
+                val bands = cuts.zipWithNext { a,b -> if (vertical) listOf(a,0.0,b,1.0) else listOf(0.0,a,1.0,b) }
+                val color = info.getJSONArray("color")
+                mapOf("width" to width, "height" to height, "pixels" to rgba,
+                    "bands" to bands, "color" to (0..2).map { color.getInt(it) }, "locator" to locator)
             }
         } finally { bitmap.recycle() }
     }

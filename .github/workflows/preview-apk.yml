@@ -25,6 +25,24 @@ jobs:
           flutter pub get
           dart run tools/verify_readium.dart
           dart analyze --no-fatal-warnings lib
+      - name: Verify private animation regressions
+        env:
+          READER_QA: ${{ secrets.READIUM_ANIMATION_QA }}
+        run: |
+          python3 - <<'PYCODE'
+          import base64, os, pathlib, shutil
+          qa=pathlib.Path('.reader-qa');qa.mkdir()
+          (qa/'page_turn_test.dart').write_bytes(base64.b64decode(os.environ['READER_QA'],validate=True))
+          for file in ['pubspec.yaml','pubspec.lock']:shutil.copyfile(file,qa/file)
+          path=pathlib.Path('pubspec.yaml')
+          path.write_text(path.read_text().replace('dev_dependencies:', 'dev_dependencies:\n  flutter_test:\n    sdk: flutter',1))
+          PYCODE
+          flutter pub get
+          flutter test --reporter expanded .reader-qa/page_turn_test.dart
+          cp .reader-qa/pubspec.yaml pubspec.yaml
+          cp .reader-qa/pubspec.lock pubspec.lock
+          rm -rf .reader-qa
+          flutter pub get
       - name: Restore persistent release signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.READIUM_KEYSTORE_BASE64 }}
@@ -44,7 +62,7 @@ jobs:
           props.write_text('storeFile='+str(key)+'\nstorePassword='+os.environ['STORE_PASSWORD']+'\nkeyPassword='+os.environ['KEY_PASSWORD']+'\nkeyAlias='+os.environ['KEY_ALIAS']+'\n');props.chmod(0o600)
           PYCODE
       - name: Build APK
-        run: flutter build apk --release --target-platform android-arm64 --build-name=0.5.6-readium-preview.8 --build-number=2313
+        run: flutter build apk --release --target-platform android-arm64 --build-name=0.5.6-readium-preview.9 --build-number=2314
       - name: Verify and package APK
         env:
           EXPECTED_CERT: ${{ vars.READIUM_SIGNING_SHA256 }}
@@ -84,4 +102,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create readium-preview-20261119.8 release/* --target "$GITHUB_SHA" --prerelease --title "Readium 阅读体验预览版 8" --notes-file RELEASE_PREVIEW.md
+          gh release create readium-preview-20261119.9 release/* --target "$GITHUB_SHA" --prerelease --title "Readium 阅读体验预览版 9" --notes-file RELEASE_PREVIEW.md
