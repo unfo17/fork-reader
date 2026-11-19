@@ -10676,7 +10676,7 @@ class _ReaderPageState extends State<ReaderPage>
               child: ReaderArticleBoundary(
                 key: const ValueKey('reader-article-boundary'),
                 child: ColoredBox(
-                  color: Theme.of(context).colorScheme.surface,
+                  color: _readium?.pagePaper ?? Theme.of(context).colorScheme.surface,
                   child: CallbackShortcuts(
                     bindings: {
                       const SingleActivator(LogicalKeyboardKey.pageDown): () =>

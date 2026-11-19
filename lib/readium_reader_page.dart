@@ -150,6 +150,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
   final turns = ReadiumPageTurnController();
   ReaderPreferences _appearance = const ReaderPreferences();
   bool _dark = false;
+  Color? _pagePaper;
+  Color get pagePaper => _pagePaper ?? _appearance.background(_dark);
   void motionPreferences(ReaderPreferences preferences, bool dark) {
     _appearance = preferences;
     _dark = dark;
@@ -831,6 +833,28 @@ class ReadiumReaderBridge extends ChangeNotifier {
               '''(function(){
                 var root=document.documentElement,body=document.body;
                 if(!body)return;
+                if(!window.__wenkuPageReady)window.__wenkuPageReady=function(){
+                  if(document.readyState!=='complete')return false;
+                  var ready=true,w=innerWidth,h=innerHeight;
+                  for(var img of Array.from(document.images)){
+                    var r=img.getBoundingClientRect();
+                    if(r.right<=0||r.left>=w||r.bottom<=0||r.top>=h)continue;
+                    if(!img.complete){ready=false;continue;}
+                    if(!img.naturalWidth||!img.decode)continue;
+                    var src=img.currentSrc||img.src;
+                    if(img.__wenkuDecoded===src)continue;
+                    ready=false;
+                    if(img.__wenkuDecoding!==src){
+                      img.__wenkuDecoding=src;
+                      (function(image,url){image.decode().catch(function(){}).then(function(){image.__wenkuDecoded=url;});})(img,src);
+                    }
+                  }return ready;
+                };
+                if(!window.__wenkuImageLoadHook){
+                  window.__wenkuImageLoadHook=true;
+                  window.addEventListener('load',function(){window.__wenkuPageReady();},{once:true});
+                }
+                window.__wenkuPageReady();
                 var signature=${jsonEncode(_appliedStyleSignature)};
                 if(window.__wenkuAppliedStyle===signature)return;
                 window.__wenkuAppliedStyle=signature;
@@ -916,7 +940,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     ) {
       final sample = await native.invokeMethod<String>('evaluate', {
         'script':
-            '(function(){document.body.offsetHeight;return document.fonts.status+"|"+innerWidth+"|"+innerHeight+"|"+document.documentElement.scrollWidth+"|"+document.documentElement.scrollHeight+"|"+scrollX+"|"+scrollY+"|"+getComputedStyle(document.body).fontSize+"|"+(window.__wenkuAppliedStyle||"");})()',
+            '(function(){document.body.offsetHeight;return (window.__wenkuPageReady&&!window.__wenkuPageReady()?"pending":document.fonts.status)+"|"+innerWidth+"|"+innerHeight+"|"+document.documentElement.scrollWidth+"|"+document.documentElement.scrollHeight+"|"+scrollX+"|"+scrollY+"|"+getComputedStyle(document.body).fontSize+"|"+(window.__wenkuAppliedStyle||"")+"|"+getComputedStyle(document.documentElement).backgroundColor;})()',
       });
       if (sample != null &&
           sample.contains('loaded') &&
@@ -927,7 +951,20 @@ class ReadiumReaderBridge extends ChangeNotifier {
         stable++;
       else
         stable = 0;
-      if (stable >= 3) return;
+      if (stable >= 3) {
+        final rgb = RegExp(r'rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)').firstMatch(sample!);
+        if (rgb != null) {
+          final paper = rgb[4] != null && double.parse(rgb[4]!) == 0
+              ? _appearance.background(_dark)
+              : Color.fromARGB(255, int.parse(rgb[1]!), int.parse(rgb[2]!), int.parse(rgb[3]!));
+          await native.invokeMethod<void>('paper', {'color': paper.toARGB32()});
+          if (!_disposed && _pagePaper != paper) {
+            _pagePaper = paper;
+            notifyListeners();
+          }
+        }
+        return;
+      }
       previous = sample;
       await Future<void>.delayed(const Duration(milliseconds: 50));
     }
@@ -977,7 +1014,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
           frameKey:
               "${locator?.href}|$fraction|$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|$_seekTicket|$_navigating|${_appearance.pageEffect}",
           preferences: _appearance,
-          paper: _appearance.background(_dark),
+          paper: pagePaper,
           capture: _capturePage,
           step: _stepPage,
           child: Stack(

@@ -41,17 +41,19 @@ jobs:
       - name: Verify private animation regressions
         env:
           READER_QA: ${{ secrets.READIUM_ANIMATION_QA }}
+          RENDER_QA: ${{ secrets.READIUM_RENDER_QA }}
         run: |
           python3 - <<'PYCODE'
           import base64, os, pathlib, shutil
           qa=pathlib.Path('.reader-qa');qa.mkdir()
           (qa/'page_turn_test.dart').write_bytes(base64.b64decode(os.environ['READER_QA'],validate=True))
+          (qa/'render_test.dart').write_bytes(base64.b64decode(os.environ['RENDER_QA'],validate=True))
           for file in ['pubspec.yaml','pubspec.lock']:shutil.copyfile(file,qa/file)
           path=pathlib.Path('pubspec.yaml')
           path.write_text(path.read_text().replace('dev_dependencies:', 'dev_dependencies:\n  flutter_test:\n    sdk: flutter',1))
           PYCODE
           flutter pub get
-          flutter test --reporter expanded .reader-qa/page_turn_test.dart
+          flutter test --reporter expanded .reader-qa/
           cp .reader-qa/pubspec.yaml pubspec.yaml
           cp .reader-qa/pubspec.lock pubspec.lock
           rm -rf .reader-qa

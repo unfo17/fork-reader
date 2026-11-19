@@ -15,10 +15,10 @@ const releaseRightsNotice =
 const releaseReadingNotice = '**在线内容以轻小说文库开放状态为准，不提供因版权限制而停止开放的在线书籍阅读。**';
 const releaseMaintenanceNotice =
     '这是基于 Wenku8_Flutter 的 Readium 本地阅读预览分支，问题与修改反馈请提交到本分支。';
-const _interruption = '自动更新现已连接 unfo17/fork-reader，支持本仓库的 Readium 预览版。';
-const _cache = '通过 GitHub 官方资产 API 下载 APK，避免网页下载入口超时；按构建号检查更新。';
-const _retry = '下载后继续校验文件大小、SHA-256、包名、版本与签名，使用系统安装器覆盖更新。';
-const _resources = '预览版 9 及更早版本需手动覆盖安装一次，此后可在应用内更新。';
+const _interruption = '翻页截图恢复原生像素尺寸，改善仿真翻页与段落接续中的文字清晰度。';
+const _cache = '复用正在预热的图片页截图，等待可见图片解码完成后再显示新页面。';
+const _retry = '将 EPUB 实际纸色同步到原生外围和阅读页面底色。';
+const _resources = '保留原阅读控件及当前仓库自动更新，沿用固定签名覆盖安装。';
 const _changes = [_interruption, _cache, _retry, _resources];
 const _androidInstall =
     '**Android**：本版起使用固定签名。前两版临时私钥未保留，不能直接覆盖；请先在旧版导出备份，再迁移安装。固定签名版之间可覆盖更新。';

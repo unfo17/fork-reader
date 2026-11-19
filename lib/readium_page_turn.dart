@@ -134,6 +134,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   ReadiumPageFrame? _cached;
   Timer? _warmTimer;
   bool _warming = false;
+  Completer<void>? _warmDone;
   int _warmRetries = 0;
   void _warmLater() {
     _warmTimer?.cancel();
@@ -146,10 +147,11 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
           widget.preferences.pageEffect == ReaderPageEffect.none)
         return;
       _warming = true;
+      final done = _warmDone = Completer<void>();
       final key = widget.frameKey;
       try {
         final frame = await widget.capture();
-        if (mounted && !_busy && key == widget.frameKey) {
+        if (mounted && key == widget.frameKey) {
           _cached = frame;
         } else {
           frame?.dispose();
@@ -158,12 +160,25 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         /* A warm image is optional. */
       } finally {
         _warming = false;
+        done.complete();
         if (mounted &&
             (key != widget.frameKey ||
                 (!_busy && _cached == null && _warmRetries++ < 3)))
           _warmLater();
       }
     });
+  }
+
+  Future<ReadiumPageFrame?> _takeFrame(
+    Future<ReadiumPageFrame?> Function() capture,
+  ) async {
+    // A warm capture already owns the native view. Reuse it instead of drawing
+    // and uploading the same image page twice when a gesture starts early.
+    if (_warming) await _warmDone?.future;
+    if (!mounted) return null;
+    final frame = _cached;
+    _cached = null;
+    return frame ?? await capture();
   }
 
   void _scrub({bool shapeChanged = false}) {
@@ -245,9 +260,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _busy = true;
     ReadiumPageFrame? frame;
     try {
-      frame = _cached;
-      _cached = null;
-      frame ??= await (capture ?? widget.capture)();
+      frame = await _takeFrame(capture ?? widget.capture);
       if (mounted && frame != null) {
         setState(() {
           _from = frame;
@@ -289,9 +302,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     ReadiumPageFrame? from, to;
     var moved = false, committed = false;
     try {
-      from = _cached;
-      _cached = null;
-      from ??= await widget.capture();
+      from = await _takeFrame(widget.capture);
       if (!mounted) return;
       if (from == null) {
         if (gesture == null || await gesture.future)
@@ -392,7 +403,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   }
 
   Widget _leaf(ReadiumPageFrame frame, bool incoming) {
-    final image = RawImage(image: frame.image, fit: BoxFit.fill);
+    final image = RawImage(image: frame.image, fit: BoxFit.fill, filterQuality: FilterQuality.none);
     if (_effect == ReaderPageEffect.staggered) {
       return CustomPaint(
         painter: _ReadiumParagraphTurn(
@@ -520,7 +531,12 @@ class _ReadiumParagraphTurn extends CustomPainter {
         b.right * size.width,
         b.bottom * size.height,
       );
-      final offset = scope.displacementFor(i, bands.length, bounds: bounds);
+      final motion = scope.displacementFor(i, bands.length, bounds: bounds);
+      // Translate rasterized text by physical pixels, preserving its glyph
+      // coverage instead of filtering it again at every fractional offset.
+      final sx = frame.image.width / size.width;
+      final sy = frame.image.height / size.height;
+      final offset = Offset((motion.dx * sx).round() / sx, (motion.dy * sy).round() / sy);
       canvas.drawImageRect(
         frame.image,
         Rect.fromLTRB(
@@ -530,7 +546,7 @@ class _ReadiumParagraphTurn extends CustomPainter {
           b.bottom * frame.image.height,
         ),
         bounds.shift(offset),
-        Paint(),
+        Paint()..filterQuality = FilterQuality.none,
       );
     }
   }
@@ -654,6 +670,22 @@ class _ReadiumCurl extends CustomPainter {
     }
     final top = edge + tilt * (-grip * h),
         bottom = edge + tilt * (h - grip * h);
+    final flat = Path()
+      ..moveTo(0, 0)
+      ..lineTo(top, 0)
+      ..lineTo(bottom, h)
+      ..lineTo(0, h)
+      ..close();
+    c.save();
+    c.clipPath(flat);
+    if (backwards) {
+      c.translate(w, 0);
+      c.scale(-1, 1);
+    }
+    c.drawImageRect(from.image,
+      Rect.fromLTWH(0, 0, from.image.width.toDouble(), from.image.height.toDouble()),
+      Offset.zero & size, Paint()..filterQuality = FilterQuality.none);
+    c.restore();
     final spread = radius * .8;
     final shadow = Path()
       ..moveTo(top - spread, 0)
@@ -690,7 +722,10 @@ class _ReadiumCurl extends CustomPainter {
       );
     }
 
+    c.save();
+    c.clipPath(flat, clipOp: ClipOp.difference);
     mesh(_frontIndices, frontCount, frontColors, true);
+    c.restore();
     mesh(_backIndices, backCount, backColors, false);
     mesh(_backIndices, backCount, ghostColors, true);
     c.restore();

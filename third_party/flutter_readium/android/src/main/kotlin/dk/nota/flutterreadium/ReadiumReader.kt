@@ -205,6 +205,17 @@ object ReadiumReader :
         currentReaderWidget?.getView()?.let { apply(it) }
     }
 
+    fun appSetPaper(color: Int) {
+        val root = currentReaderWidget?.getView() ?: return
+        var view: android.view.View? = appVisibleWebView()
+        while (view != null) {
+            view.setBackgroundColor(color)
+            if (view === root) break
+            view = view.parent as? android.view.View
+        }
+        root.setBackgroundColor(color)
+    }
+
     fun appOwnsPageGestures(): Boolean = appSelectionToolbar &&
         epubNavigator != null && epubNavigator?.preferences?.scroll != true &&
         appSelectionMode == null
@@ -232,6 +243,7 @@ object ReadiumReader :
                 view.evaluateJavascript("""
                     (function(){
                         if(document.fonts && document.fonts.status!=='loaded')return null;
+                        if(window.__wenkuPageReady&&!window.__wenkuPageReady())return null;
                         var w=innerWidth,h=innerHeight,v=$vertical,spans=[];
                         function add(r){
                             if(r.right<=0||r.left>=w||r.bottom<=0||r.top>=h)return;
@@ -259,13 +271,11 @@ object ReadiumReader :
         } ?: return null
         if (metadata == "null" || locator != appPageKeyJson()) return null
         val info = JSONObject(org.json.JSONTokener(metadata).nextValue() as String)
-        // Animation textures need not match the device's full framebuffer. A
-        // 1600px long edge bounds transfer/upload work; live reading stays native.
-        val scale = kotlin.math.min(1.0, 1600.0 / kotlin.math.max(root.width, root.height))
-        val bitmap = android.graphics.Bitmap.createBitmap((root.width * scale).toInt().coerceAtLeast(1), (root.height * scale).toInt().coerceAtLeast(1), android.graphics.Bitmap.Config.ARGB_8888)
+        // Keep one physical pixel per texel. Downsampling here blurs every
+        // glyph before the curl or paragraph animation has even transformed it.
+        val bitmap = android.graphics.Bitmap.createBitmap(root.width, root.height, android.graphics.Bitmap.Config.ARGB_8888)
         return try {
             val canvas = android.graphics.Canvas(bitmap)
-            canvas.scale(scale.toFloat(), scale.toFloat())
             root.draw(canvas)
             val identity = "${view.url}|${view.scrollX}|${view.scrollY}|$locator"
             withContext(Dispatchers.Default) {
