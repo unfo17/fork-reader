@@ -5980,7 +5980,7 @@ class _ReaderPageState extends State<ReaderPage>
               : 0),
     );
     final key =
-        '$pageInsets|${prefs.layoutKey}|${prefs.paper.name}|${prefs.nightTextBrightness}|${prefs.backgroundImage}|${prefs.backgroundOpacity}|${prefs.backgroundFit}|${prefs.hideSystemStatus}|${prefs.showStatusInfo}|${prefs.showChapterInfo}|${prefs.showReadingProgress}|$_fontSize|$_lineHeight|$_readerFontId|$dark|$hidden|$only';
+        '$pageInsets|${prefs.layoutKey}|${prefs.paper.name}|${prefs.nightTextBrightness}|${prefs.backgroundImage}|${prefs.backgroundOpacity}|${prefs.backgroundFit}|${prefs.hideSystemStatus}|${prefs.showStatusInfo}|$_fontSize|$_lineHeight|$_readerFontId|$dark|$hidden|$only';
     if (key != _nativePreferencesKey) {
       _nativePreferencesKey = key;
       // Supply initial defaults synchronously, before creating the native view.
@@ -6421,6 +6421,7 @@ class _ReaderPageState extends State<ReaderPage>
   late ReaderPaper _paper;
   late bool _hideSystemStatus;
   late bool _showStatusInfo;
+  int _footerFlags = 3;
   Widget _readerSurface(Widget child) => ReaderAppearance(
     state: widget.state,
     bookId: widget.novel.id,
@@ -6439,6 +6440,9 @@ class _ReaderPageState extends State<ReaderPage>
         _readerMode = _readerPreferences.mode;
         _hideSystemStatus = _readerPreferences.hideSystemStatus;
         _showStatusInfo = _readerPreferences.showStatusInfo;
+        _footerFlags =
+            (_readerPreferences.showChapterInfo ? 1 : 0) |
+            (_readerPreferences.showReadingProgress ? 2 : 0);
         _chapterEntrance = _readerPreferences.chapterEntrance;
       });
       return;
@@ -6453,10 +6457,14 @@ class _ReaderPageState extends State<ReaderPage>
     final mode = _readerPreferences.mode;
     final hideSystemStatus = _readerPreferences.hideSystemStatus;
     final showStatusInfo = _readerPreferences.showStatusInfo;
+    final footerFlags =
+        (_readerPreferences.showChapterInfo ? 1 : 0) |
+        (_readerPreferences.showReadingProgress ? 2 : 0);
     final chapterEntrance = _readerPreferences.chapterEntrance;
     if (mode != _readerMode ||
         hideSystemStatus != _hideSystemStatus ||
         showStatusInfo != _showStatusInfo ||
+        footerFlags != _footerFlags ||
         chapterEntrance != _chapterEntrance) {
       final position = _currentPosition();
       if (position != null) _prepareRestore(position);
@@ -6467,12 +6475,14 @@ class _ReaderPageState extends State<ReaderPage>
         mode != _readerMode ||
         hideSystemStatus != _hideSystemStatus ||
         showStatusInfo != _showStatusInfo ||
+        footerFlags != _footerFlags ||
         chapterEntrance != _chapterEntrance) {
       setState(() {
         _paper = paper;
         _readerMode = mode;
         _hideSystemStatus = hideSystemStatus;
         _showStatusInfo = showStatusInfo;
+        _footerFlags = footerFlags;
         _chapterEntrance = chapterEntrance;
       });
     }
@@ -6691,6 +6701,9 @@ class _ReaderPageState extends State<ReaderPage>
     _releaseReadingPosition = widget.state.holdReadingPosition(widget.novel.id);
     _hideSystemStatus = _readerPreferences.hideSystemStatus;
     _showStatusInfo = _readerPreferences.showStatusInfo;
+    _footerFlags =
+        (_readerPreferences.showChapterInfo ? 1 : 0) |
+        (_readerPreferences.showReadingProgress ? 2 : 0);
     _readerMode = _readerPreferences.mode;
     _chapterEntrance = _readerPreferences.chapterEntrance;
     _chromeTarget = widget.state.readerChromeVisible;
@@ -6794,6 +6807,9 @@ class _ReaderPageState extends State<ReaderPage>
       _paper = _readerPreferences.paper;
       _hideSystemStatus = _readerPreferences.hideSystemStatus;
       _showStatusInfo = _readerPreferences.showStatusInfo;
+      _footerFlags =
+          (_readerPreferences.showChapterInfo ? 1 : 0) |
+          (_readerPreferences.showReadingProgress ? 2 : 0);
     }
   }
 
@@ -11248,7 +11264,9 @@ class _ReaderPageState extends State<ReaderPage>
               prefs.rightMargin + safe.right,
               pagedBottomInset +
                   prefs.marginBottom +
-                  ReaderScrollLocation.extentOf(context),
+                  ((prefs.showChapterInfo || prefs.showReadingProgress)
+                      ? ReaderScrollLocation.extentOf(context)
+                      : 0),
             );
             ReaderPagedChapter? adjacent(int direction) {
               final index = _chapter + direction;
