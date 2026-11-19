@@ -561,7 +561,9 @@ private class AppPageGestureLayout(
                 val dx = event.x - downX
                 val dy = event.y - downY
                 if (!multiplePointers && ownsGesture() &&
-                    kotlin.math.abs(dx) > slop && kotlin.math.abs(dx) > kotlin.math.abs(dy)) {
+                    // R2WebView tracks horizontal slop even on a diagonal drag.
+                    // Own that same displacement before its native scroller starts.
+                    kotlin.math.abs(dx) > slop) {
                     dragging = true
                     onSwipe("Start", dx, dy, (event.y / height.coerceAtLeast(1)).coerceIn(0f, 1f))
                     parent?.requestDisallowInterceptTouchEvent(true)
