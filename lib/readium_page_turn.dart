@@ -438,7 +438,9 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
             child: ExcludeSemantics(
               child: ClipRect(
                 child: ColoredBox(
-                  color: _liveDestination ? Colors.transparent : frame.paper,
+                  color: _liveDestination && _to == null
+                      ? Colors.transparent
+                      : frame.paper,
                   child: Stack(
                     fit: StackFit.expand,
                     children: _effect == ReaderPageEffect.paper
