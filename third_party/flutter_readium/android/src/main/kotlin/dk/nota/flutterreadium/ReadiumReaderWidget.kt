@@ -540,6 +540,16 @@ private class AppPageGestureLayout(
     private var downY = 0f
     private var dragging = false
     private var multiplePointers = false
+    private var movePosted = false
+    private var latestX = 0f
+    private var latestY = 0f
+    private val sendMove = Runnable {
+        movePosted = false
+        if (dragging && !multiplePointers && ownsGesture()) {
+            onSwipe("Move", latestX - downX, latestY - downY,
+                (latestY / height.coerceAtLeast(1)).coerceIn(0f, 1f))
+        }
+    }
 
     override fun requestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
         // The child may request exclusivity before it knows the drag direction.
@@ -581,13 +591,19 @@ private class AppPageGestureLayout(
                 multiplePointers = true
                 onSwipe("Cancel", event.x - downX, event.y - downY, (event.y / height.coerceAtLeast(1)).coerceIn(0f, 1f))
             }
-            MotionEvent.ACTION_MOVE -> onSwipe("Move", event.x - downX, event.y - downY, (event.y / height.coerceAtLeast(1)).coerceIn(0f, 1f))
+            MotionEvent.ACTION_MOVE -> {
+                latestX = event.x
+                latestY = event.y
+                if (!movePosted) { movePosted = true; postOnAnimation(sendMove) }
+            }
             MotionEvent.ACTION_UP -> {
+                removeCallbacks(sendMove); movePosted = false
                 dragging = false
                 parent?.requestDisallowInterceptTouchEvent(false)
                 if (!multiplePointers && ownsGesture()) onSwipe("End", event.x - downX, event.y - downY, (event.y / height.coerceAtLeast(1)).coerceIn(0f, 1f))
             }
             MotionEvent.ACTION_CANCEL -> {
+                removeCallbacks(sendMove); movePosted = false
                 onSwipe("Cancel", event.x - downX, event.y - downY, (event.y / height.coerceAtLeast(1)).coerceIn(0f, 1f))
                 dragging = false
                 parent?.requestDisallowInterceptTouchEvent(false)
