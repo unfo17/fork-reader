@@ -152,8 +152,10 @@ class EpubReaderFragment :
                     var figure = img.closest ? img.closest('figure') : null;
                     var comicContainer = img.closest ? img.closest('.nota-comicbook-page-container') : null;
                     var r = img.getBoundingClientRect();
+                    var source=img.currentSrc || (typeof img.src==='string'?img.src:null) || (img.href && img.href.baseVal) || '';
+                    try { source=new URL(source,document.baseURI).href; } catch(error) {}
                     FlutterImageBridge.onImageTapped(JSON.stringify({
-                        srcUrl: img.currentSrc || (typeof img.src==='string'?img.src:null) || (img.href && img.href.baseVal) || '',
+                        srcUrl: source,
                         alt: img.getAttribute('alt') || null,
                         notaComicPageImage: !!((img.classList && img.classList.contains('page') && figure && figure.querySelector('.area')) || comicContainer),
                         rect: { x: r.left, y: r.top, width: r.width, height: r.height },

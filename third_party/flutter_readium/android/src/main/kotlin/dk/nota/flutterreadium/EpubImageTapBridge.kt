@@ -74,7 +74,7 @@ class EpubImageTapBridge {
             val allLinks = publication.readingOrder + publication.resources
             allLinks
                 .find { link ->
-                    val linkHref = URI(link.href.toString()).path.trimStart('/')
+                    val linkHref = URI(link.href.toString()).path?.trimStart('/') ?: return@find false
                     imgPath.endsWith("/$linkHref") || imgPath == linkHref
                 }?.href
                 ?.toString()

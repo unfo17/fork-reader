@@ -465,9 +465,9 @@ class _ReadiumCurl extends CustomPainter {
   final _positions = Float32List(count * 2),
       _texture = Float32List(count * 2),
       _angles = Float32List(count);
-  final _frontColors = Uint32List(count),
-      _backColors = Uint32List(count),
-      _ghostColors = Uint32List(count);
+  final _frontColors = Int32List(count),
+      _backColors = Int32List(count),
+      _ghostColors = Int32List(count);
   final _frontIndices = Uint16List(columns * rows * 6),
       _backIndices = Uint16List(columns * rows * 6);
 
@@ -570,7 +570,7 @@ class _ReadiumCurl extends CustomPainter {
         ..strokeWidth = radius * .7
         ..maskFilter = MaskFilter.blur(BlurStyle.normal, radius * .24),
     );
-    void mesh(Uint16List indices, int count, Uint32List colors, bool textured) {
+    void mesh(Uint16List indices, int count, Int32List colors, bool textured) {
       if (count == 0) return;
       final vertices = ui.Vertices.raw(
         VertexMode.triangles,
