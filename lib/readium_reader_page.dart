@@ -397,6 +397,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     try {
       await api.goToLocator(at);
       if (Platform.isAndroid) {
+        await _waitForLayoutStable();
         // The request locator may omit progression. Read the actual visual
         // position after Readium has resolved its text quote and laid it out.
         await Future<void>.delayed(const Duration(milliseconds: 240));
@@ -558,6 +559,46 @@ class ReadiumReaderBridge extends ChangeNotifier {
   }
 
   int _seekTicket = 0;
+  Future<bool> goTarget(BookReadingTarget target) async {
+    final addresses = book.navigation?.targets.entries
+        .where((entry) {
+          final value = entry.value;
+          return value.chapterId == target.chapterId &&
+              value.paragraph == target.paragraph &&
+              value.offset == target.offset;
+        })
+        .map((entry) => entry.key)
+        .toSet();
+    if (addresses == null || addresses.isEmpty) return false;
+    String decoded(String href) {
+      try {
+        return Uri.decodeFull(href);
+      } catch (_) {
+        return href;
+      }
+    }
+
+    final link = publication?.tocFlattened
+        .where(
+          (link) =>
+              addresses.any((href) => decoded(href) == decoded(link.href)),
+        )
+        .firstOrNull;
+    if (link == null) return false;
+    final ticket = ++_seekTicket;
+    _layoutAnchor = null;
+    onUserNavigation();
+    var applied = false;
+    await command(() async {
+      if (ticket != _seekTicket) return;
+      final at = publication?.locatorFromLink(link);
+      if (at == null) return;
+      applied = true;
+      await _navigate(at);
+    });
+    return applied;
+  }
+
   Future<void> go(
     int index, {
     double? progression,
@@ -853,7 +894,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     ) {
       final sample = await native.invokeMethod<String>('evaluate', {
         'script':
-            '(function(){document.body.offsetHeight;return document.fonts.status+"|"+innerWidth+"|"+innerHeight+"|"+document.documentElement.scrollWidth+"|"+document.documentElement.scrollHeight+"|"+getComputedStyle(document.body).fontSize+"|"+(window.__wenkuAppliedStyle||"");})()',
+            '(function(){document.body.offsetHeight;return document.fonts.status+"|"+innerWidth+"|"+innerHeight+"|"+document.documentElement.scrollWidth+"|"+document.documentElement.scrollHeight+"|"+scrollX+"|"+scrollY+"|"+getComputedStyle(document.body).fontSize+"|"+(window.__wenkuAppliedStyle||"");})()',
       });
       if (sample != null && sample.contains('loaded') && sample == previous)
         stable++;

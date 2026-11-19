@@ -8353,6 +8353,21 @@ class _ReaderPageState extends State<ReaderPage>
     );
     if (index < 0) return;
     _stopAutoScroll();
+    if (_readium case final engine?) {
+      unawaited(
+        engine
+            .goTarget(target)
+            .then((applied) {
+              if (!applied && mounted) {
+                _go(index, position: _bookTargetPosition(_sourceBook, target));
+              }
+            })
+            .catchError((Object _) {
+              if (mounted) showNovelFeedback(context, '原书目录跳转失败，请重试');
+            }),
+      );
+      return;
+    }
     _go(index, position: _bookTargetPosition(_sourceBook, target));
   }
 
