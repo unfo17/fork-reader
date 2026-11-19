@@ -146,7 +146,7 @@ object ReadiumReader :
     suspend fun appTurnPage(direction: Int, animated: Boolean): Boolean {
         val navigator = epubNavigator ?: return false
         val publication = currentPublication ?: return false
-        val previous = navigator.currentLocator.value
+        val previous = navigator.currentLocator?.value
         appPageTurnCrossedResource = false
         val previousVisual = appVisualPageKey()
         val previousUrl = appVisibleWebView()?.url
@@ -184,11 +184,11 @@ object ReadiumReader :
             if (direction > 0) visualGoForward(animated) else visualGoBackward(animated)
         }
         val changed = kotlinx.coroutines.withTimeoutOrNull(if (appPageTurnCrossedResource) 3000L else 1200L) {
-            while (navigator.currentLocator.value == previous && appVisualPageKey() == previousVisual) kotlinx.coroutines.delay(16)
+            while (navigator.currentLocator?.value == previous && appVisualPageKey() == previousVisual) kotlinx.coroutines.delay(16)
             true
         } == true
         if (appVisibleWebView()?.url != previousUrl) appPageTurnCrossedResource = true
-        return changed || navigator.currentLocator.value != previous || appVisualPageKey() != previousVisual
+        return changed || navigator.currentLocator?.value != previous || appVisualPageKey() != previousVisual
     }
     suspend fun appApplyStyle(script: String): String? {
         appReaderStyleScript = script
@@ -213,9 +213,12 @@ object ReadiumReader :
     fun appPageKeyJson(): String? = epubNavigator?.currentLocator?.value?.toJSON()?.toString()
 
     suspend fun appCapturePage(includeBands: Boolean = false, vertical: Boolean = false): Map<String, Any>? {
-        // Geometry and pixels belong to the same visible resource.
+        // Use the selected resource for DOM geometry, but draw its parent tree:
+        // ViewGroup.drawChild supplies the WebView's native scroll translation.
+        // Calling webView.draw directly loses that translation after TOC jumps.
+        val root = currentReaderWidget?.getView() ?: return null
         val view = appVisibleWebView() ?: return null
-        if (view.width <= 0 || view.height <= 0) return null
+        if (root.width <= 0 || root.height <= 0) return null
         val locator = appPageKeyJson() ?: return null
         kotlinx.coroutines.withTimeoutOrNull(80) {
             kotlinx.coroutines.suspendCancellableCoroutine<Unit> { c ->
@@ -258,12 +261,12 @@ object ReadiumReader :
         val info = JSONObject(org.json.JSONTokener(metadata).nextValue() as String)
         // Animation textures need not match the device's full framebuffer. A
         // 1600px long edge bounds transfer/upload work; live reading stays native.
-        val scale = kotlin.math.min(1.0, 1600.0 / kotlin.math.max(view.width, view.height))
-        val bitmap = android.graphics.Bitmap.createBitmap((view.width * scale).toInt().coerceAtLeast(1), (view.height * scale).toInt().coerceAtLeast(1), android.graphics.Bitmap.Config.ARGB_8888)
+        val scale = kotlin.math.min(1.0, 1600.0 / kotlin.math.max(root.width, root.height))
+        val bitmap = android.graphics.Bitmap.createBitmap((root.width * scale).toInt().coerceAtLeast(1), (root.height * scale).toInt().coerceAtLeast(1), android.graphics.Bitmap.Config.ARGB_8888)
         return try {
             val canvas = android.graphics.Canvas(bitmap)
             canvas.scale(scale.toFloat(), scale.toFloat())
-            view.draw(canvas)
+            root.draw(canvas)
             val identity = "${view.url}|${view.scrollX}|${view.scrollY}|$locator"
             withContext(Dispatchers.Default) {
                 val width = bitmap.width
