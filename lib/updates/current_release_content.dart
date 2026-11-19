@@ -16,7 +16,7 @@ const releaseReadingNotice = '**在线内容以轻小说文库开放状态为准
 const releaseMaintenanceNotice =
     '这是基于 Wenku8_Flutter 的 Readium 本地阅读预览分支，问题与修改反馈请提交到本分支。';
 const _interruption = '自动更新现已连接 unfo17/fork-reader，支持本仓库的 Readium 预览版。';
-const _cache = '修复预览版本、发布标签及安装包文件名匹配，按构建号检查更新。';
+const _cache = '通过 GitHub 官方资产 API 下载 APK，避免网页下载入口超时；按构建号检查更新。';
 const _retry = '下载后继续校验文件大小、SHA-256、包名、版本与签名，使用系统安装器覆盖更新。';
 const _resources = '预览版 9 及更早版本需手动覆盖安装一次，此后可在应用内更新。';
 const _changes = [_interruption, _cache, _retry, _resources];

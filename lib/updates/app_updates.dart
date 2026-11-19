@@ -19,8 +19,8 @@ const updateRepository = String.fromEnvironment(
   'UPDATE_REPOSITORY',
   defaultValue: readiumUpdateRepository,
 );
-const currentAppVersion = '0.5.6-readium-preview.10';
-const currentAppBuild = 2318;
+const currentAppVersion = '0.5.6-readium-preview.11';
+const currentAppBuild = 2319;
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {
   const ReleaseVersion(
@@ -332,7 +332,16 @@ class GithubUpdateSource implements UpdateSource {
   }
 
   Uri _assetTransport(UpdateAsset asset) {
-    if (gateway == null) return asset.url;
+    if (gateway == null) {
+      // The API binds the download to the revalidated immutable asset ID and
+      // avoids the GitHub HTML endpoint used by browser_download_url.
+      return asset.id == null
+          ? asset.url
+          : Uri.https(
+              'api.github.com',
+              '/repos/$repository/releases/assets/${asset.id}',
+            );
+    }
     final url = asset.url;
     final parts = url.pathSegments;
     if (url.scheme != 'https' ||
@@ -489,6 +498,7 @@ class GithubUpdateSource implements UpdateSource {
                     ? {gateway!.host}
                     : const {
                         'github.com',
+                        'api.github.com',
                         'release-assets.githubusercontent.com',
                         'objects.githubusercontent.com',
                       })
@@ -500,6 +510,12 @@ class GithubUpdateSource implements UpdateSource {
             .timeout(Duration(seconds: gateway == null ? 15 : 4));
         request.followRedirects = false;
         request.headers.set(HttpHeaders.cacheControlHeader, 'no-cache');
+        request.headers.set(
+          HttpHeaders.acceptHeader,
+          'application/octet-stream',
+        );
+        request.headers.set(HttpHeaders.userAgentHeader, 'Wenku8-Flutter');
+        request.headers.set('X-GitHub-Api-Version', '2022-11-28');
         final candidate = await request.close().timeout(
           Duration(seconds: gateway == null ? 30 : 8),
         );
