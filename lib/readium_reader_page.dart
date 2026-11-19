@@ -230,7 +230,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     final links = [...?publication?.resources, ...?publication?.readingOrder];
     return [for (final source in paths)
       ...links.where((link) {
-        try { return Uri.parse(source).path.endsWith('/'+Uri.decodeFull(link.href).split('#').first); }
+        try { return Uri.parse(source).pathSegments.join('/').endsWith('/'+Uri.parse(link.href).pathSegments.join('/')); }
         catch (_) { return false; }
       }).take(1).map((link)=>link.href)];
   }

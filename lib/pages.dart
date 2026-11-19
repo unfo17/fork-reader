@@ -5893,6 +5893,11 @@ class _ReaderPageState extends State<ReaderPage>
       return;
     }
     if (action == 'image') {
+      if (_nativeSelection != null) {
+        _selection.clear();
+        setState(() => _nativeSelection = null);
+        unawaited(_readium!.clearSelection());
+      }
       unawaited(_openNativeImage(text));
       return;
     }

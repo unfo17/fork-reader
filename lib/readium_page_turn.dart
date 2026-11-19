@@ -590,175 +590,104 @@ class _ReadiumCurl extends CustomPainter {
   final Animation<double> clock;
   final double direction;
   final double Function() touchY, startY;
-  static const columns = 32, rows = 8, count = (columns + 1) * (rows + 1);
-  final _positions = Float32List(count * 2),
-      _texture = Float32List(count * 2),
-      _angles = Float32List(count);
-  final _frontColors = Int32List(count),
-      _backColors = Int32List(count),
-      _ghostColors = Int32List(count);
-  final _frontIndices = Uint16List(columns * rows * 6),
-      _backIndices = Uint16List(columns * rows * 6);
+  static const segments = 24, capacity = 192;
+  final _positions = Float32List(capacity * 2), _texture = Float32List(capacity * 2);
+  final _frontColors = Int32List(capacity), _backColors = Int32List(capacity), _ghostColors = Int32List(capacity);
+  final _frontIndices = Uint16List(capacity * 3), _backIndices = Uint16List(capacity * 3);
 
   @override
   void paint(Canvas c, Size size) {
     final t = clock.value.clamp(0.0, 1.0);
     if (t >= 1) return;
+    final source = Rect.fromLTWH(0, 0, from.image.width.toDouble(), from.image.height.toDouble());
     if (t <= 0) {
-      c.drawImageRect(
-        from.image,
-        Rect.fromLTWH(
-          0,
-          0,
-          from.image.width.toDouble(),
-          from.image.height.toDouble(),
-        ),
-        Offset.zero & size,
-        Paint(),
-      );
+      c.drawImageRect(from.image, source, Offset.zero & size, Paint()..filterQuality = FilterQuality.none);
       return;
     }
     final w = size.width, h = size.height, backwards = direction < 0;
     final initial = startY().clamp(0.0, 1.0);
     final anchorY = initial < .25 ? 0.0 : initial > .75 ? h : initial * h;
-    final gripWeight = (t / .12).clamp(0.0, 1.0) * ((1 - t) / .15).clamp(0.0, 1.0);
-    final fingerY = anchorY + (touchY() * h - anchorY) * gripWeight;
-    // The touch travels across two sheet widths. The reflected back leaves
-    // the screen at mid-turn instead of collapsing towards the page centre.
-    final drag = Offset(w * (1 - 2 * t), fingerY);
+    final weight = (t / .12).clamp(0.0, 1.0) * ((1 - t) / .15).clamp(0.0, 1.0);
     final anchor = Offset(w, anchorY);
+    final drag = Offset(w * (1 - 2 * t), anchorY + (touchY() * h - anchorY) * weight);
     final delta = anchor - drag;
-    final length = delta.distance.clamp(.001, double.infinity);
-    final nx = delta.dx / length, ny = delta.dy / length;
+    final normal = delta / delta.distance.clamp(.001, double.infinity);
     final centre = (anchor + drag) / 2;
     final radius = w * .045 * math.sin(math.pi * t);
-    final edge = centre.dx;
-    final top = centre.dx + ny * centre.dy / nx;
-    final bottom = centre.dx - ny * (h - centre.dy) / nx;
-    final positions = _positions, texture = _texture, angles = _angles;
-    final frontColors = _frontColors,
-        backColors = _backColors,
-        ghostColors = _ghostColors;
-    final paper = from.paper.toARGB32();
-    final red = (paper >> 16) & 255,
-        green = (paper >> 8) & 255,
-        blue = paper & 255;
-    for (var j = 0; j <= rows; j++)
-      for (var i = 0; i <= columns; i++) {
-        final k = j * (columns + 1) + i, x = w * i / columns, y = h * j / rows;
-        final d = (x - centre.dx) * nx + (y - centre.dy) * ny;
-        double xx = x, yy = y, angle = 0;
-        if (d > 0) {
-          angle = math.min(math.pi, d / radius);
-          final along = d > math.pi * radius
-              ? -(d - math.pi * radius)
-              : radius * math.sin(angle);
-          xx += nx * (along - d);
-          yy += ny * (along - d);
-          // No projection towards the touch point: a developable sheet keeps
-          // its top/bottom lengths and may protrude beyond the viewport.
-
+    final arc = math.pi * radius;
+    double distance(Offset p) => (p.dx-centre.dx)*normal.dx + (p.dy-centre.dy)*normal.dy;
+    final page = [Offset.zero, Offset(w,0), Offset(w,h), Offset(0,h)];
+    List<Offset> clip(List<Offset> input, double edge, bool greater) {
+      if (input.isEmpty) return input;
+      final output = <Offset>[];
+      var previous = input.last, pd = distance(previous);
+      var inside = greater ? pd >= edge : pd <= edge;
+      for (final point in input) {
+        final d = distance(point), nextInside = greater ? d >= edge : d <= edge;
+        if (inside != nextInside) output.add(Offset.lerp(previous,point,(edge-pd)/(d-pd))!);
+        if (nextInside) output.add(point);
+        previous=point;pd=d;inside=nextInside;
+      }
+      return output;
+    }
+    var vertices=0, fronts=0, backs=0;
+    final red=(from.paper.toARGB32()>>16)&255, green=(from.paper.toARGB32()>>8)&255, blue=from.paper.toARGB32()&255;
+    void append(List<Offset> polygon, bool back) {
+      if (polygon.length < 3) return;
+      final first=vertices;
+      for (final point in polygon) {
+        final d=distance(point), angle=(d/radius).clamp(0.0,math.pi);
+        final along=d>arc ? arc-d : radius*math.sin(angle);
+        final bent=point+normal*(along-d);
+        _positions[vertices*2]=bent.dx;_positions[vertices*2+1]=bent.dy;
+        _texture[vertices*2]=(backwards?w-point.dx:point.dx)/w*from.image.width;
+        _texture[vertices*2+1]=point.dy/h*from.image.height;
+        final shade=(255*(1-.22*math.sin(angle))).round();
+        _frontColors[vertices]=0xff000000|(shade<<16)|(shade<<8)|shade;
+        _backColors[vertices]=0xff000000|((red*shade~/255)<<16)|((green*shade~/255)<<8)|(blue*shade~/255);
+        _ghostColors[vertices]=0x16ffffff;
+        vertices++;
+      }
+      for(var i=1;i<polygon.length-1;i++) {
+        if(back) {
+          _backIndices[backs++]=first;_backIndices[backs++]=first+i;_backIndices[backs++]=first+i+1;
+        } else {
+          _frontIndices[fronts++]=first;_frontIndices[fronts++]=first+i;_frontIndices[fronts++]=first+i+1;
         }
-        positions[k * 2] = xx;
-        positions[k * 2 + 1] = yy;
-        texture[k * 2] = (backwards ? w - x : x) / w * from.image.width;
-        texture[k * 2 + 1] = y / h * from.image.height;
-        angles[k] = angle;
-        final shade = (255 * (1 - .22 * math.sin(angle))).round();
-        frontColors[k] = 0xff000000 | (shade << 16) | (shade << 8) | shade;
-        backColors[k] =
-            0xff000000 |
-            ((red * shade ~/ 255) << 16) |
-            ((green * shade ~/ 255) << 8) |
-            (blue * shade ~/ 255);
-        ghostColors[k] = 0x16ffffff;
       }
-    var frontCount = 0, backCount = 0;
-    for (var j = 0; j < rows; j++)
-      for (var i = 0; i < columns; i++) {
-        final a = j * (columns + 1) + i,
-            b = a + 1,
-            d = a + columns + 1,
-            e = d + 1;
-        final rear =
-            (angles[a] + angles[b] + angles[d] + angles[e]) / 4 > math.pi / 2;
-        final out = rear ? _backIndices : _frontIndices;
-        var at = rear ? backCount : frontCount;
-        out[at++] = a;
-        out[at++] = b;
-        out[at++] = d;
-        out[at++] = b;
-        out[at++] = e;
-        out[at++] = d;
-        if (rear)
-          backCount = at;
-        else
-          frontCount = at;
-      }
-    c.save();
-    c.clipRect(Offset.zero & size);
-    if (backwards) {
-      c.translate(w, 0);
-      c.scale(-1, 1);
     }
-    final flat = Path()
-      ..moveTo(0, 0)
-      ..lineTo(top, 0)
-      ..lineTo(bottom, h)
-      ..lineTo(0, h)
-      ..close();
-    c.save();
-    c.clipPath(flat);
-    if (backwards) {
-      c.translate(w, 0);
-      c.scale(-1, 1);
+    // Sample across the bend, not a coarse screen grid. Every strip's angle is
+    // stable along the crease, including diagonal corner drags. The flat back
+    // is one reflected polygon, so its edges keep their full physical length.
+    for(var i=0;i<segments;i++) {
+      append(clip(clip(page,arc*i/segments,true),arc*(i+1)/segments,false),i>=segments~/2);
     }
-    c.drawImageRect(from.image,
-      Rect.fromLTWH(0, 0, from.image.width.toDouble(), from.image.height.toDouble()),
-      Offset.zero & size, Paint()..filterQuality = FilterQuality.none);
+    append(clip(page,arc,true),true);
+    final flat=Path()..addPolygon(clip(page,0,false),true);
+    c.save();c.clipRect(Offset.zero & size);
+    if(backwards){c.translate(w,0);c.scale(-1,1);}
+    c.save();c.clipPath(flat);
+    if(backwards){c.translate(w,0);c.scale(-1,1);}
+    c.drawImageRect(from.image,source,Offset.zero & size,Paint()..filterQuality=FilterQuality.none);
     c.restore();
-    final spread = radius * .9;
-    if (spread > .01) {
-      final shadow = Path()
-        ..moveTo(top, 0)..lineTo(bottom, h)
-        ..lineTo(bottom + spread / nx, h)..lineTo(top + spread / nx, 0)..close();
-      c.save();
-      c.clipPath(Path.combine(ui.PathOperation.difference, Path()..addRect(Offset.zero & size), flat));
-      c.drawPath(shadow, Paint()..shader = ui.Gradient.linear(
-        centre, centre + Offset(nx, ny) * spread,
-        const [Color(0x40000000), Color(0x00000000)],
-      ));
-      c.restore();
+    final top=centre.dx+normal.dy*centre.dy/normal.dx;
+    final bottom=centre.dx-normal.dy*(h-centre.dy)/normal.dx;
+    final near=radius*.55, far=radius*1.75;
+    final shadow=Path()..moveTo(top+near/normal.dx,0)..lineTo(bottom+near/normal.dx,h)
+      ..lineTo(bottom+far/normal.dx,h)..lineTo(top+far/normal.dx,0)..close();
+    c.drawPath(shadow,Paint()..shader=ui.Gradient.linear(centre+normal*near,centre+normal*far,
+      const [Color(0x00000000),Color(0x38000000),Color(0x00000000)],const [0,.375,1]));
+    void mesh(Uint16List indices,int count,Int32List colors,bool textured){
+      if(count==0)return;
+      final mesh=ui.Vertices.raw(VertexMode.triangles,_positions,
+        textureCoordinates:textured?_texture:null,colors:colors,indices:Uint16List.sublistView(indices,0,count));
+      c.drawVertices(mesh,BlendMode.modulate,Paint()..color=Colors.white..shader=(textured?from.shader:null)..filterQuality=FilterQuality.low);
     }
-    void mesh(Uint16List indices, int count, Int32List colors, bool textured) {
-      if (count == 0) return;
-      final vertices = ui.Vertices.raw(
-        VertexMode.triangles,
-        positions,
-        textureCoordinates: textured ? texture : null,
-        colors: colors,
-        indices: Uint16List.sublistView(indices, 0, count),
-      );
-      c.drawVertices(
-        vertices,
-        BlendMode.modulate,
-        Paint()
-          ..color = Colors.white
-          ..shader = textured ? from.shader : null
-          ..filterQuality = FilterQuality.low,
-      );
-    }
-
-    c.save();
-    c.clipPath(Path.combine(ui.PathOperation.difference, Path()..addRect(Offset.zero & size), flat));
-    mesh(_frontIndices, frontCount, frontColors, true);
-    c.restore();
-    mesh(_backIndices, backCount, backColors, false);
-    mesh(_backIndices, backCount, ghostColors, true);
+    mesh(_frontIndices,fronts,_frontColors,true);
+    mesh(_backIndices,backs,_backColors,false);
+    mesh(_backIndices,backs,_ghostColors,true);
     c.restore();
   }
-
   @override
-  bool shouldRepaint(covariant _ReadiumCurl old) =>
-      old.from != from || old.direction != direction;
+  bool shouldRepaint(covariant _ReadiumCurl old)=>old.from!=from||old.direction!=direction;
 }
