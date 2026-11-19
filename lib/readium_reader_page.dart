@@ -228,11 +228,14 @@ class ReadiumReaderBridge extends ChangeNotifier {
     final raw = await native.invokeMethod<String>('evaluate', {'script':
       "(function(){return JSON.stringify(Array.from(document.querySelectorAll('img,image')).filter(function(i){var r=i.getBoundingClientRect();return r.right>0&&r.left<innerWidth&&r.bottom>0&&r.top<innerHeight;}).slice(0,2).map(function(i){return new URL(i.currentSrc||(typeof i.src==='string'?i.src:null)||(i.href&&i.href.baseVal)||'',document.baseURI).href;}));})()"});
     if (raw == null || raw == 'null') return const [];
-    final paths = (jsonDecode(jsonDecode(raw) as String) as List).cast<String>();
+    Object? decoded = jsonDecode(raw);
+    if (decoded is String) decoded = jsonDecode(decoded);
+    if (decoded is! List) return const [];
+    final paths = decoded.whereType<String>();
     final links = [...?publication?.resources, ...?publication?.readingOrder];
     return [for (final source in paths)
       ...links.where((link) {
-        try { return Uri.parse(source).pathSegments.join('/').endsWith('/'+Uri.parse(link.href).pathSegments.join('/')); }
+        try { return ('/'+Uri.parse(source).pathSegments.join('/')).endsWith('/'+Uri.parse(link.href).pathSegments.join('/')); }
         catch (_) { return false; }
       }).take(1).map((link)=>link.href)];
   }
