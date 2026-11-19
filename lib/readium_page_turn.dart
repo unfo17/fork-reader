@@ -723,7 +723,7 @@ class _ReadiumCurl extends CustomPainter {
     }
 
     c.save();
-    c.clipPath(flat, clipOp: ClipOp.difference);
+    c.clipPath(Path.combine(ui.PathOperation.difference, Path()..addRect(Offset.zero & size), flat));
     mesh(_frontIndices, frontCount, frontColors, true);
     c.restore();
     mesh(_backIndices, backCount, backColors, false);
