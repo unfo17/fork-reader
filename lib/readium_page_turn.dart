@@ -619,6 +619,7 @@ class _ReadiumCurl extends CustomPainter {
           Offset(edge - spread, 0),
           Offset(edge + spread, 0),
           const [Color(0x00000000), Color(0x48000000), Color(0x00000000)],
+          const [0, .5, 1],
         ),
     );
     void mesh(Uint16List indices, int count, Int32List colors, bool textured) {
