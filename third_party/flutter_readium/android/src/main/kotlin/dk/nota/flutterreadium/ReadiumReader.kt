@@ -143,6 +143,29 @@ object ReadiumReader :
     }
     private fun appVisualPageKey(): String? = appVisibleWebView()?.let { "${it.url}|${it.scrollX}|${it.scrollY}" }
     var appPageTurnCrossedResource = false
+    private suspend fun appEvaluateVisible(script: String): String? {
+        val view = appVisibleWebView() ?: return null
+        return kotlinx.coroutines.suspendCancellableCoroutine { c ->
+            view.evaluateJavascript(script) { value -> if (c.isActive) c.resumeWith(Result.success(value)) }
+        }
+    }
+
+    suspend fun appLandPage(anchor: String): Boolean {
+        val json = JSONObject(anchor)
+        val locator = Locator.fromJSON(json.getJSONObject("locator")) ?: return false
+        visualGoToLocator(locator, false)
+        val path = android.net.Uri.decode(locator.href.toString().substringBefore('#').substringBefore('?')).trimStart('/')
+        return kotlinx.coroutines.withTimeoutOrNull(5000L) {
+            while (appVisibleWebView()?.url?.let { android.net.Uri.parse(it).path?.endsWith("/$path") } != true) kotlinx.coroutines.delay(16)
+            true
+        } == true
+    }
+
+    suspend fun appPositionPage(anchor: String) {
+        val json = JSONObject(anchor)
+        appEvaluateVisible("window.scrollTo(${json.optDouble("x", 0.0)},${json.optDouble("y", 0.0)});")
+    }
+
     private suspend fun appPageEdge(direction: Int): Pair<Int, Boolean> {
         val publication = currentPublication ?: return -1 to false
         // A locator notification alone is not proof that an edge is the end of
@@ -155,11 +178,11 @@ object ReadiumReader :
         val index = visibleIndex ?: epubNavigator?.currentLocator?.value?.let { at -> publication.readingOrder.indexOfFirst { it.href.resolve().isEquivalent(at.href) } } ?: -1
         val geometry = if (appIsFixedLayout()) null else runCatching {
             val verticalScroll = epubNavigator?.preferences?.scroll == true
-            val raw = epubEvaluateJavascript("""
+            val raw = appEvaluateVisible("""
                 (function(){var e=document.scrollingElement||document.documentElement,v=$verticalScroll;
                 return JSON.stringify({position:Math.abs(v?scrollY:scrollX),maximum:Math.max(0,v?e.scrollHeight-innerHeight:e.scrollWidth-innerWidth)});})();
             """.trimIndent()) ?: return@runCatching null
-            JSONObject(org.json.JSONTokener(raw).nextValue() as String)
+            JSONObject(org.json.JSONTokener(raw).nextValue().toString())
         }.getOrNull()
         val atEdge = geometry?.let {
             if (direction > 0) it.optDouble("maximum")-it.optDouble("position") <= 2.0
@@ -191,7 +214,7 @@ object ReadiumReader :
                 .put("locations", JSONObject().put("progression", if (direction > 0) 0.0 else 1.0))
             val target = Locator.fromJSON(json) ?: return false
             appPageTurnCrossedResource = true
-            visualGoToLocator(target, animated)
+            return appLandPage(JSONObject().put("locator", target.toJSON()).toString())
         } else {
             if (direction > 0) visualGoForward(animated) else visualGoBackward(animated)
         }
@@ -200,7 +223,20 @@ object ReadiumReader :
             true
         } == true
         if (appVisibleWebView()?.url != previousUrl) appPageTurnCrossedResource = true
-        return changed || navigator.currentLocator?.value != previous || appVisualPageKey() != previousVisual
+        if (changed || navigator.currentLocator?.value != previous || appVisualPageKey() != previousVisual) return true
+        val (settledIndex, settledEdge) = appPageEdge(direction)
+        if (settledEdge && settledIndex >= 0) {
+            val adjacent = settledIndex + if (direction > 0) 1 else -1
+            if (adjacent in publication.readingOrder.indices) {
+                val link = publication.readingOrder[adjacent]
+                val target = JSONObject().put("href", link.href.resolve().toString())
+                    .put("type", link.mediaType?.toString() ?: "application/xhtml+xml")
+                    .put("locations", JSONObject().put("progression", if (direction > 0) 0.0 else 1.0))
+                appPageTurnCrossedResource = true
+                return appLandPage(JSONObject().put("locator", target).toString())
+            }
+        }
+        return false
     }
     suspend fun appApplyStyle(script: String): String? {
         appReaderStyleScript = script
@@ -268,10 +304,20 @@ object ReadiumReader :
                                 if(!node.textContent.trim()||!node.parentElement||node.parentElement.closest('script,style,[data-readium]'))continue;
                                 var visible=Array.from(node.parentElement.getClientRects()).some(function(r){return r.right>0&&r.left<w&&r.bottom>0&&r.top<h;});
                                 if(!visible)continue;
-                                var group=node.parentElement.closest('p,li,blockquote,pre,h1,h2,h3,h4,h5,h6,figure,table')||node.parentElement;
+                                var group=node.parentElement.closest('p,li,pre,h1,h2,h3,h4,h5,h6')||node.parentElement.closest('div,blockquote,body')||node.parentElement;
                                 if(groups.has(group))continue;groups.add(group);
-                                Array.from(group.getClientRects()).forEach(add);
-                                range.selectNodeContents(group);Array.from(range.getClientRects()).forEach(add);
+                                var part=[];
+                                function flush(){if(part.length){spans.push([Math.min.apply(null,part.map(function(r){return r[0];})),Math.max.apply(null,part.map(function(r){return r[1];}))]);part=[];}}
+                                function leaf(n){
+                                    if(n.nodeType===1 && (n.tagName==='BR'||(n!==group&&/^(P|DIV|LI|BLOCKQUOTE|PRE|H[1-6])$/.test(n.tagName)))){flush();if(n.tagName==='BR')return;}
+                                    if(n.nodeType===3 && n.textContent.trim()){
+                                        range.selectNodeContents(n);Array.from(range.getClientRects()).forEach(function(r){
+                                            if(r.right>0&&r.left<w&&r.bottom>0&&r.top<h)part.push([Math.max(0,(v?r.left:r.top)-.5),Math.min(v?w:h,(v?r.right:r.bottom)+.5)]);
+                                        });
+                                    }else if(n.nodeType===1)Array.from(n.childNodes).forEach(leaf);
+                                    if(n.nodeType===1 && n!==group && /^(P|DIV|LI|BLOCKQUOTE|PRE|H[1-6])$/.test(n.tagName))flush();
+                                }
+                                leaf(group);flush();
                             }
                             document.querySelectorAll('img,svg,table,video,canvas').forEach(function(e){Array.from(e.getClientRects()).forEach(add);});
                         }
@@ -279,7 +325,7 @@ object ReadiumReader :
                         var merged=[];spans.forEach(function(s){var last=merged[merged.length-1];if(last&&s[0]<=last[1]+.5)last[1]=Math.max(last[1],s[1]);else merged.push(s);});
                         var gaps=[];for(var i=1;i<merged.length;i++)if(merged[i][0]>merged[i-1][1])gaps.push([merged[i-1][1]/(v?w:h),merged[i][0]/(v?w:h)]);
                         var color=getComputedStyle(document.documentElement).backgroundColor.match(/[\d.]+/g)||[255,255,255];
-                        return JSON.stringify({gaps:gaps,color:color.slice(0,3).map(Number)});
+                        return JSON.stringify({gaps:gaps,color:color.slice(0,3).map(Number),x:scrollX,y:scrollY});
                     })();
                 """.trimIndent()) { value -> if (c.isActive) c.resumeWith(Result.success(value)) }
             }
@@ -342,7 +388,8 @@ object ReadiumReader :
                 val bands = cuts.zipWithNext { a,b -> if (vertical) listOf(a,0.0,b,1.0) else listOf(0.0,a,1.0,b) }
                 val color = info.getJSONArray("color")
                 mapOf("width" to width, "height" to height, "pixels" to rgba,
-                    "bands" to bands, "color" to (0..2).map { color.getInt(it) }, "locator" to locator, "identity" to identity)
+                    "bands" to bands, "color" to (0..2).map { color.getInt(it) }, "locator" to locator, "identity" to identity,
+                    "anchor" to JSONObject().put("locator", JSONObject(locator)).put("x", info.optDouble("x")).put("y", info.optDouble("y")).toString())
             }
         } finally { bitmap.recycle() }
     }

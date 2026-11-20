@@ -9489,26 +9489,33 @@ class _ReaderPageState extends State<ReaderPage>
     }
   }
 
+  bool _nativeImageOpening = false;
   Future<void> _openNativeImage(String href) async {
     final engine = _readium;
-    if (engine == null || href.isEmpty) return;
+    if (engine == null || href.isEmpty || _nativeImageOpening) return;
+    _nativeImageOpening = true;
     _cancelExitRequest();
     _stopAutoScroll();
     _suspendListeningFollow();
-    final cache = _nativeImages ??= ReaderIllustrationCache(request: engine.imageBytes);
-    await pushNovelPage<void>(
-      context,
-      _readerSurface(
-        ReaderIllustrationGallery(
-          urls: [href],
-          initialUrl: href,
-          cache: cache,
-          title: '原书插图',
-        ),
-      ),
-      slot: ReaderIllustrationGallery,
-      reduceMotion: widget.state.reduceMotion,
-    );
+    try {
+      await engine.whenPageIdle;
+      await engine.turns.whenPrepared;
+      final cache = _nativeImages ??= ReaderIllustrationCache(request: engine.imageBytes);
+      if (!mounted) return;
+      await cache.prepare(context, href);
+      if (!mounted) return;
+      final reduce = widget.state.reduceMotion || MediaQuery.disableAnimationsOf(context);
+      await Navigator.of(context).push<void>(PageRouteBuilder<void>(
+        transitionDuration: reduce ? Duration.zero : const Duration(milliseconds: 160),
+        reverseTransitionDuration: reduce ? Duration.zero : const Duration(milliseconds: 120),
+        pageBuilder: (_, _, _) => RepaintBoundary(child: _readerSurface(
+          ReaderIllustrationGallery(urls: [href], initialUrl: href, cache: cache, title: '原书插图'),
+        )),
+        transitionsBuilder: (_, animation, _, child) => FadeTransition(opacity: animation, child: child),
+      ));
+    } catch (_) {
+      if (mounted) showNovelFeedback(context, '插图暂时无法打开，请重试');
+    } finally { _nativeImageOpening = false; }
   }
 
   Future<void> _volumeIllustrations() async {

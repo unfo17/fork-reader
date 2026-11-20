@@ -29,6 +29,8 @@ class ReadiumControlsPlugin : FlutterPlugin {
                                 result.success(null)
                             }
                             "canTurn" -> result.success(ReadiumReader.appCanTurnPage(call.argument<Int>("direction") ?: 1))
+                            "land" -> result.success(ReadiumReader.appLandPage(call.argument<String>("anchor") ?: "{}"))
+                            "position" -> { ReadiumReader.appPositionPage(call.argument<String>("anchor") ?: "{}"); result.success(null) }
                             "page" -> {
                                 val animated = call.argument<Boolean>("animated") ?: true
                                 val moved = ReadiumReader.appTurnPage(call.argument<Int>("direction") ?: 1, animated)

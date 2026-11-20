@@ -9,11 +9,14 @@ import 'reader_turn_motion.dart';
 
 /// A retained image of Readium's rendered page, never re-typeset Flutter text.
 class ReadiumPageFrame {
-  ReadiumPageFrame(this.image, this.location, this.bands, this.paper);
+  ReadiumPageFrame(this.image, this.location, this.bands, this.paper, {this.anchor});
   final ui.Image image;
   final String location;
   final List<Rect> bands;
   final Color paper;
+  final String? anchor;
+  int _references = 1;
+  ReadiumPageFrame retain() { _references++; return this; }
   ui.ImageShader? _shader;
   ui.ImageShader get shader => _shader ??= ui.ImageShader(
     image,
@@ -22,6 +25,7 @@ class ReadiumPageFrame {
     Float64List.fromList([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]),
   );
   void dispose() {
+    if (--_references > 0) return;
     _shader?.dispose();
     image.dispose();
   }
@@ -33,6 +37,7 @@ class ReadiumPageTurnController {
   double _progress = 0, _sign = 1, _width = 1, _lastDistance = 0, _velocity = 0;
   final _watch = Stopwatch();
   int _lastMicros = 0;
+  double _initialSign = 1, _directionMultiplier = -1;
   double _touchY = .5, _startY = .5;
   final _shape = ValueNotifier<int>(0);
   void beginDrag(double dx, double width, double touchY) {
@@ -40,7 +45,7 @@ class ReadiumPageTurnController {
     _release = Completer<bool>();
     _progress = 0;
     _width = width;
-    _sign = dx < 0 ? -1 : 1;
+    _sign = _initialSign = dx < 0 ? -1 : 1;
     _lastDistance = dx * _sign;
     _velocity = 0;
     _lastMicros = 0;
@@ -54,6 +59,14 @@ class ReadiumPageTurnController {
     final previousY = _touchY;
     if (touchY != null) _touchY = touchY.clamp(0.0, 1.0);
     if (_release == null || _release!.isCompleted) return;
+    final nextSign = dx.abs() < 1 ? _sign : (dx < 0 ? -1.0 : 1.0);
+    if (_owner?.widget.preview != null && nextSign != _sign) {
+      _sign = nextSign;
+      _lastDistance = dx * _sign;
+      _lastMicros = _watch.elapsedMicroseconds;
+      _velocity = 0;
+      _owner?._reverseDrag((_sign * _directionMultiplier).round());
+    }
     final distance = dx * _sign, now = _watch.elapsedMicroseconds;
     if (now - _lastMicros > 1000) {
       _velocity = (distance - _lastDistance) * 1000000 / (now - _lastMicros);
@@ -79,6 +92,7 @@ class ReadiumPageTurnController {
 
   Future<void> drag(int direction) async {
     try {
+      _directionMultiplier = direction / _initialSign;
       await _owner?._turn(direction, true, gesture: _release);
     } finally {
       _release = null;
@@ -93,6 +107,8 @@ class ReadiumPageTurnController {
     endDrag(cancel: true);
     _shape.dispose();
   }
+
+  Future<void> get whenPrepared => _owner?._preparing ?? Future<void>.value();
 
   Future<void> navigate(
     Future<void> Function() action, {
@@ -117,6 +133,8 @@ class ReadiumPageSurface extends StatefulWidget {
     required this.child,
     required this.frameKey,
     this.canTurn,
+    this.preview,
+    this.land,
   });
   final ReadiumPageTurnController controller;
   final ReaderPreferences preferences;
@@ -125,6 +143,8 @@ class ReadiumPageSurface extends StatefulWidget {
   final Future<bool> Function(int direction, bool animated) step;
   final String frameKey;
   final Future<bool> Function(int direction)? canTurn;
+  final Future<ReadiumPageFrame?> Function(int direction, ReadiumPageFrame origin)? preview;
+  final Future<bool> Function(ReadiumPageFrame frame)? land;
   final Widget child;
   @override
   State<ReadiumPageSurface> createState() => _ReadiumPageSurfaceState();
@@ -146,13 +166,133 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   bool _warming = false;
   Completer<void>? _warmDone;
   int _warmRetries = 0;
+  final _neighbors = <int, ReadiumPageFrame>{};
+  final _edges = <int>{};
+  Future<void>? _preparing;
+  ReadiumPageFrame? _previewCover;
+  int _dragDirection = 1;
+  void _clearNeighbors() {
+    for (final frame in _neighbors.values) { frame.dispose(); }
+    _neighbors.clear();
+    _edges.clear();
+  }
+
+  Future<void> _prepareNeighbors(ReadiumPageFrame origin) async {
+    if (widget.preview == null) return;
+    if (_preparing != null) return _preparing;
+    final key = widget.frameKey;
+    final done = Completer<void>();
+    _preparing = done.future;
+    if (mounted) setState(() => _previewCover = origin.retain());
+    await WidgetsBinding.instance.endOfFrame;
+    try {
+      for (final direction in [1, -1]) {
+        if (!mounted || key != widget.frameKey) break;
+        if (_neighbors.containsKey(direction) || _edges.contains(direction)) continue;
+        ReadiumPageFrame? frame;
+        try { frame = await widget.preview!(direction, origin); } catch (_) { continue; }
+        if (!mounted || key != widget.frameKey) { frame?.dispose(); break; }
+        if (frame == null) { _edges.add(direction); }
+        else { _neighbors[direction] = frame; }
+      }
+    } finally {
+      final cover = _previewCover;
+      if (mounted) { setState(() => _previewCover = null); await WidgetsBinding.instance.endOfFrame; }
+      _previewCover = null;
+      cover?.dispose();
+      _preparing = null;
+      done.complete();
+    }
+  }
+
+  void _reverseDrag(int direction) {
+    _dragDirection = direction;
+    if (!_dragPrepared || !mounted) return;
+    setState(() {
+      _to = _neighbors[direction];
+      _direction = direction * (widget.preferences.mode == ReaderMode.vertical ? -1 : 1);
+      _clock.value = 0;
+    });
+  }
+
+  Future<void> _bufferedTurn(int direction, bool animated, Completer<bool>? gesture) async {
+    if (_busy || !mounted) return;
+    _busy = true;
+    _dragDirection = direction;
+    ReadiumPageFrame? from;
+    final held = <ReadiumPageFrame>[];
+    var committed = false;
+    try {
+      await _preparing;
+      from = await _takeFrame(widget.capture);
+      if (from == null || !mounted) return;
+      await _prepareNeighbors(from);
+      if (!mounted) return;
+      // Keep both neighbours alive through frame-key changes during landing.
+      for (final frame in _neighbors.values) { held.add(frame.retain()); }
+      final initialDirection = gesture == null ? direction : (widget.controller._sign * widget.controller._directionMultiplier).round();
+      _dragDirection = initialDirection;
+      if (_neighbors[initialDirection] == null && gesture == null) {
+        await widget.canTurn?.call(initialDirection);
+        return;
+      }
+      setState(() {
+        _from = from; _to = _neighbors[initialDirection];
+        _effect = widget.preferences.pageEffect;
+        _direction = initialDirection * (widget.preferences.mode == ReaderMode.vertical ? -1 : 1);
+        _destinationReady = true;
+        _liveDestination = false;
+        _clock.value = gesture == null || _to == null ? 0 : widget.controller._progress;
+      });
+      _settling = null;
+      _dragPrepared = gesture != null;
+      await WidgetsBinding.instance.endOfFrame;
+      var finish = gesture == null || await gesture.future;
+      final target = _neighbors[_dragDirection];
+      if (target == null) { finish = false; await widget.canTurn?.call(_dragDirection); }
+      if (gesture != null) {
+        _finishDrag(finish);
+        await _settling;
+      } else {
+        await _clock.animateTo(1, duration: animated ? widget.preferences.pageSpeed.durationFor(_effect) : Duration.zero, curve: Curves.easeInOutCubic).orCancel;
+      }
+      if (finish && target != null) {
+        // Hold the complete target bitmap while Readium adopts its exact anchor.
+        // No live target layout is exposed in the middle of a gesture.
+        committed = await widget.land!(target);
+        if (!committed) {
+          await _clock.animateTo(0, duration: const Duration(milliseconds: 180)).orCancel;
+        } else {
+          _cached?.dispose(); _cached = target.retain();
+          _clearNeighbors();
+          _neighbors[-_dragDirection] = from.retain();
+        }
+      }
+    } on TickerCanceled {
+      // Route/viewport changed during settling.
+    } finally {
+      _dragPrepared = false; _settling = null;
+      if (mounted) {
+        setState(() { _from = null; _to = null; _liveDestination = false; });
+        await WidgetsBinding.instance.endOfFrame;
+      }
+      if (!committed && from != null && mounted) {
+        _cached?.dispose(); _cached = from.retain();
+      }
+      from?.dispose();
+      for (final frame in held) { frame.dispose(); }
+      _busy = false;
+      if (mounted) _warmLater();
+    }
+  }
+
   void _warmLater() {
     _warmTimer?.cancel();
     _warmTimer = Timer(const Duration(milliseconds: 48), () async {
       if (!mounted ||
           _busy ||
           _warming ||
-          _cached != null ||
+          (_cached != null && (widget.preview == null || _neighbors.length + _edges.length == 2)) ||
           !widget.preferences.mode.paginated ||
           widget.preferences.pageEffect == ReaderPageEffect.none)
         return;
@@ -160,9 +300,10 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       final done = _warmDone = Completer<void>();
       final key = widget.frameKey;
       try {
-        final frame = await widget.capture();
+        final frame = _cached ?? await widget.capture();
         if (mounted && key == widget.frameKey) {
           _cached = frame;
+          if (frame != null) await _prepareNeighbors(frame);
         } else {
           frame?.dispose();
         }
@@ -196,11 +337,12 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       if (shapeChanged && _clock.value == widget.controller._progress) {
         setState(() {});
       }
-      _clock.value = math.min(widget.controller._progress, _destinationReady ? 1.0 : .92);
+      _clock.value = widget.preview != null && _to == null ? 0 : math.min(widget.controller._progress, _destinationReady ? 1.0 : .92);
     }
   }
 
   void _finishDrag(bool commit) {
+    if (widget.preview != null && _to == null) commit = false;
     if (!_dragPrepared || _settling != null || !mounted) return;
     _dragPrepared = false;
     final target = commit ? (_destinationReady ? 1.0 : .92) : 0.0;
@@ -218,7 +360,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _settling = _clock
         .animateTo(
           target,
-          duration: Duration(microseconds: micros.round().clamp(24000, 600000)),
+          duration: Duration(microseconds: micros.round().clamp(140000, 600000)),
           curve: Curves.easeOutCubic,
         )
         .orCancel
@@ -239,8 +381,9 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.frameKey != widget.frameKey) {
       _warmRetries = 0;
-      _cached?.dispose();
-      _cached = null;
+      if (!_busy && !_warming) {
+        _cached?.dispose(); _cached = null; _clearNeighbors();
+      }
       _warmLater();
     }
     if (oldWidget.controller != widget.controller) {
@@ -257,6 +400,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     if (_viewport != viewport) {
       _viewport = viewport;
       widget.controller.endDrag(cancel: true);
+      _clearNeighbors();
       _cached?.dispose();
       _cached = null;
       _warmLater();
@@ -267,6 +411,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     Future<void> Function() action, {
     Future<ReadiumPageFrame?> Function()? capture,
   }) async {
+    await _preparing;
+    _clearNeighbors();
     if (_busy || !mounted) return action();
     _busy = true;
     ReadiumPageFrame? frame;
@@ -298,6 +444,9 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     bool animated, {
     Completer<bool>? gesture,
   }) async {
+    if (widget.preview != null && widget.land != null) {
+      return _bufferedTurn(direction, animated, gesture);
+    }
     if (_busy || !mounted) return;
     if (widget.canTurn != null && !await widget.canTurn!(direction)) return;
     if (!mounted || _busy) return;
@@ -470,6 +619,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     fit: StackFit.expand,
     children: [
       widget.child,
+      if (_previewCover case final cover?)
+        Positioned.fill(child: IgnorePointer(child: RawImage(image: cover.image, fit: BoxFit.fill, filterQuality: FilterQuality.none))),
       if (_from case final frame?)
         Positioned.fill(
           child: IgnorePointer(
@@ -483,13 +634,15 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
                     fit: StackFit.expand,
                     children: _effect == ReaderPageEffect.paper
                         ? [
-                            if (_to case final target?)
+                            if (_direction < 0 && _to != null)
+                              RawImage(image: frame.image, fit: BoxFit.fill, filterQuality: FilterQuality.none)
+                            else if (_to case final target?)
                               RawImage(image: target.image, fit: BoxFit.fill),
                             CustomPaint(
                               painter: _ReadiumCurl(
-                                frame,
-                                _clock,
-                                _direction,
+                                _direction < 0 && _to != null ? _to! : frame,
+                                _direction < 0 && _to != null ? ReverseAnimation(_clock) : _clock,
+                                1,
                                 () => widget.controller._touchY,
                                 () => widget.controller._startY,
                                 widget.controller._shape,
@@ -518,6 +671,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       widget.controller._owner = null;
     _warmTimer?.cancel();
     _cached?.dispose();
+    _clearNeighbors();
     widget.controller.endDrag(cancel: true);
     _clock.dispose();
     super.dispose();
@@ -543,6 +697,7 @@ class _ReadiumParagraphTurn extends CustomPainter {
       direction: direction,
       outgoing: !incoming,
       relay: true,
+      relayCurve: const Cubic(.22, .1, .28, 1),
       vertical: vertical,
       leafSize: size,
       child: const SizedBox(),

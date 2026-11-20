@@ -15,6 +15,7 @@ class ReaderTurnScope extends InheritedWidget {
     this.slot = 0,
     this.slots = 1,
     this.relay = false,
+    this.relayCurve = Curves.easeInOutSine,
     this.vertical = false,
     this.leafSize = Size.zero,
     this.travelWidth,
@@ -25,6 +26,7 @@ class ReaderTurnScope extends InheritedWidget {
   final bool outgoing, enabled;
   final int slot, slots;
   final bool relay, vertical;
+  final Curve relayCurve;
   final Size leafSize;
 
   /// Motion crosses the complete sheet, including the resting text margins.
@@ -36,7 +38,7 @@ class ReaderTurnScope extends InheritedWidget {
     return Interval(
       start,
       (start + .80 / slots).clamp(0.0, 1.0),
-      curve: Curves.easeInOutSine,
+      curve: relayCurve,
     ).transform(animation.value.clamp(0.0, 1.0));
   }
 
@@ -142,6 +144,7 @@ class ReaderTurnScope extends InheritedWidget {
       outgoing != oldWidget.outgoing ||
       enabled != oldWidget.enabled ||
       relay != oldWidget.relay ||
+      relayCurve != oldWidget.relayCurve ||
       vertical != oldWidget.vertical ||
       leafSize != oldWidget.leafSize ||
       travelWidth != oldWidget.travelWidth ||
