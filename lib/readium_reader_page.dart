@@ -383,12 +383,34 @@ class ReadiumReaderBridge extends ChangeNotifier {
       if (initialLocator == null && first != null)
         initialLocator = publication!.locatorFromLink(first);
       _events = api.onTextLocatorChanged.listen((at) {
-        if (!_navigating) _located(at);
+        if (!_navigating) unawaited(_receiveLocator(at));
       });
       notifyListeners();
     } catch (e) {
       error = 'EPUB 打开失败：$e';
       if (!_disposed) notifyListeners();
+    }
+  }
+
+  String? _stableVisualKey;
+  int _nativeEventTicket = 0;
+  Future<void> _receiveLocator(rd.Locator at) async {
+    if (_disposed || _owner != this || _previewing || _landing || _navigating) return;
+    if (!Platform.isAndroid || !_navigatorReady) { _located(at); return; }
+    final ticket = ++_nativeEventTicket;
+    try {
+      final page = await native.invokeMapMethod<String, dynamic>('visualPage');
+      if (_disposed || ticket != _nativeEventTicket || _previewing || _landing || _navigating) return;
+      final key = page?['key'] as String?;
+      final url = page?['url'] as String?;
+      // A delayed SDK event is not a new rendered page. It may describe an old
+      // preview, or the same last page using progression 1 instead of its start.
+      if (url != null && !('/'+Uri.parse(url).pathSegments.join('/')).endsWith('/'+Uri.parse(at.href).pathSegments.join('/'))) return;
+      if (key != null && key == _stableVisualKey && locator?.href == at.href && _appearance.mode.paginated) return;
+      _stableVisualKey = key;
+      _located(at);
+    } catch (_) {
+      if (!_disposed && ticket == _nativeEventTicket && !_previewing && !_landing && !_navigating) _located(at);
     }
   }
 
@@ -457,6 +479,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
             }
             json['locations'] = nextLocations;
             final visible = rd.Locator.fromJson(json);
+            final page = await native.invokeMapMethod<String, dynamic>('visualPage');
+            _stableVisualKey = page?['key'] as String?;
             if (visible != null) _located(visible);
           }
         }
@@ -592,7 +616,11 @@ class ReadiumReaderBridge extends ChangeNotifier {
       if (!landed) return false;
       await _waitForPageReady(anchor: frame.anchor);
       await native.invokeMethod<void>('paper', {'color': frame.paper.toARGB32()});
-      if (publish) _pagePaper = frame.paper;
+      if (publish) {
+        _pagePaper = frame.paper;
+        final page = await native.invokeMapMethod<String, dynamic>('visualPage');
+        _stableVisualKey = page?['key'] as String?;
+      }
     } finally { _landing = false; }
     // Adopt the captured page locator only after its exact scroll position is restored.
     // Preview events never reach saved progress, chapter controls or reading statistics.

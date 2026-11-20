@@ -166,6 +166,11 @@ object ReadiumReader :
         appEvaluateVisible("window.scrollTo(${json.optDouble("x", 0.0)},${json.optDouble("y", 0.0)});")
     }
 
+    fun appVisualPageState(): Map<String, String>? {
+        val view = appVisibleWebView() ?: return null
+        return mapOf("key" to "${view.url}|${view.scrollX}|${view.scrollY}|${view.width}|${view.height}", "url" to (view.url ?: ""))
+    }
+
     fun appReplayTap(x: Double, y: Double) {
         val root = currentReaderWidget?.getView() ?: return
         val time = android.os.SystemClock.uptimeMillis()
@@ -186,7 +191,7 @@ object ReadiumReader :
         suspend fun awaitReady(images: Boolean): Boolean = kotlinx.coroutines.withTimeoutOrNull(3000L) {
             while (previewVersion == null || previewVersion == appPreviewVersion) {
                 if (appEvaluateVisible("""
-                (function(){var expected=$expected;
+                (function(){var expected=$expected;if(document.body)document.body.offsetHeight;
                 return !!document.body && (!document.fonts || document.fonts.status==='loaded') &&
                 (expected===null || window.__wenkuAppliedStyle===expected) &&
                 (!$images || !window.__wenkuPageReady || window.__wenkuPageReady());})();

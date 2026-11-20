@@ -18,8 +18,10 @@ class ReadiumControlsPlugin : FlutterPlugin {
         channel = MethodChannel(binding.binaryMessenger, "org.mewx.wenku8/readium_controls").also { ch ->
             ch.setMethodCallHandler { call, result ->
                 scope.launch {
+                    val started = android.os.SystemClock.elapsedRealtime()
                     try {
                         when (call.method) {
+                            "visualPage" -> result.success(ReadiumReader.appVisualPageState())
                             "locator" -> result.success(ReadiumReader.appCurrentLocatorJson())
                             "pageKey" -> result.success(ReadiumReader.appPageKeyJson())
                             "fixedLayout" -> result.success(ReadiumReader.appIsFixedLayout())
@@ -58,6 +60,10 @@ class ReadiumControlsPlugin : FlutterPlugin {
                             else -> result.notImplemented()
                         }
                     } catch (error: Exception) { result.error("readium_control", error.message, null) }
+                    finally {
+                        if (android.util.Log.isLoggable("ReadiumControlTiming", android.util.Log.DEBUG))
+                            android.util.Log.d("ReadiumControlTiming", "${call.method} ${android.os.SystemClock.elapsedRealtime() - started}ms")
+                    }
                 }
             }
         }
