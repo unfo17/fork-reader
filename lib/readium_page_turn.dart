@@ -145,6 +145,7 @@ class ReadiumPageSurface extends StatefulWidget {
     this.land,
     this.layoutKey,
     this.lookAhead = 1,
+    this.onPrioritize,
   });
   final ReadiumPageTurnController controller;
   final ReaderPreferences preferences;
@@ -154,6 +155,7 @@ class ReadiumPageSurface extends StatefulWidget {
   final String frameKey;
   final String? layoutKey;
   final int lookAhead;
+  final VoidCallback? onPrioritize;
   final Future<bool> Function(int direction)? canTurn;
   final Future<ReadiumPageFrame?> Function(int direction, ReadiumPageFrame origin)? preview;
   final Future<bool> Function(ReadiumPageFrame frame)? land;
@@ -189,12 +191,14 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   int _radius(ReadiumPageFrame frame) => frame.image.width * frame.image.height * 4 * (2 * widget.lookAhead + 1) <= 64 * 1024 * 1024 ? widget.lookAhead : 1;
   bool get _windowComplete => _cached != null && _neighbors.length + _edges.length >= 2 * _radius(_cached!);
   void _prioritizeTurn(int direction) {
+    widget.onPrioritize?.call();
     _dragDirection = direction;
     _preparationInterrupted = true;
     _warmTimer?.cancel();
   }
 
   Future<void> _freezeForRoute() async {
+    widget.onPrioritize?.call();
     _routePaused = true;
     _preparationInterrupted = true;
     _warmTimer?.cancel();

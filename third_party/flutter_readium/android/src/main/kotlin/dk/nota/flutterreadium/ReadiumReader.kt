@@ -166,16 +166,23 @@ object ReadiumReader :
         appEvaluateVisible("window.scrollTo(${json.optDouble("x", 0.0)},${json.optDouble("y", 0.0)});")
     }
 
-    suspend fun appWaitForPageReady(style: String?, anchor: String?): Boolean {
+    var appPreviewVersion = 0
+        private set
+    fun appInterruptPreview() { appPreviewVersion++ }
+
+    suspend fun appWaitForPageReady(style: String?, anchor: String?, previewVersion: Int? = null): Boolean {
         val expected = if (appIsFixedLayout() || style == null) "null" else JSONObject.quote(style)
         suspend fun awaitReady(images: Boolean): Boolean = kotlinx.coroutines.withTimeoutOrNull(3000L) {
-            while (appEvaluateVisible("""
+            while (previewVersion == null || previewVersion == appPreviewVersion) {
+                if (appEvaluateVisible("""
                 (function(){var expected=$expected;
                 return !!document.body && (!document.fonts || document.fonts.status==='loaded') &&
                 (expected===null || window.__wenkuAppliedStyle===expected) &&
                 (!$images || !window.__wenkuPageReady || window.__wenkuPageReady());})();
-            """.trimIndent()) != "true") kotlinx.coroutines.delay(16)
-            true
+                """.trimIndent()) == "true") return@withTimeoutOrNull true
+                kotlinx.coroutines.delay(16)
+            }
+            false
         } == true
         if (anchor != null) {
             if (!awaitReady(false)) return false

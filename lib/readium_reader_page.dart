@@ -105,6 +105,13 @@ class ReadiumReaderBridge extends ChangeNotifier {
   }
 
   bool _previewing = false, _landing = false;
+  int _previewEpoch = 0;
+  void _interruptPreview() {
+    _previewEpoch++;
+    if (Platform.isAndroid && _previewing) {
+      unawaited(native.invokeMethod<void>('interruptPreview').catchError((Object _) {}));
+    }
+  }
   bool _dragInFlight = false;
   rd.Locator? _dragLocation;
   void _pageDrag(Map<String, dynamic> event) {
@@ -544,13 +551,16 @@ class ReadiumReaderBridge extends ChangeNotifier {
     await (() async {
       if (_disposed || origin.anchor == null) return;
       if (await native.invokeMethod<bool>('canTurn', {'direction': direction.sign}) == false) return;
+      final epoch = _previewEpoch;
       _previewing = true;
       try {
+        final version = await native.invokeMethod<int>('previewVersion');
         for (var offset = 0; offset < direction.abs(); offset++) {
           if (offset > 0 && await native.invokeMethod<bool>('canTurn', {'direction': direction.sign}) == false) return;
           final result = await native.invokeMapMethod<String, dynamic>('page', {'direction': direction.sign, 'animated': false});
           if (result?['moved'] != true) throw StateError('相邻页未能就绪');
-          await _waitForPageReady();
+          if (epoch != _previewEpoch) throw StateError('预加载已让位于阅读操作');
+          await _waitForPageReady(previewVersion: version);
         }
         for (var attempt = 0; attempt < 3 && frame == null; attempt++) {
           frame = await _capturePage();
@@ -565,10 +575,11 @@ class ReadiumReaderBridge extends ChangeNotifier {
     return frame;
   }
 
-  Future<void> _waitForPageReady({String? anchor}) async {
+  Future<void> _waitForPageReady({String? anchor, int? previewVersion}) async {
     final ready = await native.invokeMethod<bool>('ready', {
       'style': _fixedLayout == true ? null : _appliedStyleSignature,
       if (anchor != null) 'anchor': anchor,
+      if (previewVersion != null) 'previewVersion': previewVersion,
     });
     if (ready != true) throw StateError('页面尚未就绪');
   }
@@ -1123,6 +1134,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
           preview: Platform.isAndroid && _appearance.mode.paginated && _appearance.pageEffect != ReaderPageEffect.none ? _previewPage : null,
           land: (frame) => _landFrame(frame),
           lookAhead: 2,
+          onPrioritize: _interruptPreview,
           child: Stack(
             fit: StackFit.expand,
             children: [

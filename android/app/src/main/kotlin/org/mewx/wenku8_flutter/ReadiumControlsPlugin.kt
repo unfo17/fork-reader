@@ -28,7 +28,9 @@ class ReadiumControlsPlugin : FlutterPlugin {
                                 ReadiumReader.epubEvaluateJavascript("window.getSelection().removeAllRanges();")
                                 result.success(null)
                             }
-                            "ready" -> result.success(ReadiumReader.appWaitForPageReady(call.argument<String>("style"), call.argument<String>("anchor")))
+                            "ready" -> result.success(ReadiumReader.appWaitForPageReady(call.argument<String>("style"), call.argument<String>("anchor"), call.argument<Int>("previewVersion")))
+                            "previewVersion" -> result.success(ReadiumReader.appPreviewVersion)
+                            "interruptPreview" -> { ReadiumReader.appInterruptPreview(); result.success(null) }
                             "canTurn" -> result.success(ReadiumReader.appCanTurnPage(call.argument<Int>("direction") ?: 1))
                             "land" -> result.success(ReadiumReader.appLandPage(call.argument<String>("anchor") ?: "{}"))
                             "position" -> { ReadiumReader.appPositionPage(call.argument<String>("anchor") ?: "{}"); result.success(null) }
