@@ -166,6 +166,17 @@ object ReadiumReader :
         appEvaluateVisible("window.scrollTo(${json.optDouble("x", 0.0)},${json.optDouble("y", 0.0)});")
     }
 
+    fun appReplayTap(x: Double, y: Double) {
+        val root = currentReaderWidget?.getView() ?: return
+        val time = android.os.SystemClock.uptimeMillis()
+        for (action in intArrayOf(android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_UP)) {
+            val event = android.view.MotionEvent.obtain(time, time + if (action == android.view.MotionEvent.ACTION_UP) 8 else 0,
+                action, (x * root.width).toFloat(), (y * root.height).toFloat(), 0)
+            event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+            try { root.dispatchTouchEvent(event) } finally { event.recycle() }
+        }
+    }
+
     var appPreviewVersion = 0
         private set
     fun appInterruptPreview() { appPreviewVersion++ }

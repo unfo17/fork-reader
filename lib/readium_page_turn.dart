@@ -146,6 +146,7 @@ class ReadiumPageSurface extends StatefulWidget {
     this.layoutKey,
     this.lookAhead = 1,
     this.onPrioritize,
+    this.replayTap,
   });
   final ReadiumPageTurnController controller;
   final ReaderPreferences preferences;
@@ -156,6 +157,7 @@ class ReadiumPageSurface extends StatefulWidget {
   final String? layoutKey;
   final int lookAhead;
   final VoidCallback? onPrioritize;
+  final Future<void> Function(Offset fraction)? replayTap;
   final Future<bool> Function(int direction)? canTurn;
   final Future<ReadiumPageFrame?> Function(int direction, ReadiumPageFrame origin)? preview;
   final Future<bool> Function(ReadiumPageFrame frame)? land;
@@ -276,6 +278,23 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       cover?.dispose();
       _preparing = null;
       done.complete();
+    }
+  }
+
+  Future<void> _replayPreviewTap(Offset position) async {
+    if (widget.replayTap == null || _busy) return;
+    final key = widget.frameKey;
+    final box = context.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return;
+    final fraction = Offset(position.dx / box.size.width, position.dy / box.size.height);
+    _prioritizeTurn(_dragDirection);
+    try {
+      await _preparing;
+      if (!mounted || _busy || key != widget.frameKey) return;
+      await widget.replayTap!(fraction);
+    } finally {
+      _preparationInterrupted = false;
+      if (mounted) _warmLater();
     }
   }
 
@@ -727,7 +746,11 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       if (_routeCover case final cover?)
         Positioned.fill(child: IgnorePointer(child: RawImage(image: cover.image, fit: BoxFit.fill, filterQuality: FilterQuality.none))),
       if (_previewCover case final cover?)
-        Positioned.fill(child: IgnorePointer(child: RawImage(image: cover.image, fit: BoxFit.fill, filterQuality: FilterQuality.none))),
+        Positioned.fill(child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTapUp: widget.replayTap == null ? null : (details) => unawaited(_replayPreviewTap(details.localPosition)),
+          child: RawImage(image: cover.image, fit: BoxFit.fill, filterQuality: FilterQuality.none),
+        )),
       if (_from case final frame?)
         Positioned.fill(
           child: IgnorePointer(

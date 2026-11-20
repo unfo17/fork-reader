@@ -1135,6 +1135,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
           land: (frame) => _landFrame(frame),
           lookAhead: 2,
           onPrioritize: _interruptPreview,
+          replayTap: (point) => native.invokeMethod<void>('tap', {'x': point.dx, 'y': point.dy}),
           child: Stack(
             fit: StackFit.expand,
             children: [

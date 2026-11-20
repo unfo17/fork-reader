@@ -29,6 +29,7 @@ class ReadiumControlsPlugin : FlutterPlugin {
                                 result.success(null)
                             }
                             "ready" -> result.success(ReadiumReader.appWaitForPageReady(call.argument<String>("style"), call.argument<String>("anchor"), call.argument<Int>("previewVersion")))
+                            "tap" -> { ReadiumReader.appReplayTap(call.argument<Double>("x") ?: 0.5, call.argument<Double>("y") ?: 0.5); result.success(null) }
                             "previewVersion" -> result.success(ReadiumReader.appPreviewVersion)
                             "interruptPreview" -> { ReadiumReader.appInterruptPreview(); result.success(null) }
                             "canTurn" -> result.success(ReadiumReader.appCanTurnPage(call.argument<Int>("direction") ?: 1))
