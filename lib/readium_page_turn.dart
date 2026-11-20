@@ -352,7 +352,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         _direction = initialDirection * (widget.preferences.mode == ReaderMode.vertical ? -1 : 1);
         _destinationReady = true;
         _liveDestination = false;
-        _clock.value = gesture == null || _to == null ? 0 : widget.controller._progress;
+        _clock.value = gesture == null || _to == null ? 0 : math.min(widget.controller._progress, .85);
       });
       _settling = null;
       _dragPrepared = gesture != null;
@@ -463,7 +463,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       if (shapeChanged && _clock.value == widget.controller._progress) {
         setState(() {});
       }
-      _clock.value = widget.preview != null && _to == null ? 0 : math.min(widget.controller._progress, _destinationReady ? 1.0 : .92);
+      _clock.value = widget.preview != null && _to == null ? 0 : math.min(widget.controller._progress, widget.preview != null ? .85 : (_destinationReady ? 1.0 : .92));
     }
   }
 
