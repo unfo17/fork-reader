@@ -68,7 +68,7 @@ class ReadiumPageTurnController {
       _owner?._reverseDrag((_sign * _directionMultiplier).round());
     }
     final distance = dx * _sign, now = _watch.elapsedMicroseconds;
-    if (now - _lastMicros > 1000) {
+    if (now - _lastMicros > 1000 && (distance - _lastDistance).abs() > .5) {
       _velocity = (distance - _lastDistance) * 1000000 / (now - _lastMicros);
       _lastDistance = distance;
       _lastMicros = now;
@@ -81,6 +81,7 @@ class ReadiumPageTurnController {
   void endDrag({bool cancel = false}) {
     final release = _release;
     if (release == null || release.isCompleted) return;
+    if (_watch.elapsedMicroseconds - _lastMicros > 100000) _velocity = 0;
     _watch.stop();
     final commit =
         !cancel &&
