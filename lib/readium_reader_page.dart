@@ -104,7 +104,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     );
   }
 
-  bool _previewing = false;
+  bool _previewing = false, _landing = false;
   bool _dragInFlight = false;
   rd.Locator? _dragLocation;
   void _pageDrag(Map<String, dynamic> event) {
@@ -386,7 +386,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
   bool _navigating = false;
   void _located(rd.Locator at) {
     final locationTicket = ++_locationTicket;
-    if (_disposed || _owner != this || _previewing) return;
+    if (_disposed || _owner != this || _previewing || _landing) return;
     if (!_firstLocation.isCompleted) _firstLocation.complete();
     if (_dragInFlight) {
       _dragLocation = at;
@@ -562,10 +562,14 @@ class ReadiumReaderBridge extends ChangeNotifier {
 
   Future<bool> _landFrame(ReadiumPageFrame frame, {bool publish = true}) async {
     if (_disposed || frame.anchor == null) return false;
-    final landed = await native.invokeMethod<bool>('land', {'anchor': frame.anchor}) == true;
-    if (!landed) return false;
-    await _waitForLayoutStable();
-    await native.invokeMethod<void>('position', {'anchor': frame.anchor});
+    _landing = true;
+    try {
+      final landed = await native.invokeMethod<bool>('land', {'anchor': frame.anchor}) == true;
+      if (!landed) return false;
+      await _waitForLayoutStable();
+      await native.invokeMethod<void>('position', {'anchor': frame.anchor});
+      await WidgetsBinding.instance.endOfFrame;
+    } finally { _landing = false; }
     // Adopt the captured page locator only after its exact scroll position is restored.
     // Preview events never reach saved progress, chapter controls or reading statistics.
     if (publish && !_disposed) {
@@ -1097,6 +1101,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
           controller: turns,
           frameKey:
               "${locator?.href}|$fraction|$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|$_seekTicket|$_navigating|${_appearance.pageEffect}",
+          layoutKey: '$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|$_seekTicket|$_navigating|${_appearance.pageEffect}',
           preferences: _appearance,
           paper: pagePaper,
           capture: _capturePage,

@@ -135,6 +135,7 @@ class ReadiumPageSurface extends StatefulWidget {
     this.canTurn,
     this.preview,
     this.land,
+    this.layoutKey,
   });
   final ReadiumPageTurnController controller;
   final ReaderPreferences preferences;
@@ -142,6 +143,7 @@ class ReadiumPageSurface extends StatefulWidget {
   final Future<ReadiumPageFrame?> Function() capture;
   final Future<bool> Function(int direction, bool animated) step;
   final String frameKey;
+  final String? layoutKey;
   final Future<bool> Function(int direction)? canTurn;
   final Future<ReadiumPageFrame?> Function(int direction, ReadiumPageFrame origin)? preview;
   final Future<bool> Function(ReadiumPageFrame frame)? land;
@@ -171,6 +173,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   Future<void>? _preparing;
   ReadiumPageFrame? _previewCover;
   int _dragDirection = 1;
+  bool _adoptingPage = false;
   void _clearNeighbors() {
     for (final frame in _neighbors.values) { frame.dispose(); }
     _neighbors.clear();
@@ -259,6 +262,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       if (finish && target != null) {
         // Hold the complete target bitmap while Readium adopts its exact anchor.
         // No live target layout is exposed in the middle of a gesture.
+        _adoptingPage = true;
         committed = await widget.land!(target);
         if (!committed) {
           await _clock.animateTo(0, duration: const Duration(milliseconds: 180)).orCancel;
@@ -311,6 +315,9 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         /* A warm image is optional. */
       } finally {
         _warming = false;
+        if (mounted && key != widget.frameKey && !_busy) {
+          _cached?.dispose(); _cached = null; _clearNeighbors();
+        }
         done.complete();
         if (mounted &&
             (key != widget.frameKey ||
@@ -381,6 +388,11 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.frameKey != widget.frameKey) {
       _warmRetries = 0;
+      if (_adoptingPage && oldWidget.layoutKey == widget.layoutKey) {
+        _adoptingPage = false;
+        _warmLater();
+        return;
+      }
       if (!_busy && !_warming) {
         _cached?.dispose(); _cached = null; _clearNeighbors();
       }
