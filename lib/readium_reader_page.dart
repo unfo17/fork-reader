@@ -1100,8 +1100,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
       : ReadiumPageSurface(
           controller: turns,
           frameKey:
-              "${locator?.href}|$fraction|$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|$_seekTicket|$_navigating|${_appearance.pageEffect}",
-          layoutKey: '$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|$_seekTicket|$_navigating|${_appearance.pageEffect}',
+              "${locator?.href}|$fraction|$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|$_navigating|${_appearance.pageEffect}",
+          layoutKey: '$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|$_navigating|${_appearance.pageEffect}',
           preferences: _appearance,
           paper: pagePaper,
           capture: _capturePage,
