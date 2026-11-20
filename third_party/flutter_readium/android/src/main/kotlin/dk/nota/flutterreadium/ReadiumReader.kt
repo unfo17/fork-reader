@@ -161,13 +161,13 @@ object ReadiumReader :
             .put("locations", JSONObject().put("progression", captured.optJSONObject("locations")?.optDouble("progression", 0.0) ?: 0.0))
         val locator = Locator.fromJSON(navigation) ?: return false
         val path = android.net.Uri.decode(locator.href.toString().substringBefore('#').substringBefore('?')).trimStart('/')
-        val alreadyVisible = appVisibleWebView()?.url?.let { android.net.Uri.parse(it).path?.endsWith("/$path") } == true &&
-            epubNavigator?.currentLocator?.value?.href?.isEquivalent(locator.href) == true
-        if (!appIsFixedLayout() && alreadyVisible && json.has("x") && json.has("y")) return true
+        val exactPosition = json.has("x") && json.has("y") && !appIsFixedLayout()
+        val alreadyVisible = appVisibleWebView()?.url?.let { android.net.Uri.parse(it).path?.endsWith("/$path") } == true
+        if (alreadyVisible && exactPosition) return true
         if (appIsFixedLayout()) visualGoToLocator(locator, false)
         else if (epubNavigator?.go(locator, false) != true) return false
         return kotlinx.coroutines.withTimeoutOrNull(5000L) {
-            while (appVisibleWebView()?.url?.let { android.net.Uri.parse(it).path?.endsWith("/$path") } != true || epubNavigator?.currentLocator?.value?.href?.isEquivalent(locator.href) != true) kotlinx.coroutines.delay(16)
+            while (appVisibleWebView()?.url?.let { android.net.Uri.parse(it).path?.endsWith("/$path") } != true || (!exactPosition && epubNavigator?.currentLocator?.value?.href?.isEquivalent(locator.href) != true)) kotlinx.coroutines.delay(16)
             true
         } == true
     }
