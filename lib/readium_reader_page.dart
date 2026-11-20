@@ -400,9 +400,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
     final ticket = ++_nativeEventTicket;
     try {
       final page = await native.invokeMapMethod<String, dynamic>('visualPage');
-      if (_disposed || ticket != _nativeEventTicket || _previewing || _landing || _navigating) return;
-      final key = page?['key'] as String?;
-      final url = page?['url'] as String?;
+      if (_disposed || ticket != _nativeEventTicket || _previewing || _landing || _navigating || page == null) return;
+      final key = page['key'] as String?;
+      final url = page['url'] as String?;
       // A delayed SDK event is not a new rendered page. It may describe an old
       // preview, or the same last page using progression 1 instead of its start.
       if (url != null && !('/'+Uri.parse(url).pathSegments.join('/')).endsWith('/'+Uri.parse(at.href).pathSegments.join('/'))) return;
