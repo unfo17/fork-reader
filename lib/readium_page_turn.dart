@@ -111,6 +111,9 @@ class ReadiumPageTurnController {
     _shape.dispose();
   }
 
+  ReadiumPageFrame? get pendingPage => _owner?._handoffTarget;
+  void previewHandedOff() { _owner?._previewHandedOff = true; }
+
   void requestTurn(int direction) => _owner?._prioritizeTurn(direction);
 
   Future<void> freezeForRoute() async => _owner?._freezeForRoute();
@@ -188,6 +191,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   ReadiumPageFrame? _previewCover;
   int _dragDirection = 1;
   bool _adoptingPage = false;
+  ReadiumPageFrame? _handoffTarget;
+  bool _previewHandedOff = false;
   bool _preparationInterrupted = false, _routePaused = false;
   ReadiumPageFrame? _routeCover;
   int _radius(ReadiumPageFrame frame) => frame.image.width * frame.image.height * 4 * (2 * widget.lookAhead + 1) <= 64 * 1024 * 1024 ? widget.lookAhead : 1;
@@ -303,6 +308,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     if (!_dragPrepared || !mounted) return;
     setState(() {
       _to = _neighbors[direction];
+      _handoffTarget = _to;
       _direction = direction * (widget.preferences.mode == ReaderMode.vertical ? -1 : 1);
       _clock.value = 0;
     });
@@ -323,6 +329,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   Future<void> _bufferedTurn(int direction, bool animated, Completer<bool>? gesture) async {
     if (_busy || !mounted) return;
     _busy = true;
+    _previewHandedOff = false;
+    _handoffTarget = null;
     _dragDirection = direction;
     ReadiumPageFrame? from;
     final held = <ReadiumPageFrame>[];
@@ -348,6 +356,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       }
       setState(() {
         _from = from; _to = _neighbors[initialDirection];
+        _handoffTarget = _to;
         _effect = widget.preferences.pageEffect;
         _direction = initialDirection * (widget.preferences.mode == ReaderMode.vertical ? -1 : 1);
         _destinationReady = true;
@@ -378,6 +387,11 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       } else {
         await _clock.animateTo(1, duration: animated ? widget.preferences.pageSpeed.durationFor(_effect) : Duration.zero, curve: Curves.easeInOutCubic).orCancel;
       }
+      if (!finish) {
+        _handoffTarget = null;
+        await _preparing;
+        if (_previewHandedOff && mounted) await widget.land!(from);
+      }
       if (finish && target != null) {
         // Hold the complete target bitmap while Readium adopts its exact anchor.
         // No live target layout is exposed in the middle of a gesture.
@@ -393,6 +407,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       // Route/viewport changed during settling.
     } finally {
       _dragPrepared = false; _settling = null;
+      _handoffTarget = null;
+      _previewHandedOff = false;
       if (mounted) {
         setState(() { _from = null; _to = null; _liveDestination = false; });
         await WidgetsBinding.instance.endOfFrame;
@@ -468,6 +484,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   }
 
   void _finishDrag(bool commit) {
+    if (!commit) _handoffTarget = null;
     if (widget.preview != null && _to == null) {
       if (!_edges.contains(_dragDirection)) return;
       commit = false;

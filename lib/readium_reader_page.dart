@@ -592,8 +592,11 @@ class ReadiumReaderBridge extends ChangeNotifier {
         }
         if (frame == null) throw StateError('相邻页画面未能就绪');
       } finally {
-        try { if (!await _landFrame(origin, publish: false)) throw StateError('阅读位置未能恢复'); }
-        finally { _previewing = false; }
+        try {
+          final destination = turns.pendingPage;
+          if (!await _landFrame(destination ?? origin, publish: false)) throw StateError('阅读位置未能恢复');
+          if (destination != null) turns.previewHandedOff();
+        } finally { _previewing = false; }
       }
     })();
     return frame;
