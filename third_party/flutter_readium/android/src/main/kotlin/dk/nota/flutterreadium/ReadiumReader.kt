@@ -206,13 +206,16 @@ object ReadiumReader :
         }
         if (!awaitReady(true)) return false
         val view = appVisibleWebView() ?: return false
-        return kotlinx.coroutines.withTimeoutOrNull(500L) {
+        // The WebView may be fully covered by our retained Flutter page. A
+        // compositor acknowledgement is optional there; DOM/font/image readiness
+        // above is authoritative, and software capture forces the actual draw.
+        return kotlinx.coroutines.withTimeoutOrNull(64L) {
             kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { c ->
                 view.postVisualStateCallback(System.nanoTime(), object : android.webkit.WebView.VisualStateCallback() {
                     override fun onComplete(requestId: Long) { if (c.isActive) c.resumeWith(Result.success(true)) }
                 })
             }
-        } == true
+        } ?: true
     }
 
     private suspend fun appPageEdge(direction: Int): Pair<Int, Boolean> {
