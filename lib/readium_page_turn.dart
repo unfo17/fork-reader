@@ -181,7 +181,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   }
 
   Future<void> _prepareNeighbors(ReadiumPageFrame origin) async {
-    if (widget.preview == null) return;
+    if (widget.preview == null || _neighbors.length + _edges.length == 2) return;
     if (_preparing != null) return _preparing;
     final key = widget.frameKey;
     final done = Completer<void>();
@@ -424,6 +424,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     Future<ReadiumPageFrame?> Function()? capture,
   }) async {
     await _preparing;
+    _adoptingPage = false;
     _clearNeighbors();
     if (_busy || !mounted) return action();
     _busy = true;

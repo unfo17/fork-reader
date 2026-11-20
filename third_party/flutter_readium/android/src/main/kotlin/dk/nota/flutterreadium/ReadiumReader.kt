@@ -156,7 +156,7 @@ object ReadiumReader :
         visualGoToLocator(locator, false)
         val path = android.net.Uri.decode(locator.href.toString().substringBefore('#').substringBefore('?')).trimStart('/')
         return kotlinx.coroutines.withTimeoutOrNull(5000L) {
-            while (appVisibleWebView()?.url?.let { android.net.Uri.parse(it).path?.endsWith("/$path") } != true) kotlinx.coroutines.delay(16)
+            while (appVisibleWebView()?.url?.let { android.net.Uri.parse(it).path?.endsWith("/$path") } != true || epubNavigator?.currentLocator?.value?.href?.isEquivalent(locator.href) != true) kotlinx.coroutines.delay(16)
             true
         } == true
     }
