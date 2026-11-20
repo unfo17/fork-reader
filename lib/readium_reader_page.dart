@@ -119,6 +119,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
           _preferences.verticalText == true ||
           publication?.metadata.readingProgression == rd.ReadingProgression.rtl;
       final direction = (dx < 0 ? 1 : -1) * (rtl ? -1 : 1);
+      turns.requestTurn(direction);
       _pagePending = true;
       _pageIdle = Completer<void>();
       _dragInFlight = true;
@@ -126,7 +127,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       onUserNavigation();
       turns.beginDrag(dx, width, (event['y'] as num?)?.toDouble() ?? .5);
       unawaited(
-        command(() => turns.drag(direction)).whenComplete(() async {
+        command(() => turns.drag(direction), waitForPreparation: false).whenComplete(() async {
           _dragInFlight = false;
           if (!_disposed && _owner == this) {
             final at = _dragLocation;
@@ -243,6 +244,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
 
   bool get turnBusy => _pagePending || _previewing;
   Completer<void>? _pageIdle;
+  Future<void> get whenTurnIdle => _pageIdle?.future ?? Future<void>.value();
   Future<void> get whenPageIdle async {
     await _pageIdle?.future;
     await turns.whenPrepared;
@@ -461,13 +463,14 @@ class ReadiumReaderBridge extends ChangeNotifier {
   Future<void> command(
     Future<void> Function() action, {
     bool waitForView = true,
+    bool waitForPreparation = true,
   }) {
     final next = _commands.catchError((Object _) {}).then((_) async {
       await opening;
       if (_disposed || publication == null || _owner != this) return;
       if (waitForView) await _firstLocation.future;
       if (_disposed || _owner != this) return;
-      await turns.whenPrepared;
+      if (waitForPreparation) await turns.whenPrepared;
       await action();
       error = null;
     });
@@ -482,10 +485,11 @@ class ReadiumReaderBridge extends ChangeNotifier {
   Future<void> pageBy(int direction, {bool animated = true}) async {
     // Keep one page request in flight, matching the original animation lock.
     if (_pagePending || _disposed) return;
+    turns.requestTurn(direction);
     _pagePending = true;
     _pageIdle = Completer<void>();
     try {
-      await command(() => turns.turn(direction, animated: animated));
+      await command(() => turns.turn(direction, animated: animated), waitForPreparation: false);
     } finally {
       _pagePending = false;
       if (_pageIdle?.isCompleted == false) _pageIdle!.complete();
@@ -539,17 +543,18 @@ class ReadiumReaderBridge extends ChangeNotifier {
     ReadiumPageFrame? frame;
     await (() async {
       if (_disposed || origin.anchor == null) return;
-      if (await native.invokeMethod<bool>('canTurn', {'direction': direction}) == false) return;
+      if (await native.invokeMethod<bool>('canTurn', {'direction': direction.sign}) == false) return;
       _previewing = true;
       try {
-        final result = await native.invokeMapMethod<String, dynamic>('page', {'direction': direction, 'animated': false});
-        if (result?['moved'] != true) throw StateError('相邻页未能就绪');
-        if (result?['moved'] == true) {
-          await _waitForLayoutStable();
-          for (var attempt = 0; attempt < 3 && frame == null; attempt++) {
-            frame = await _capturePage();
-            if (frame == null) await Future<void>.delayed(const Duration(milliseconds: 32));
-          }
+        for (var offset = 0; offset < direction.abs(); offset++) {
+          if (offset > 0 && await native.invokeMethod<bool>('canTurn', {'direction': direction.sign}) == false) return;
+          final result = await native.invokeMapMethod<String, dynamic>('page', {'direction': direction.sign, 'animated': false});
+          if (result?['moved'] != true) throw StateError('相邻页未能就绪');
+          await _waitForPageReady();
+        }
+        for (var attempt = 0; attempt < 3 && frame == null; attempt++) {
+          frame = await _capturePage();
+          if (frame == null) await Future<void>.delayed(const Duration(milliseconds: 16));
         }
         if (frame == null) throw StateError('相邻页画面未能就绪');
       } finally {
@@ -560,15 +565,23 @@ class ReadiumReaderBridge extends ChangeNotifier {
     return frame;
   }
 
+  Future<void> _waitForPageReady({String? anchor}) async {
+    final ready = await native.invokeMethod<bool>('ready', {
+      'style': _fixedLayout == true ? null : _appliedStyleSignature,
+      if (anchor != null) 'anchor': anchor,
+    });
+    if (ready != true) throw StateError('页面尚未就绪');
+  }
+
   Future<bool> _landFrame(ReadiumPageFrame frame, {bool publish = true}) async {
     if (_disposed || frame.anchor == null) return false;
     _landing = true;
     try {
       final landed = await native.invokeMethod<bool>('land', {'anchor': frame.anchor}) == true;
       if (!landed) return false;
-      await _waitForLayoutStable();
-      await native.invokeMethod<void>('position', {'anchor': frame.anchor});
-      await WidgetsBinding.instance.endOfFrame;
+      await _waitForPageReady(anchor: frame.anchor);
+      await native.invokeMethod<void>('paper', {'color': frame.paper.toARGB32()});
+      if (publish) _pagePaper = frame.paper;
     } finally { _landing = false; }
     // Adopt the captured page locator only after its exact scroll position is restored.
     // Preview events never reach saved progress, chapter controls or reading statistics.
@@ -1109,6 +1122,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
           canTurn: _canTurnPage,
           preview: Platform.isAndroid && _appearance.mode.paginated && _appearance.pageEffect != ReaderPageEffect.none ? _previewPage : null,
           land: (frame) => _landFrame(frame),
+          lookAhead: 2,
           child: Stack(
             fit: StackFit.expand,
             children: [

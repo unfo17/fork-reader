@@ -15,9 +15,9 @@ const releaseRightsNotice =
 const releaseReadingNotice = '**在线内容以轻小说文库开放状态为准，不提供因版权限制而停止开放的在线书籍阅读。**';
 const releaseMaintenanceNotice =
     '这是基于 Wenku8_Flutter 的 Readium 本地阅读预览分支，问题与修改反馈请提交到本分支。';
-const _interruption = '预先保留前后页，拖动支持折返换向；松手完成动画后按准确锚点同步阅读位置。';
-const _cache = '上一页纸页翻动为下一页的逆过程；段落接续调整曲线和分组。';
-const _retry = '改善跨章回退及快速松手时内容突现，插图预解码后使用短淡入转场。';
+const _interruption = '翻页跟手拖动，松手以固定时长完成或回弹，不再随甩动速度加速。';
+const _cache = '定位与动画并行，前后页缓存随翻页保留；提前准备第二张相邻页，减少连翻等待。';
+const _retry = '恢复插图预览原有窗口动画，提前解码、绘制大图并保留阅读页转场画面。';
 const _resources = '保留原阅读控件及当前仓库自动更新，沿用固定签名覆盖安装。';
 const _changes = [_interruption, _cache, _retry, _resources];
 const _androidInstall =

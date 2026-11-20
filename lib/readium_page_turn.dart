@@ -93,6 +93,7 @@ class ReadiumPageTurnController {
 
   Future<void> drag(int direction) async {
     try {
+      requestTurn(direction);
       _directionMultiplier = direction / _initialSign;
       await _owner?._turn(direction, true, gesture: _release);
     } finally {
@@ -101,6 +102,7 @@ class ReadiumPageTurnController {
   }
 
   Future<void> turn(int direction, {required bool animated}) async {
+    requestTurn(direction);
     await _owner?._turn(direction, animated);
   }
 
@@ -108,6 +110,11 @@ class ReadiumPageTurnController {
     endDrag(cancel: true);
     _shape.dispose();
   }
+
+  void requestTurn(int direction) => _owner?._prioritizeTurn(direction);
+
+  Future<void> freezeForRoute() async => _owner?._freezeForRoute();
+  Future<void> thawAfterRoute() async => _owner?._thawAfterRoute();
 
   Future<void> get whenPrepared => _owner?._preparing ?? Future<void>.value();
 
@@ -137,6 +144,7 @@ class ReadiumPageSurface extends StatefulWidget {
     this.preview,
     this.land,
     this.layoutKey,
+    this.lookAhead = 1,
   });
   final ReadiumPageTurnController controller;
   final ReaderPreferences preferences;
@@ -145,6 +153,7 @@ class ReadiumPageSurface extends StatefulWidget {
   final Future<bool> Function(int direction, bool animated) step;
   final String frameKey;
   final String? layoutKey;
+  final int lookAhead;
   final Future<bool> Function(int direction)? canTurn;
   final Future<ReadiumPageFrame?> Function(int direction, ReadiumPageFrame origin)? preview;
   final Future<bool> Function(ReadiumPageFrame frame)? land;
@@ -175,14 +184,66 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   ReadiumPageFrame? _previewCover;
   int _dragDirection = 1;
   bool _adoptingPage = false;
+  bool _preparationInterrupted = false, _routePaused = false;
+  ReadiumPageFrame? _routeCover;
+  int _radius(ReadiumPageFrame frame) => frame.image.width * frame.image.height * 4 * (2 * widget.lookAhead + 1) <= 64 * 1024 * 1024 ? widget.lookAhead : 1;
+  bool get _windowComplete => _cached != null && _neighbors.length + _edges.length >= 2 * _radius(_cached!);
+  void _prioritizeTurn(int direction) {
+    _dragDirection = direction;
+    _preparationInterrupted = true;
+    _warmTimer?.cancel();
+  }
+
+  Future<void> _freezeForRoute() async {
+    _routePaused = true;
+    _preparationInterrupted = true;
+    _warmTimer?.cancel();
+    await _preparing;
+    if (_warming) await _warmDone?.future;
+    if (!mounted || _routeCover != null) return;
+    final frame = _cached?.retain() ?? await widget.capture();
+    if (!mounted) { frame?.dispose(); return; }
+    setState(() => _routeCover = frame);
+    await WidgetsBinding.instance.endOfFrame;
+  }
+
+  Future<void> _thawAfterRoute() async {
+    final frame = _routeCover;
+    if (mounted) {
+      setState(() => _routeCover = null);
+      await WidgetsBinding.instance.endOfFrame;
+    }
+    _routeCover = null;
+    frame?.dispose();
+    _routePaused = false;
+    _preparationInterrupted = false;
+    if (mounted) _warmLater();
+  }
+
+  void _shiftWindow(int direction, ReadiumPageFrame from) {
+    final radius = _radius(from), shifted = <int, ReadiumPageFrame>{};
+    for (final entry in _neighbors.entries) {
+      final offset = entry.key - direction;
+      if (offset != 0 && offset.abs() <= radius) { shifted[offset] = entry.value; }
+      else { entry.value.dispose(); }
+    }
+    final edges = _edges.map((offset) => offset - direction).where((offset) => offset != 0 && offset.abs() <= radius).toSet();
+    _neighbors..clear()..addAll(shifted);
+    _edges..clear()..addAll(edges);
+    _neighbors[-direction]?.dispose();
+    _neighbors[-direction] = from.retain();
+  }
+
   void _clearNeighbors() {
     for (final frame in _neighbors.values) { frame.dispose(); }
     _neighbors.clear();
     _edges.clear();
   }
 
-  Future<void> _prepareNeighbors(ReadiumPageFrame origin) async {
-    if (widget.preview == null || _neighbors.length + _edges.length == 2) return;
+  Future<void> _prepareNeighbors(ReadiumPageFrame origin, {int? requiredDirection}) async {
+    if (widget.preview == null) return;
+    if (requiredDirection != null && (_neighbors.containsKey(requiredDirection) || _edges.contains(requiredDirection))) return;
+    if (requiredDirection == null && _neighbors.length + _edges.length >= 2 * _radius(origin)) return;
     if (_preparing != null) return _preparing;
     final key = widget.frameKey;
     final done = Completer<void>();
@@ -190,8 +251,13 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     if (mounted) setState(() => _previewCover = origin.retain());
     await WidgetsBinding.instance.endOfFrame;
     try {
-      for (final direction in [1, -1]) {
-        if (!mounted || key != widget.frameKey) break;
+      final bias = _dragDirection;
+      final offsets = requiredDirection == null
+          ? [bias, -bias, if (_radius(origin) > 1) bias * 2, if (_radius(origin) > 1) -bias * 2]
+          : [requiredDirection];
+      for (final direction in offsets) {
+        if (!mounted || key != widget.frameKey || _routePaused || (requiredDirection == null && _preparationInterrupted)) break;
+        if (direction.abs() > 1 && _edges.contains(direction.sign)) { _edges.add(direction); continue; }
         if (_neighbors.containsKey(direction) || _edges.contains(direction)) continue;
         ReadiumPageFrame? frame;
         try { frame = await widget.preview!(direction, origin); } catch (_) { continue; }
@@ -217,6 +283,18 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       _direction = direction * (widget.preferences.mode == ReaderMode.vertical ? -1 : 1);
       _clock.value = 0;
     });
+    if (_neighbors[direction] == null && !_edges.contains(direction) && _from != null) {
+      unawaited(_prepareReversedNeighbor(direction, _from!));
+    }
+  }
+
+  Future<void> _prepareReversedNeighbor(int direction, ReadiumPageFrame origin) async {
+    await _preparing;
+    if (!mounted || !_dragPrepared || _dragDirection != direction) return;
+    await _prepareNeighbors(origin, requiredDirection: direction);
+    if (!mounted || !_dragPrepared || _dragDirection != direction) return;
+    setState(() => _to = _neighbors[direction]);
+    _scrub();
   }
 
   Future<void> _bufferedTurn(int direction, bool animated, Completer<bool>? gesture) async {
@@ -227,10 +305,15 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     final held = <ReadiumPageFrame>[];
     var committed = false;
     try {
-      await _preparing;
-      from = await _takeFrame(widget.capture);
+      if (_cached != null && (_neighbors.containsKey(direction) || _edges.contains(direction))) {
+        from = _cached!.retain();
+      } else {
+        await _preparing;
+        from = await _takeFrame(widget.capture);
+      }
       if (from == null || !mounted) return;
-      await _prepareNeighbors(from);
+      final requested = gesture == null ? direction : (widget.controller._sign * widget.controller._directionMultiplier).round();
+      await _prepareNeighbors(from, requiredDirection: requested);
       if (!mounted) return;
       // Keep both neighbours alive through frame-key changes during landing.
       for (final frame in _neighbors.values) { held.add(frame.retain()); }
@@ -252,8 +335,20 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       _dragPrepared = gesture != null;
       await WidgetsBinding.instance.endOfFrame;
       var finish = gesture == null || await gesture.future;
+      if (!_neighbors.containsKey(_dragDirection) && !_edges.contains(_dragDirection)) await _preparing;
       final target = _neighbors[_dragDirection];
+      if (target != null && !held.contains(target)) held.add(target.retain());
+      if (_to != target && mounted) setState(() => _to = target);
       if (target == null) { finish = false; await widget.canTurn?.call(_dragDirection); }
+      Future<bool>? landing;
+      if (finish && target != null) {
+        _adoptingPage = true;
+        landing = (() async {
+          await _preparing;
+          if (!mounted) return false;
+          return widget.land!(target);
+        })().catchError((Object _) => false);
+      }
       if (gesture != null) {
         _finishDrag(finish);
         await _settling;
@@ -263,14 +358,12 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       if (finish && target != null) {
         // Hold the complete target bitmap while Readium adopts its exact anchor.
         // No live target layout is exposed in the middle of a gesture.
-        _adoptingPage = true;
-        committed = await widget.land!(target);
+        committed = await landing!;
         if (!committed) {
           await _clock.animateTo(0, duration: const Duration(milliseconds: 180)).orCancel;
         } else {
           _cached?.dispose(); _cached = target.retain();
-          _clearNeighbors();
-          _neighbors[-_dragDirection] = from.retain();
+          _shiftWindow(_dragDirection, from);
         }
       }
     } on TickerCanceled {
@@ -286,6 +379,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       }
       from?.dispose();
       for (final frame in held) { frame.dispose(); }
+      _preparationInterrupted = false;
       _busy = false;
       if (mounted) _warmLater();
     }
@@ -297,7 +391,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       if (!mounted ||
           _busy ||
           _warming ||
-          (_cached != null && (widget.preview == null || _neighbors.length + _edges.length == 2)) ||
+          _routePaused || _preparationInterrupted ||
+          (_cached != null && (widget.preview == null || _windowComplete)) ||
           !widget.preferences.mode.paginated ||
           widget.preferences.pageEffect == ReaderPageEffect.none)
         return;
@@ -350,26 +445,18 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   }
 
   void _finishDrag(bool commit) {
-    if (widget.preview != null && _to == null) commit = false;
+    if (widget.preview != null && _to == null) {
+      if (!_edges.contains(_dragDirection)) return;
+      commit = false;
+    }
     if (!_dragPrepared || _settling != null || !mounted) return;
     _dragPrepared = false;
     final target = commit ? (_destinationReady ? 1.0 : .92) : 0.0;
-    final remaining = (target - _clock.value).abs();
-    var micros =
-        widget.preferences.pageSpeed.durationFor(_effect).inMicroseconds *
-        remaining;
-    final speed = widget.controller._velocity.abs();
-    if (speed > 700) {
-      micros = math.min(
-        micros,
-        remaining * widget.controller._width / speed * 1000000,
-      );
-    }
     _settling = _clock
         .animateTo(
           target,
-          duration: Duration(microseconds: micros.round().clamp(140000, 600000)),
-          curve: Curves.easeOutCubic,
+          duration: _clock.value == target ? Duration.zero : widget.preferences.pageSpeed.durationFor(_effect),
+          curve: Curves.easeOutSine,
         )
         .orCancel
         .catchError((Object error) {
@@ -632,7 +719,9 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   Widget build(BuildContext context) => Stack(
     fit: StackFit.expand,
     children: [
-      widget.child,
+      Opacity(opacity: _routeCover == null ? 1 : 0, child: widget.child),
+      if (_routeCover case final cover?)
+        Positioned.fill(child: IgnorePointer(child: RawImage(image: cover.image, fit: BoxFit.fill, filterQuality: FilterQuality.none))),
       if (_previewCover case final cover?)
         Positioned.fill(child: IgnorePointer(child: RawImage(image: cover.image, fit: BoxFit.fill, filterQuality: FilterQuality.none))),
       if (_from case final frame?)
@@ -685,6 +774,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       widget.controller._owner = null;
     _warmTimer?.cancel();
     _cached?.dispose();
+    _routeCover?.dispose(); _routeCover = null;
     _clearNeighbors();
     widget.controller.endDrag(cancel: true);
     _clock.dispose();

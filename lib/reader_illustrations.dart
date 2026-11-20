@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -92,7 +93,7 @@ class ReaderIllustrationCache {
     return bytes == null ? null : _sizes[bytes];
   }
 
-  Future<void> prepare(BuildContext context, String url) async {
+  Future<void> prepare(BuildContext context, String url, {bool warmRaster = false}) async {
     final bytes = await load(url);
     if (!context.mounted) return;
     final entry = _cache[url];
@@ -102,7 +103,30 @@ class ReaderIllustrationCache {
     final width = readerIllustrationDecodeWidth(imageSize: size,
       available: MediaQuery.sizeOf(context),
       devicePixelRatio: MediaQuery.devicePixelRatioOf(context), fullScreen: true);
-    await precacheImage(_decodeProvider(url, bytes, entry.source, width), context);
+    final provider = _decodeProvider(url, bytes, entry.source, width);
+    await precacheImage(provider, context);
+    if (!warmRaster || !context.mounted) return;
+    // Upload the same gallery texture before its original window transition.
+    // Decoding alone can leave the first GPU upload on an animation frame.
+    final ready = Completer<ui.Image>();
+    final stream = provider.resolve(createLocalImageConfiguration(context));
+    final listener = ImageStreamListener((info, _) {
+      if (!ready.isCompleted) ready.complete(info.image.clone());
+    }, onError: (Object error, StackTrace? stack) {
+      if (!ready.isCompleted) ready.completeError(error, stack);
+    });
+    stream.addListener(listener);
+    ui.Image? image;
+    try {
+      image = await ready.future;
+      final recorder = ui.PictureRecorder();
+      Canvas(recorder).drawImageRect(image,
+        Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
+        const Rect.fromLTWH(0, 0, 32, 32), Paint());
+      final picture = recorder.endRecording();
+      try { final raster = await picture.toImage(32, 32); raster.dispose(); }
+      finally { picture.dispose(); }
+    } finally { stream.removeListener(listener); image?.dispose(); }
   }
 
   Future<Size> dimensions(String url) async {

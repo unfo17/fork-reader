@@ -166,6 +166,32 @@ object ReadiumReader :
         appEvaluateVisible("window.scrollTo(${json.optDouble("x", 0.0)},${json.optDouble("y", 0.0)});")
     }
 
+    suspend fun appWaitForPageReady(style: String?, anchor: String?): Boolean {
+        val expected = if (appIsFixedLayout() || style == null) "null" else JSONObject.quote(style)
+        suspend fun awaitReady(images: Boolean): Boolean = kotlinx.coroutines.withTimeoutOrNull(3000L) {
+            while (appEvaluateVisible("""
+                (function(){var expected=$expected;
+                return !!document.body && (!document.fonts || document.fonts.status==='loaded') &&
+                (expected===null || window.__wenkuAppliedStyle===expected) &&
+                (!$images || !window.__wenkuPageReady || window.__wenkuPageReady());})();
+            """.trimIndent()) != "true") kotlinx.coroutines.delay(16)
+            true
+        } == true
+        if (anchor != null) {
+            if (!awaitReady(false)) return false
+            appPositionPage(anchor)
+        }
+        if (!awaitReady(true)) return false
+        val view = appVisibleWebView() ?: return false
+        return kotlinx.coroutines.withTimeoutOrNull(500L) {
+            kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { c ->
+                view.postVisualStateCallback(System.nanoTime(), object : android.webkit.WebView.VisualStateCallback() {
+                    override fun onComplete(requestId: Long) { if (c.isActive) c.resumeWith(Result.success(true)) }
+                })
+            }
+        } == true
+    }
+
     private suspend fun appPageEdge(direction: Int): Pair<Int, Boolean> {
         val publication = currentPublication ?: return -1 to false
         // A locator notification alone is not proof that an edge is the end of
