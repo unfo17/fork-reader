@@ -433,7 +433,7 @@ object ReadiumReader :
     // Snapshot identity must not resolve DOM selectors or traverse the TOC.
     fun appPageKeyJson(): String? = epubNavigator?.currentLocator?.value?.toJSON()?.toString()
 
-    suspend fun appCapturePage(includeBands: Boolean = false, vertical: Boolean = false): Map<String, Any>? {
+    suspend fun appCapturePage(includeBands: Boolean = false, vertical: Boolean = false, allowLateCapture: Boolean = false): Map<String, Any>? {
         // Use the selected resource for DOM geometry, but draw its parent tree:
         // ViewGroup.drawChild supplies the WebView's native scroll translation.
         // Calling webView.draw directly loses that translation after TOC jumps.
@@ -449,7 +449,7 @@ object ReadiumReader :
                 })
             }
         }
-        val metadata = kotlinx.coroutines.withTimeoutOrNull(200) {
+        val metadata = kotlinx.coroutines.withTimeoutOrNull(if (allowLateCapture) 500L else 200L) {
             kotlinx.coroutines.suspendCancellableCoroutine<String?> { c ->
                 view.evaluateJavascript("""
                     (function(){

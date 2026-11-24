@@ -643,9 +643,13 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _clearNeighbors();
     if (_busy || !mounted) return action();
     _busy = true;
+    final capturePage = capture ?? widget.capture;
     ReadiumPageFrame? from, target;
     try {
-      from = await _takeFrame(capture ?? widget.capture);
+      from = await _takeFrame(capturePage);
+      if (from == null && transitionDirection != null && mounted) {
+        from = await capturePage();
+      }
       if (mounted && from != null) {
         setState(() {
           _from = from;
@@ -658,16 +662,25 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       await action();
       if (!mounted || from == null || transitionDirection == null ||
           MediaQuery.disableAnimationsOf(context)) return;
-      target = await (capture ?? widget.capture)();
-      if (!mounted || target == null || target.location == from.location) return;
+      for (var attempt = 0; attempt < 2 && mounted; attempt++) {
+        target = await capturePage();
+        if (target != null && target.location != from.location) break;
+        target?.dispose();
+        target = null;
+        if (attempt == 0 && mounted) await WidgetsBinding.instance.endOfFrame;
+      }
+      if (!mounted) return;
       final prefs = widget.preferences;
-      final effect = prefs.pageEffect == ReaderPageEffect.none
+      final direction = transitionDirection * (prefs.mode == ReaderMode.vertical ? -1 : 1);
+      final effect = prefs.pageEffect == ReaderPageEffect.none ||
+              (target == null && (prefs.pageEffect != ReaderPageEffect.paper || direction < 0))
           ? ReaderPageEffect.fade
           : prefs.pageEffect;
       setState(() {
         _to = target;
+        _liveDestination = target == null;
         _effect = effect;
-        _direction = transitionDirection * (prefs.mode == ReaderMode.vertical ? -1 : 1);
+        _direction = direction;
       });
       await _clock.animateTo(1, duration: prefs.pageSpeed.durationFor(effect),
         curve: Curves.easeInOutSine).orCancel;
@@ -675,7 +688,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       // Reader closed during the transition.
     } finally {
       if (mounted) {
-        setState(() { _from = null; _to = null; });
+        setState(() { _from = null; _to = null; _liveDestination = false; });
         await WidgetsBinding.instance.endOfFrame;
       }
       from?.dispose();
@@ -905,6 +918,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
                               ),
                             ),
                           ]
+                        : _to == null && _liveDestination && _effect == ReaderPageEffect.fade
+                        ? [FadeTransition(opacity: ReverseAnimation(_clock), child: _pageImage(frame))]
                         : _to == null
                         ? [_leaf(frame, false)]
                         : _direction < 0 &&

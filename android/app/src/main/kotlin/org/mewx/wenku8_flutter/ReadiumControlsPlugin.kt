@@ -47,7 +47,7 @@ class ReadiumControlsPlugin : FlutterPlugin {
                                 call.argument<Number>("color")?.let { ReadiumReader.appSetPaper(it.toInt()) }
                                 result.success(null)
                             }
-                            "capture" -> result.success(ReadiumReader.appCapturePage(call.argument<Boolean>("bands") == true, call.argument<Boolean>("vertical") == true))
+                            "capture" -> result.success(ReadiumReader.appCapturePage(call.argument<Boolean>("bands") == true, call.argument<Boolean>("vertical") == true, call.argument<Boolean>("allowLateCapture") == true))
                             "decorations" -> {
                                 val marks = call.argument<List<Map<String, Any>>>("marks") ?: emptyList()
                                 ReadiumReader.applyAppDecorations(marks, call.argument<String>("group") ?: "wenku")

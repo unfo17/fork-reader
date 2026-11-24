@@ -725,6 +725,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     final pixels = await native.invokeMapMethod<String, dynamic>('capture', {
       'bands': _appearance.pageEffect == ReaderPageEffect.staggered,
       'vertical': _preferences.verticalText == true,
+      'allowLateCapture': allowNavigating,
     });
     if (pixels == null) return null;
     final bytes = pixels['pixels'] as Uint8List;
