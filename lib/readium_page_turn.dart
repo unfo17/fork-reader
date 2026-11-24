@@ -680,7 +680,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         _to = target;
         _liveDestination = target == null;
         _effect = effect;
-        _direction = direction;
+        _direction = direction.toDouble();
       });
       await _clock.animateTo(1, duration: prefs.pageSpeed.durationFor(effect),
         curve: Curves.easeInOutSine).orCancel;
