@@ -461,14 +461,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       _preparationInterrupted = false;
       _busy = false;
       if (mounted) {
-        if (_presented != null) {
-          final presented = _presented;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted && identical(_presented, presented)) {
-              setState(_releasePresentedPage);
-            }
-          });
-        }
+        // Keep one continuous still image through lookahead. Removing it now
+        // would expose the WebView, then replace it again with a snapshot.
         _warmLater();
       }
     }
@@ -477,14 +471,12 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   void _warmLater() {
     _warmTimer?.cancel();
     _warmTimer = Timer(Duration(milliseconds: _cached == null ? 48 : 180), () async {
-      if (!mounted ||
-          _busy ||
-          _warming ||
-          _routePaused || _preparationInterrupted ||
-          (_cached != null && (widget.preview == null || _windowComplete)) ||
-          !widget.preferences.mode.paginated ||
-          widget.preferences.pageEffect == ReaderPageEffect.none)
+      if (!mounted || _busy || _warming || _routePaused || _preparationInterrupted) return;
+      if ((_cached != null && (widget.preview == null || _windowComplete)) ||
+          !widget.preferences.mode.paginated || widget.preferences.pageEffect == ReaderPageEffect.none) {
+        if (_presented != null) setState(_releasePresentedPage);
         return;
+      }
       _warming = true;
       final done = _warmDone = Completer<void>();
       final key = widget.frameKey;
@@ -504,6 +496,9 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
           _cached?.dispose(); _cached = null; _clearNeighbors();
         }
         done.complete();
+        if (mounted && !_busy && !_routePaused && _presented != null) {
+          setState(_releasePresentedPage);
+        }
         if (mounted &&
             (key != widget.frameKey ||
                 (!_busy && _cached == null && _warmRetries++ < 3)))
@@ -605,6 +600,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         return;
       }
       if (!_busy && !_warming) {
+        _releasePresentedPage();
         _cached?.dispose(); _cached = null; _clearNeighbors();
       }
       _warmLater();
@@ -622,6 +618,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     final viewport = (MediaQuery.sizeOf(context), MediaQuery.devicePixelRatioOf(context));
     if (_viewport != viewport) {
       _viewport = viewport;
+      _releasePresentedPage();
       widget.controller.endDrag(cancel: true);
       _clearNeighbors();
       _cached?.dispose();
@@ -652,6 +649,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       }
       if (mounted && from != null) {
         setState(() {
+          _releasePresentedPage();
           _from = from;
           _effect = ReaderPageEffect.none;
           _liveDestination = false;
