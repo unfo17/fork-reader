@@ -564,7 +564,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
         ..['locations'] = {'progression': fraction.clamp(0.0, 1.0)};
       final requested = rd.Locator.fromJson(json);
       if (requested != null) await _navigate(requested, seek: true);
-    });
+    }, waitForPreparation: false);
   }
 
   Future<void> command(
@@ -836,7 +836,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       applied = true;
       final direction = chapterFor(at).compareTo(chapter);
       await _navigate(at, transitionDirection: animated ? (direction == 0 ? 1 : direction) : null);
-    });
+    }, waitForPreparation: false);
     return applied;
   }
 
@@ -861,7 +861,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       if (at == null) throw const FormatException('原书目录没有对应的阅读位置');
       final direction = index.compareTo(chapter);
       await _navigate(at, transitionDirection: animated ? (direction == 0 ? 1 : direction) : null);
-    });
+    }, waitForPreparation: false);
   }
 
   String _bookmarkKey(String id) => 'readium.bookmark.v1.${book.id}.$id';

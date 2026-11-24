@@ -195,8 +195,8 @@ object ReadiumReader :
         val locator = Locator.fromJSON(JSONObject(raw)) ?: return false
         if (seek && !appIsFixedLayout() && appMatchesResource(appVisibleWebView(), locator.href.toString())) {
             val value = locator.locations.progression?.coerceIn(0.0, 1.0) ?: 0.0
-            appEvaluateVisible("readium.scrollToPosition($value);")
-            return true
+            val applied = appEvaluateVisible("(function(){ if(typeof readium==='undefined'||!readium.scrollToPosition)return false; readium.scrollToPosition($value); return true; })();")
+            if (applied == "true") return true
         }
         val navigator = epubNavigator ?: return false
         val publication = currentPublication ?: return false
@@ -270,7 +270,9 @@ object ReadiumReader :
     fun appInterruptPreview() { appPreviewVersion++ }
 
     suspend fun appWaitForPageReady(style: String?, anchor: String?, previewVersion: Int? = null, stable: Boolean = false): Boolean {
-        val expected = if (appIsFixedLayout() || style == null) "null" else JSONObject.quote(style)
+        val fixed = appIsFixedLayout()
+        val expected = if (fixed || style == null) "null" else JSONObject.quote(style)
+        val targetGeometry = if (fixed || anchor == null) null else JSONObject(anchor).optJSONObject("geometry")
         suspend fun awaitReady(images: Boolean, requireStable: Boolean): Boolean = kotlinx.coroutines.withTimeoutOrNull(3000L) {
             var last: String? = null
             while (previewVersion == null || previewVersion == appPreviewVersion) {
@@ -283,13 +285,18 @@ object ReadiumReader :
                             (expected!==null&&window.__wenkuAppliedStyle!==expected)||
                             ($images&&window.__wenkuPageReady&&!window.__wenkuPageReady()))return null;
                         document.body.offsetHeight;
-                        var g=geometry();
+                        var g=geometry(), target=$targetGeometry;
+                        if($images && target && ['w','h','sw','sh','dpr'].every(function(key){return Math.abs(target[key]-g[key])<1;}) &&
+                            (Math.abs(target.x-g.x)>.75||Math.abs(target.y-g.y)>.75)){
+                            window.scrollTo({left:target.x,top:target.y,behavior:'instant'});
+                            return null;
+                        }
                         g.paper=getComputedStyle(document.documentElement).backgroundColor;
                         return JSON.stringify(g);
                     })();
                 """.trimIndent())
                 if (sample != null && sample != "null" && (!requireStable || sample == last)) {
-                    if (images && !appIsFixedLayout()) {
+                    if (images && !fixed) {
                         val paper = JSONObject(org.json.JSONTokener(sample).nextValue().toString()).optString("paper")
                         val values = Regex("[0-9.]+").findAll(paper).map { it.value.toDouble() }.toList()
                         if (values.size >= 3 && (values.size == 3 || values[3] > 0.0)) {

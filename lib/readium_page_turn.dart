@@ -228,7 +228,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   int _radius(ReadiumPageFrame frame) => frame.image.width * frame.image.height * 4 * (2 * widget.lookAhead + 1) <= 64 * 1024 * 1024 ? widget.lookAhead : 1;
   bool get _windowComplete => _cached != null && _neighbors.length + _edges.length >= 2 * _radius(_cached!);
   void _prioritizeTurn(int direction) {
-    widget.onPrioritize?.call();
+    if (!_preparationInterrupted) widget.onPrioritize?.call();
     _dragDirection = direction;
     _preparationInterrupted = true;
     _warmTimer?.cancel();
@@ -422,6 +422,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         await _preparing;
         if (_previewHandedOff && mounted) await widget.land!(from);
       }
+      if (!mounted) return;
       if (finish && target != null) {
         // Hold the complete target bitmap while Readium adopts its exact anchor.
         // No live target layout is exposed in the middle of a gesture.
@@ -873,7 +874,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         Positioned.fill(child: GestureDetector(
           behavior: HitTestBehavior.translucent,
           onTapUp: widget.replayTap == null ? null : (details) => unawaited(_replayPreviewTap(details.localPosition)),
-          child: RawImage(image: cover.image, fit: BoxFit.fill, filterQuality: FilterQuality.none),
+          child: IgnorePointer(child: _pageImage(cover)),
         )),
       if (_from case final frame?)
         Positioned.fill(
