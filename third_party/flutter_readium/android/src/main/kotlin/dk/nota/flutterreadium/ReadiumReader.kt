@@ -80,6 +80,7 @@ import org.readium.r2.streamer.PublicationOpener.OpenError
 import org.readium.r2.streamer.parser.DefaultPublicationParser
 import org.json.JSONObject
 import java.lang.ref.WeakReference
+import kotlin.math.roundToInt
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -150,6 +151,63 @@ object ReadiumReader :
         }
     }
 
+    private fun appMatchesResource(view: android.webkit.WebView?, href: String): Boolean {
+        val path = android.net.Uri.decode(href.substringBefore('#').substringBefore('?')).trimStart('/')
+        return path.isNotEmpty() && view?.url?.let { android.net.Uri.parse(it).path?.endsWith("/$path") } == true
+    }
+
+    private val appGeometryScript = """
+        function geometry(){
+            var scroll=document.scrollingElement||document.documentElement;
+            return {x:scrollX,y:scrollY,w:innerWidth,h:innerHeight,
+                sw:scroll.scrollWidth,sh:scroll.scrollHeight,dpr:devicePixelRatio};
+        }
+    """.trimIndent()
+
+    private fun appLocatorAtGeometry(raw: String, view: android.webkit.WebView, geometry: JSONObject): String {
+        val json = JSONObject(raw)
+        if (!appMatchesResource(view, json.getString("href"))) {
+            val link = currentPublication?.readingOrder?.filter { appMatchesResource(view, it.href.resolve().toString()) }
+                ?.maxByOrNull { it.href.resolve().toString().length } ?: return raw
+            json.put("href", link.href.resolve().toString())
+            json.put("type", link.mediaType?.toString() ?: "application/xhtml+xml")
+            json.remove("locations")
+            json.remove("text")
+        }
+        if (!appIsFixedLayout()) {
+            val locations = json.optJSONObject("locations") ?: JSONObject().also { json.put("locations", it) }
+            val scrolling = epubNavigator?.preferences?.scroll == true
+            val extent = geometry.optDouble(if (scrolling) "sh" else "sw", 0.0)
+            val viewport = geometry.optDouble(if (scrolling) "h" else "w", 1.0).coerceAtLeast(1.0)
+            val offset = kotlin.math.abs(geometry.optDouble(if (scrolling) "y" else "x", 0.0))
+            val progress = if (scrolling) offset / (extent - viewport).coerceAtLeast(1.0) else offset / extent.coerceAtLeast(viewport)
+            locations.put("progression", progress.coerceIn(0.0, 1.0))
+            if (!scrolling) {
+                val page = (offset / viewport).roundToInt()
+                val count = (extent / viewport).roundToInt().coerceAtLeast(page + 1)
+                locations.put("currentPage", page).put("totalPages", count)
+            }
+        }
+        return json.toString()
+    }
+
+    suspend fun appJumpToPage(raw: String, seek: Boolean): Boolean {
+        val locator = Locator.fromJSON(JSONObject(raw)) ?: return false
+        if (seek && !appIsFixedLayout() && appMatchesResource(appVisibleWebView(), locator.href.toString())) {
+            val value = locator.locations.progression?.coerceIn(0.0, 1.0) ?: 0.0
+            appEvaluateVisible("readium.scrollToPosition($value);")
+            return true
+        }
+        val navigator = epubNavigator ?: return false
+        val publication = currentPublication ?: return false
+        val target = publication.normalizeLocator(locator)
+        if (!navigator.go(target, false)) return false
+        return kotlinx.coroutines.withTimeoutOrNull(5000L) {
+            while (!appMatchesResource(appVisibleWebView(), target.href.toString())) kotlinx.coroutines.delay(16)
+            true
+        } == true
+    }
+
     suspend fun appLandPage(anchor: String): Boolean {
         val json = JSONObject(anchor)
         val captured = json.getJSONObject("locator")
@@ -173,8 +231,22 @@ object ReadiumReader :
     }
 
     suspend fun appPositionPage(anchor: String) {
+        if (appIsFixedLayout()) return
         val json = JSONObject(anchor)
-        appEvaluateVisible("window.scrollTo(${json.optDouble("x", 0.0)},${json.optDouble("y", 0.0)});")
+        val geometry = json.optJSONObject("geometry")
+        val x = json.optDouble("x", 0.0)
+        val y = json.optDouble("y", 0.0)
+        val progress = json.optJSONObject("locator")?.optJSONObject("locations")?.optDouble("progression", 0.0) ?: 0.0
+        appEvaluateVisible("""
+            (function(){
+                $appGeometryScript
+                var target=$geometry,g=geometry();
+                var same=!target||['w','h','sw','sh','dpr'].every(function(key){return Math.abs(target[key]-g[key])<1;});
+                if(!same){readium.scrollToPosition($progress);return;}
+                if(Math.abs(g.x-$x)>.25||Math.abs(g.y-$y)>.25)
+                    window.scrollTo({left:$x,top:$y,behavior:'instant'});
+            })();
+        """.trimIndent())
     }
 
     fun appVisualPageState(): Map<String, String>? {
@@ -197,25 +269,45 @@ object ReadiumReader :
         private set
     fun appInterruptPreview() { appPreviewVersion++ }
 
-    suspend fun appWaitForPageReady(style: String?, anchor: String?, previewVersion: Int? = null): Boolean {
+    suspend fun appWaitForPageReady(style: String?, anchor: String?, previewVersion: Int? = null, stable: Boolean = false): Boolean {
         val expected = if (appIsFixedLayout() || style == null) "null" else JSONObject.quote(style)
-        suspend fun awaitReady(images: Boolean): Boolean = kotlinx.coroutines.withTimeoutOrNull(3000L) {
+        suspend fun awaitReady(images: Boolean, requireStable: Boolean): Boolean = kotlinx.coroutines.withTimeoutOrNull(3000L) {
+            var last: String? = null
             while (previewVersion == null || previewVersion == appPreviewVersion) {
-                if (appEvaluateVisible("""
-                (function(){var expected=$expected;if(document.body)document.body.offsetHeight;
-                return !!document.body && (!document.fonts || document.fonts.status==='loaded') &&
-                (expected===null || window.__wenkuAppliedStyle===expected) &&
-                (!$images || !window.__wenkuPageReady || window.__wenkuPageReady());})();
-                """.trimIndent()) == "true") return@withTimeoutOrNull true
+                val sample = appEvaluateVisible("""
+                    (function(){
+                        $appGeometryScript
+                        var expected=$expected;
+                        if(!document.body||document.readyState==='loading'||
+                            (document.fonts&&document.fonts.status!=='loaded')||
+                            (expected!==null&&window.__wenkuAppliedStyle!==expected)||
+                            ($images&&window.__wenkuPageReady&&!window.__wenkuPageReady()))return null;
+                        document.body.offsetHeight;
+                        var g=geometry();
+                        g.paper=getComputedStyle(document.documentElement).backgroundColor;
+                        return JSON.stringify(g);
+                    })();
+                """.trimIndent())
+                if (sample != null && sample != "null" && (!requireStable || sample == last)) {
+                    if (images && !appIsFixedLayout()) {
+                        val paper = JSONObject(org.json.JSONTokener(sample).nextValue().toString()).optString("paper")
+                        val values = Regex("[0-9.]+").findAll(paper).map { it.value.toDouble() }.toList()
+                        if (values.size >= 3 && (values.size == 3 || values[3] > 0.0)) {
+                            appSetPaper(android.graphics.Color.rgb(values[0].toInt(), values[1].toInt(), values[2].toInt()))
+                        }
+                    }
+                    return@withTimeoutOrNull true
+                }
+                last = sample
                 kotlinx.coroutines.delay(16)
             }
             false
         } == true
         if (anchor != null) {
-            if (!awaitReady(false)) return false
+            if (!awaitReady(false, false)) return false
             appPositionPage(anchor)
         }
-        if (!awaitReady(true)) return false
+        if (!awaitReady(true, stable || anchor != null)) return false
         val view = appVisibleWebView() ?: return false
         // The WebView may be fully covered by our retained Flutter page. A
         // compositor acknowledgement is optional there; DOM/font/image readiness
@@ -342,6 +434,7 @@ object ReadiumReader :
         val view = appVisibleWebView() ?: return null
         if (root.width <= 0 || root.height <= 0) return null
         val locator = appPageKeyJson() ?: return null
+        val visualKey = appVisualPageKey()
         kotlinx.coroutines.withTimeoutOrNull(80) {
             kotlinx.coroutines.suspendCancellableCoroutine<Unit> { c ->
                 view.postVisualStateCallback(System.nanoTime(), object : android.webkit.WebView.VisualStateCallback() {
@@ -355,6 +448,7 @@ object ReadiumReader :
                     (function(){
                         if(document.fonts && document.fonts.status!=='loaded')return null;
                         if(window.__wenkuPageReady&&!window.__wenkuPageReady())return null;
+                        $appGeometryScript
                         var w=innerWidth,h=innerHeight,v=$vertical,spans=[];
                         function add(r){
                             if(r.right<=0||r.left>=w||r.bottom<=0||r.top>=h)return;
@@ -388,20 +482,26 @@ object ReadiumReader :
                         var merged=[];spans.forEach(function(s){var last=merged[merged.length-1];if(last&&s[0]<=last[1]+.5)last[1]=Math.max(last[1],s[1]);else merged.push(s);});
                         var gaps=[];for(var i=1;i<merged.length;i++)if(merged[i][0]>merged[i-1][1])gaps.push([merged[i-1][1]/(v?w:h),merged[i][0]/(v?w:h)]);
                         var color=getComputedStyle(document.documentElement).backgroundColor.match(/[\d.]+/g)||[255,255,255];
-                        return JSON.stringify({gaps:gaps,color:color.slice(0,3).map(Number),x:scrollX,y:scrollY});
+                        return JSON.stringify({gaps:gaps,color:color.slice(0,3).map(Number),geometry:geometry()});
                     })();
                 """.trimIndent()) { value -> if (c.isActive) c.resumeWith(Result.success(value)) }
             }
         } ?: return null
-        if (metadata == "null" || locator != appPageKeyJson()) return null
-        val info = JSONObject(org.json.JSONTokener(metadata).nextValue() as String)
+        if (metadata == "null" || visualKey != appVisualPageKey()) return null
+        val info = JSONObject(org.json.JSONTokener(metadata).nextValue().toString())
+        val geometry = info.getJSONObject("geometry")
+        val visibleLocator = appLocatorAtGeometry(locator, view, geometry)
+        val color = info.getJSONArray("color")
+        val paper = android.graphics.Color.rgb(color.getInt(0), color.getInt(1), color.getInt(2))
         // Keep one physical pixel per texel. Downsampling here blurs every
         // glyph before the curl or paragraph animation has even transformed it.
         val bitmap = android.graphics.Bitmap.createBitmap(root.width, root.height, android.graphics.Bitmap.Config.ARGB_8888)
         return try {
             val canvas = android.graphics.Canvas(bitmap)
+            appSetPaper(paper)
+            canvas.drawColor(paper)
             root.draw(canvas)
-            val identity = "${view.url}|${view.scrollX}|${view.scrollY}|$locator"
+            val identity = "${view.url}|${view.scrollX}|${view.scrollY}|${root.width}|${root.height}"
             withContext(Dispatchers.Default) {
                 val width = bitmap.width
                 val height = bitmap.height
@@ -449,10 +549,10 @@ object ReadiumReader :
                 }
                 cuts.add(1.0)
                 val bands = cuts.zipWithNext { a,b -> if (vertical) listOf(a,0.0,b,1.0) else listOf(0.0,a,1.0,b) }
-                val color = info.getJSONArray("color")
                 mapOf("width" to width, "height" to height, "pixels" to rgba,
-                    "bands" to bands, "color" to (0..2).map { color.getInt(it) }, "locator" to locator, "identity" to identity,
-                    "anchor" to JSONObject().put("locator", JSONObject(locator)).put("x", info.optDouble("x")).put("y", info.optDouble("y")).toString())
+                    "bands" to bands, "color" to (0..2).map { color.getInt(it) }, "locator" to visibleLocator, "identity" to identity,
+                    "anchor" to JSONObject().put("locator", JSONObject(visibleLocator)).put("geometry", geometry)
+                        .put("x", geometry.getDouble("x")).put("y", geometry.getDouble("y")).toString())
             }
         } finally { bitmap.recycle() }
     }
@@ -1895,20 +1995,15 @@ object ReadiumReader :
     }
 
     suspend fun appCurrentLocatorJson(): String? {
-        val locator = epubFirstVisibleElementLocator() ?: return null
-        val json = epubEnrichLocatorWithTocHref(locator).toJSON()
-        // firstVisibleElementLocator is an HTML anchor, not a pagination snapshot.
-        // Merge Readium's computed resource/total progression, never the input request's 0.
+        val visible = epubFirstVisibleElementLocator()
         val current = epubNavigator?.currentLocator?.value
-        val locations = json.optJSONObject("locations") ?: JSONObject().also { json.put("locations", it) }
-        if (current?.href == locator.href) {
-            current.locations.progression?.let { locations.put("progression", it) }
-            current.locations.totalProgression?.let { locations.put("totalProgression", it) }
-            current.locations.position?.let { locations.put("position", it) }
-            currentReaderWidget?.currentPageIndex?.let { locations.put("currentPage", it) }
-            currentReaderWidget?.currentPageCount?.let { locations.put("totalPages", it) }
-        }
-        return json.toString()
+        val locator = visible ?: current ?: return null
+        val json = epubEnrichLocatorWithTocHref(locator).toJSON()
+        val view = appVisibleWebView() ?: return json.toString()
+        val raw = appEvaluateVisible("(function(){ $appGeometryScript; return JSON.stringify(geometry()); })();")
+        val geometry = raw?.takeIf { it != "null" }?.let { JSONObject(org.json.JSONTokener(it).nextValue().toString()) }
+            ?: return json.toString()
+        return appLocatorAtGeometry(json.toString(), view, geometry)
     }
 
     suspend fun epubFirstVisibleElementLocator(): Locator? {

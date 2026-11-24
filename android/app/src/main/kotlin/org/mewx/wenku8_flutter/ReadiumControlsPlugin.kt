@@ -22,6 +22,7 @@ class ReadiumControlsPlugin : FlutterPlugin {
                     try {
                         when (call.method) {
                             "visualPage" -> result.success(ReadiumReader.appVisualPageState())
+                            "jump" -> result.success(ReadiumReader.appJumpToPage(call.argument<String>("locator") ?: "{}", call.argument<Boolean>("seek") == true))
                             "locator" -> result.success(ReadiumReader.appCurrentLocatorJson())
                             "pageKey" -> result.success(ReadiumReader.appPageKeyJson())
                             "fixedLayout" -> result.success(ReadiumReader.appIsFixedLayout())
@@ -30,7 +31,7 @@ class ReadiumControlsPlugin : FlutterPlugin {
                                 ReadiumReader.epubEvaluateJavascript("window.getSelection().removeAllRanges();")
                                 result.success(null)
                             }
-                            "ready" -> result.success(ReadiumReader.appWaitForPageReady(call.argument<String>("style"), call.argument<String>("anchor"), call.argument<Int>("previewVersion")))
+                            "ready" -> result.success(ReadiumReader.appWaitForPageReady(call.argument<String>("style"), call.argument<String>("anchor"), call.argument<Int>("previewVersion"), call.argument<Boolean>("stable") == true))
                             "tap" -> { ReadiumReader.appReplayTap(call.argument<Double>("x") ?: 0.5, call.argument<Double>("y") ?: 0.5); result.success(null) }
                             "previewVersion" -> result.success(ReadiumReader.appPreviewVersion)
                             "interruptPreview" -> { ReadiumReader.appInterruptPreview(); result.success(null) }

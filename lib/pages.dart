@@ -5687,6 +5687,8 @@ class _ReaderPageState extends State<ReaderPage>
   String? _nativePreferencesKey;
   bool _nativeLocationChanging = false;
   double _nativeFraction = 0;
+  double? _nativeSeekPreview;
+  int _nativeSeekRequest = 0;
   String? _nativeText;
   ({String text, Rect bounds})? _nativeSelection;
   void _nativeSelectionEnded() {
@@ -7324,6 +7326,7 @@ class _ReaderPageState extends State<ReaderPage>
     bool listeningFollow = false,
     _PreparedReaderChapter? prepared,
     int turnDirection = 0,
+    bool animateNativeJump = false,
   }) {
     if (index < 0 || index >= _sourceBook.chapters.length) {
       return;
@@ -7354,6 +7357,7 @@ class _ReaderPageState extends State<ReaderPage>
                   index,
                   progression: position?.fraction,
                   text: text,
+                  animated: animateNativeJump && !widget.state.reduceMotion,
                 );
               })
               .catchError((Object _) {}),
@@ -7573,9 +7577,9 @@ class _ReaderPageState extends State<ReaderPage>
       );
       if (!mounted) return;
       if (action is int && action != _chapter) {
-        _go(action);
+        _go(action, animateNativeJump: true);
       } else if (action is BookReadingTarget) {
-        _openBookTarget(action);
+        _openBookTarget(action, animated: true);
       }
     } finally {
       _catalogueOpen = false;
@@ -8385,7 +8389,7 @@ class _ReaderPageState extends State<ReaderPage>
     }
   }
 
-  void _openBookTarget(BookReadingTarget target) {
+  void _openBookTarget(BookReadingTarget target, {bool animated = false}) {
     final index = _sourceBook.chapters.indexWhere(
       (c) => c.id == target.chapterId,
     );
@@ -8394,10 +8398,10 @@ class _ReaderPageState extends State<ReaderPage>
     if (_readium case final engine?) {
       unawaited(
         engine
-            .goTarget(target)
+            .goTarget(target, animated: animated && !widget.state.reduceMotion)
             .then((applied) {
               if (!applied && mounted) {
-                _go(index, position: _bookTargetPosition(_sourceBook, target));
+                _go(index, position: _bookTargetPosition(_sourceBook, target), animateNativeJump: animated);
               }
             })
             .catchError((Object _) {
@@ -9618,8 +9622,16 @@ class _ReaderPageState extends State<ReaderPage>
   }
 
   Future<void> _seekProgress(double fraction) async {
-    if (_readium != null) {
-      await _readium!.go(_chapter, progression: fraction);
+    if (_readium case final engine?) {
+      final request = ++_nativeSeekRequest;
+      setState(() => _nativeSeekPreview = fraction);
+      try {
+        await engine.seekProgress(fraction);
+      } finally {
+        if (mounted && request == _nativeSeekRequest) {
+          setState(() => _nativeSeekPreview = null);
+        }
+      }
       return;
     }
     if (!_ready || (_paginated ? !_paged.ready : !_scroll.hasClients)) return;
@@ -9919,9 +9931,9 @@ class _ReaderPageState extends State<ReaderPage>
       setState(() => _readerBook = current);
     }
     if (mounted && chapter is BookReadingTarget) {
-      _openBookTarget(chapter);
+      _openBookTarget(chapter, animated: true);
     } else if (mounted && chapter is int && chapter != _chapter) {
-      _go(chapter);
+      _go(chapter, animateNativeJump: true);
     }
   }
 
@@ -10087,10 +10099,7 @@ class _ReaderPageState extends State<ReaderPage>
   );
 
   void _previewChromeProgress(double value) {
-    if (_readium != null) {
-      unawaited(_readium!.go(_chapter, progression: value));
-      return;
-    }
+    if (_readium != null) return;
     _pageAdvanceOrigin = null;
     _scrollAdvanceOrigin = null;
     _verifiedReading.resetPending();
@@ -10125,7 +10134,7 @@ class _ReaderPageState extends State<ReaderPage>
 
   void _commitChromeProgress(double value) {
     if (_readium != null) {
-      unawaited(_readium!.go(_chapter, progression: value));
+      unawaited(_seekProgress(value));
       return;
     }
     _cancelChromeProgress();
@@ -10412,7 +10421,7 @@ class _ReaderPageState extends State<ReaderPage>
                       valueListenable: _chromeSourceProgress,
                       builder: (context, source) {
                         final sourceFraction = _readium != null
-                            ? _nativeFraction
+                            ? (_nativeSeekPreview ?? _nativeFraction)
                             : !_paginated &&
                                   source?.chapter == _chapter &&
                                   source?.generation == _contentGeneration &&

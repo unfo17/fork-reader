@@ -10,9 +10,32 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:html/parser.dart' as html;
 import 'catalog.dart';
+import 'frame_rate_settings.dart';
 import 'local_books.dart';
 import 'reader_preferences.dart';
 import 'readium_page_turn.dart';
+
+class _PendingReaderDrag {
+  _PendingReaderDrag(this.start);
+  final Map<String, dynamic> start;
+  final clock = Stopwatch()..start();
+  Map<String, dynamic>? latest;
+  double? velocity;
+  int _lastMove = 0;
+
+  void update(Map<String, dynamic> event) {
+    final dx = (event['dx'] as num).toDouble();
+    final lastDx = ((latest ?? start)['dx'] as num).toDouble();
+    final now = clock.elapsedMicroseconds;
+    if (dx != lastDx && now > _lastMove) {
+      velocity = (dx - lastDx) * 1000000 / (now - _lastMove);
+      _lastMove = now;
+    } else if (now - _lastMove > 100000) {
+      velocity = 0;
+    }
+    latest = event;
+  }
+}
 
 /// Engine adapter only. ReaderPage retains every Flutter control and panel.
 class ReadiumReaderBridge extends ChangeNotifier {
@@ -45,7 +68,19 @@ class ReadiumReaderBridge extends ChangeNotifier {
     });
     chapter = initialChapter;
     opening = _open();
+    if (Platform.isAndroid) {
+      FrameRateSettings.shared.addListener(_frameRateChanged);
+      unawaited(FrameRateSettings.shared.load());
+    }
   }
+  double _refreshRateLimit = 0;
+  void _frameRateChanged() {
+    final rate = FrameRateSettings.shared.info?.target ?? 0;
+    if (_disposed || rate == _refreshRateLimit) return;
+    _refreshRateLimit = rate;
+    notifyListeners();
+  }
+
   Novel book;
   final LocalBookStore books;
   final int initialChapter;
@@ -112,47 +147,81 @@ class ReadiumReaderBridge extends ChangeNotifier {
       unawaited(native.invokeMethod<void>('interruptPreview').catchError((Object _) {}));
     }
   }
-  bool _dragInFlight = false;
+  bool _dragInFlight = false, _receivingDrag = false;
   rd.Locator? _dragLocation;
+  _PendingReaderDrag? _pendingDrag;
+  ({int direction, bool animated})? _pendingTap;
+
   void _pageDrag(Map<String, dynamic> event) {
     if (_disposed || _owner != this) return;
-    final phase = event['phase'];
+    if (event['phase'] == 'Start') {
+      if (!ready) return;
+      if (_pagePending) {
+        _pendingDrag = _PendingReaderDrag(event);
+        _pendingTap = null;
+      } else {
+        _startPageDrag(event);
+      }
+      return;
+    }
+    if (_pendingDrag case final pending?) {
+      pending.update(event);
+    } else if (_receivingDrag) {
+      _updatePageDrag(event);
+    }
+  }
+
+  void _startPageDrag(Map<String, dynamic> event) {
     final dx = (event['dx'] as num).toDouble();
-    if (phase == 'Start') {
-      if (_pagePending || !ready) return;
-      final box = _viewKey.currentContext?.findRenderObject();
-      final width = box is RenderBox ? box.size.width : 400.0;
-      final rtl =
-          _preferences.verticalText == true ||
-          publication?.metadata.readingProgression == rd.ReadingProgression.rtl;
-      final direction = (dx < 0 ? 1 : -1) * (rtl ? -1 : 1);
-      turns.requestTurn(direction);
-      _pagePending = true;
-      _pageIdle = Completer<void>();
-      _dragInFlight = true;
-      _dragLocation = null;
-      onUserNavigation();
-      turns.beginDrag(dx, width, (event['y'] as num?)?.toDouble() ?? .5);
-      unawaited(
-        command(() => turns.drag(direction), waitForPreparation: false).whenComplete(() async {
-          _dragInFlight = false;
-          if (!_disposed && _owner == this) {
-            final at = _dragLocation;
-            if (at != null) _located(at);
-          }
-          _pagePending = false;
-          if (_pageIdle?.isCompleted == false) _pageIdle!.complete();
-        }),
-      );
-    } else if (_dragInFlight) {
-      if (phase == 'Move')
-        turns.updateDrag(dx, touchY: (event['y'] as num?)?.toDouble());
-      if (phase == 'End' || phase == 'Cancel') {
-        if (phase != 'Cancel')
-          turns.updateDrag(dx, touchY: (event['y'] as num?)?.toDouble());
-        turns.endDrag(cancel: phase == 'Cancel');
+    final box = _viewKey.currentContext?.findRenderObject();
+    final width = box is RenderBox && box.hasSize ? box.size.width : 400.0;
+    final rtl = _preferences.verticalText == true ||
+        publication?.metadata.readingProgression == rd.ReadingProgression.rtl;
+    final direction = (dx < 0 ? 1 : -1) * (rtl ? -1 : 1);
+    turns.requestTurn(direction);
+    _pagePending = true;
+    _pageIdle ??= Completer<void>();
+    _dragInFlight = _receivingDrag = true;
+    _dragLocation = null;
+    onUserNavigation();
+    turns.beginDrag(dx, width, (event['y'] as num?)?.toDouble() ?? .5);
+    unawaited(command(() => turns.drag(direction), waitForPreparation: false).whenComplete(() {
+      _dragInFlight = _receivingDrag = false;
+      final at = _dragLocation;
+      if (at != null && !_disposed && _owner == this) _located(at);
+      _completePageRequest();
+    }));
+  }
+
+  void _updatePageDrag(Map<String, dynamic> event, {double? releaseVelocity}) {
+    final phase = event['phase'];
+    if (phase != 'Cancel') {
+      turns.updateDrag((event['dx'] as num).toDouble(), touchY: (event['y'] as num?)?.toDouble());
+    }
+    if (phase == 'End' || phase == 'Cancel') {
+      _receivingDrag = false;
+      turns.endDrag(cancel: phase == 'Cancel', releaseVelocity: releaseVelocity);
+    }
+  }
+
+  void _completePageRequest() {
+    _pagePending = false;
+    final drag = _pendingDrag, tap = _pendingTap;
+    _pendingDrag = null;
+    _pendingTap = null;
+    if (!_disposed && _owner == this && ready) {
+      if (drag != null && drag.latest?['phase'] != 'Cancel') {
+        _startPageDrag(drag.start);
+        if (drag.latest case final event?) _updatePageDrag(event, releaseVelocity: drag.velocity);
+        return;
+      }
+      if (tap != null) {
+        unawaited(pageBy(tap.direction, animated: tap.animated));
+        return;
       }
     }
+    _pageIdle?.complete();
+    _pageIdle = null;
   }
 
   rd.Locator? selectedLocator;
@@ -329,6 +398,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     _styleReady = false;
     _navigatorReady = false;
     _layoutAnchor = null;
+    _appliedDecorationKeys.clear();
     _firstLocation = Completer<void>();
     initialLocator = null;
     _commands = Future.value();
@@ -453,42 +523,48 @@ class ReadiumReaderBridge extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _navigate(rd.Locator at) async {
+  Future<void> _navigate(rd.Locator at, {int? transitionDirection, bool seek = false}) async {
     _navigating = Platform.isAndroid;
-    if (!_disposed) notifyListeners();
+    _nativeEventTicket++;
     try {
       await turns.navigate(() async {
-        await api.goToLocator(at);
-        if (Platform.isAndroid) {
-          await _waitForLayoutStable();
-          // The request locator may omit progression. Read the actual visual
-          // position after Readium has resolved its text quote and laid it out.
-          await Future<void>.delayed(const Duration(milliseconds: 240));
-          final raw = await native.invokeMethod<String>('locator');
-          if (raw != null && !_disposed && _owner == this) {
-            final json = jsonDecode(raw) as Map<String, dynamic>;
-            final nextLocations =
-                json['locations'] as Map<String, dynamic>? ?? {};
-            if (locator?.href == json['href']) {
-              final previous = locator?.locations?.toJson() ?? {};
-              for (final key in ['currentPage', 'totalPages']) {
-                if (!nextLocations.containsKey(key) &&
-                    previous.containsKey(key))
-                  nextLocations[key] = previous[key];
-              }
-            }
-            json['locations'] = nextLocations;
-            final visible = rd.Locator.fromJson(json);
-            final page = await native.invokeMapMethod<String, dynamic>('visualPage');
-            _stableVisualKey = page?['key'] as String?;
-            if (visible != null) _located(visible);
-          }
+        if (!Platform.isAndroid) {
+          await api.goToLocator(at);
+          return;
         }
-      }, capture: () => _capturePage(allowNavigating: true));
+        final moved = await native.invokeMethod<bool>('jump', {
+          'locator': jsonEncode(at.toJson()),
+          'seek': seek,
+        });
+        if (moved != true) throw StateError('原书位置未能打开');
+        await _waitForPageReady(stable: true);
+        final raw = await native.invokeMethod<String>('locator');
+        if (raw != null && !_disposed && _owner == this) {
+          final visible = rd.Locator.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+          final page = await native.invokeMapMethod<String, dynamic>('visualPage');
+          _stableVisualKey = page?['key'] as String?;
+          if (visible != null) _located(visible);
+        }
+      }, capture: () => _capturePage(allowNavigating: true),
+        transitionDirection: transitionDirection);
     } finally {
       _navigating = false;
       if (!_disposed) notifyListeners();
     }
+  }
+
+  Future<void> seekProgress(double fraction) {
+    final ticket = ++_seekTicket;
+    _interruptPreview();
+    return command(() async {
+      final current = locator;
+      if (ticket != _seekTicket || current == null) return;
+      final json = current.toJson()
+        ..remove('text')
+        ..['locations'] = {'progression': fraction.clamp(0.0, 1.0)};
+      final requested = rd.Locator.fromJson(json);
+      if (requested != null) await _navigate(requested, seek: true);
+    });
   }
 
   Future<void> command(
@@ -514,16 +590,18 @@ class ReadiumReaderBridge extends ChangeNotifier {
 
   bool _pagePending = false;
   Future<void> pageBy(int direction, {bool animated = true}) async {
-    // Keep one page request in flight, matching the original animation lock.
-    if (_pagePending || _disposed) return;
+    if (_disposed || _navigating) return;
+    if (_pagePending) {
+      if (_pendingDrag == null) _pendingTap = (direction: direction, animated: animated);
+      return;
+    }
     turns.requestTurn(direction);
     _pagePending = true;
-    _pageIdle = Completer<void>();
+    _pageIdle ??= Completer<void>();
     try {
       await command(() => turns.turn(direction, animated: animated), waitForPreparation: false);
     } finally {
-      _pagePending = false;
-      if (_pageIdle?.isCompleted == false) _pageIdle!.complete();
+      _completePageRequest();
     }
   }
 
@@ -584,7 +662,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
           final result = await native.invokeMapMethod<String, dynamic>('page', {'direction': direction.sign, 'animated': false});
           if (result?['moved'] != true) throw StateError('相邻页未能就绪');
           if (epoch != _previewEpoch) throw StateError('预加载已让位于阅读操作');
-          await _waitForPageReady(previewVersion: version);
+          await _waitForPageReady(previewVersion: version, stable: true);
         }
         for (var attempt = 0; attempt < 3 && frame == null; attempt++) {
           frame = await _capturePage();
@@ -602,9 +680,10 @@ class ReadiumReaderBridge extends ChangeNotifier {
     return frame;
   }
 
-  Future<void> _waitForPageReady({String? anchor, int? previewVersion}) async {
+  Future<void> _waitForPageReady({String? anchor, int? previewVersion, bool stable = false}) async {
     final ready = await native.invokeMethod<bool>('ready', {
       'style': _fixedLayout == true ? null : _appliedStyleSignature,
+      'stable': stable,
       if (anchor != null) 'anchor': anchor,
       if (previewVersion != null) 'previewVersion': previewVersion,
     });
@@ -620,6 +699,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       await _waitForPageReady(anchor: frame.anchor);
       await native.invokeMethod<void>('paper', {'color': frame.paper.toARGB32()});
       if (publish) {
+        _nativeEventTicket++;
         _pagePaper = frame.paper;
         final page = await native.invokeMapMethod<String, dynamic>('visualPage');
         _stableVisualKey = page?['key'] as String?;
@@ -641,7 +721,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     if (!Platform.isAndroid || _disposed || _owner != this || !_styleReady)
       return null;
     if (_navigating && !allowNavigating) return null;
-    final revision = _seekTicket, style = _preferencesTicket;
+    final style = _preferencesTicket;
     final pixels = await native.invokeMapMethod<String, dynamic>('capture', {
       'bands': _appearance.pageEffect == ReaderPageEffect.staggered,
       'vertical': _preferences.verticalText == true,
@@ -662,7 +742,6 @@ class ReadiumReaderBridge extends ChangeNotifier {
     final image = await decoded.future;
     if (_disposed ||
         (_navigating && !allowNavigating) ||
-        revision != _seekTicket ||
         style != _preferencesTicket) {
       image.dispose();
       return null;
@@ -720,7 +799,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
   }
 
   int _seekTicket = 0;
-  Future<bool> goTarget(BookReadingTarget target) async {
+  Future<bool> goTarget(BookReadingTarget target, {bool animated = false}) async {
     final addresses = book.navigation?.targets.entries
         .where((entry) {
           final value = entry.value;
@@ -755,7 +834,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
       final at = publication?.locatorFromLink(link);
       if (at == null) return;
       applied = true;
-      await _navigate(at);
+      final direction = chapterFor(at).compareTo(chapter);
+      await _navigate(at, transitionDirection: animated ? (direction == 0 ? 1 : direction) : null);
     });
     return applied;
   }
@@ -766,6 +846,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     String? text,
     String? before,
     String? after,
+    bool animated = false,
   }) {
     final ticket = ++_seekTicket;
     return command(() async {
@@ -778,7 +859,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
         after: after,
       );
       if (at == null) throw const FormatException('原书目录没有对应的阅读位置');
-      await _navigate(at);
+      final direction = index.compareTo(chapter);
+      await _navigate(at, transitionDirection: animated ? (direction == 0 ? 1 : direction) : null);
     });
   }
 
@@ -804,7 +886,11 @@ class ReadiumReaderBridge extends ChangeNotifier {
   }
 
   int _marksRevision = 0;
+  final _appliedDecorationKeys = <String, String>{};
   Future<void> decorations(String group, List<Map<String, dynamic>> marks) {
+    final key = jsonEncode(marks);
+    if (_appliedDecorationKeys[group] == key) return Future<void>.value();
+    _appliedDecorationKeys[group] = key;
     _marksRevision++;
     return command(() async {
       if (Platform.isAndroid) {
@@ -1155,8 +1241,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
       : ReadiumPageSurface(
           controller: turns,
           frameKey:
-              "${locator?.href}|$fraction|$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|$_navigating|${_appearance.pageEffect}",
-          layoutKey: '$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|$_navigating|${_appearance.pageEffect}',
+              "${locator?.href}|$fraction|$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|${_appearance.pageEffect}",
+          layoutKey: '$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|${_appearance.pageEffect}',
           preferences: _appearance,
           paper: pagePaper,
           capture: _capturePage,
@@ -1165,6 +1251,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
           preview: Platform.isAndroid && _appearance.mode.paginated && _appearance.pageEffect != ReaderPageEffect.none ? _previewPage : null,
           land: (frame) => _landFrame(frame),
           lookAhead: 2,
+          refreshRateLimit: _refreshRateLimit,
           onPrioritize: _interruptPreview,
           replayTap: (point) => native.invokeMethod<void>('tap', {'x': point.dx, 'y': point.dy}),
           child: Stack(
@@ -1224,6 +1311,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
         );
   @override
   void dispose() {
+    if (Platform.isAndroid) FrameRateSettings.shared.removeListener(_frameRateChanged);
     _disposed = true;
     persist();
     unawaited(_events?.cancel());
