@@ -562,7 +562,7 @@ struct ReadingFormCard {
         Stack({ alignContent: Alignment.BottomEnd }) {
           Image(this.desktopImage).width('100%').height('100%').objectFit(ImageFit.Fill)
             .opacity(this.followSystemCard ? $r('app.float.reading_widget_light_opacity') : 1)
-            .accessibilityText('轻小说文库，阅读 ' + this.minutes + ' 分钟。' + this.dayStamp)
+            .accessibilityText('页间阅读，阅读 ' + this.minutes + ' 分钟。' + this.dayStamp)
             .onClick((): void => this.open(this.layoutId === 'memory' ? 'moments' : this.layoutId === 'quote' ? 'excerpts' : 'statistics'))
           if (this.followSystemCard && this.desktopDarkImage.length > 0) {
             Image(this.desktopDarkImage).width('100%').height('100%').objectFit(ImageFit.Fill).opacity($r('app.float.reading_widget_dark_opacity'))

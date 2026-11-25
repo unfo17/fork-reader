@@ -87,7 +87,7 @@ final class PhotoLibraryImageSaver {
   private static func permissionFailure(restricted: Bool) -> BookDocumentFailure {
     BookDocumentFailure(code: "gallery_permission", message: restricted
       ? "系统限制了添加照片，无法保存到相册。请检查屏幕使用时间或设备管理限制。"
-      : "未获得添加照片权限，请在系统设置中允许轻小说文库添加照片后重试。")
+      : "未获得添加照片权限，请在系统设置中允许页间阅读添加照片后重试。")
   }
 
   private static func writeFailure(_ error: Error?) -> BookDocumentFailure {

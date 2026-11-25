@@ -53,7 +53,7 @@ struct ReadingWidgetFace: View {
       if let image = rendered {
         ZStack(alignment: .bottomTrailing) {
           Image(uiImage: image).resizable()
-            .accessibilityLabel("轻小说文库，阅读 \(ReadingWidgetSnapshot.minutes(data.verifiedTodaySeconds)) 分钟。\(data.dateCaption)")
+            .accessibilityLabel("页间阅读，阅读 \(ReadingWidgetSnapshot.minutes(data.verifiedTodaySeconds)) 分钟。\(data.dateCaption)")
           if !data.isToday {
             Text(data.dateCaption).font(.system(size: 10)).foregroundColor(.white).padding(3)
               .background(Color.black.opacity(0.8)).cornerRadius(3).padding(10)
@@ -91,7 +91,7 @@ struct ReadingConfiguredWidget: Widget {
   let kind = "ReadingQuiet"
   var body: some WidgetConfiguration {
       AppIntentConfiguration(kind: kind, intent: ReadingCardIntent.self, provider: ReadingCardTimeline()) { ReadingConfiguredCard(entry: $0) }
-        .configurationDisplayName("轻小说文库")
+        .configurationDisplayName("页间阅读")
         .description("选择今日阅读、阅读纪念或摘录，每张卡片独立设置。")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
         .contentMarginsDisabled()
@@ -199,7 +199,7 @@ struct ReadingConfiguredCard: View {
             }
           }
         }.widgetURL(link(card.design == "memory" ? "moments" : card.design == "quote" ? "excerpts" : "statistics"))
-      } else { Text("打开轻小说文库，设置桌面内容").padding() }
+      } else { Text("打开页间阅读，设置桌面内容").padding() }
     }.containerBackground(for: .widget) { Color.clear }
   }
 }
