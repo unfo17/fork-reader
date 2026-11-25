@@ -576,7 +576,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     // The offsets are relative to the last native page that has been adopted.
     // The cache moves only when Readium confirms the corresponding locator.
     final offset = (_primaryAdopted ? 0 : _dragDirection) +
-        _overlaps.fold(0, (position, turn) => position + turn.direction);
+        _overlaps.fold<int>(0, (position, turn) => position + turn.direction);
     ReadiumPageFrame? at(int index) =>
         index == 0 ? _cached ?? _from : _neighbors[index];
     final previous = at(offset - 1), next = at(offset + 1);
