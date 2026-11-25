@@ -1640,8 +1640,18 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         Positioned.fill(key: const ValueKey('readium-return-page'), child: IgnorePointer(child: ExcludeSemantics(
           child: RepaintBoundary(child: ClipRect(child: _entry(frame))),
         ))),
-      if (_coverInitialEntry && widget.entryReady)
-        Positioned.fill(child: IgnorePointer(child: ColoredBox(color: widget.paper))),
+      if (_coverInitialEntry)
+        Positioned.fill(
+          child: IgnorePointer(
+            child: ColoredBox(
+              key: const ValueKey('readium-entry-cover'),
+              color: widget.paper,
+              child: widget.entryReady
+                  ? null
+                  : const Center(child: CircularProgressIndicator()),
+            ),
+          ),
+        ),
     ],
   );
 
