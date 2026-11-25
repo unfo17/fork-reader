@@ -7,9 +7,10 @@ import android.view.View
 import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.ViewConfiguration
-import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.LinearLayout.generateViewId
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.fragment.app.commitNow
 import dk.nota.flutterreadium.events.ReadiumError
@@ -62,7 +63,11 @@ class ReadiumReaderWidget(
         private set
     var hasSentReady = false
 
-    private val layout: ViewGroup
+    private val layout: AppPageGestureLayout
+
+    internal fun setAppViewportInsets(top: Double, bottom: Double, minimumStatus: Double) {
+        layout.setReaderInsets(top, bottom, minimumStatus)
+    }
 
     // Source the host activity from the plugin's ActivityAware binding (via ReadiumReader),
     // not the PlatformView's view context. The view context is the Activity only under
@@ -143,11 +148,22 @@ class ReadiumReaderWidget(
 
         layout = AppPageGestureLayout(context, attrs,
             ownsGesture = { ReadiumReader.appOwnsPageGestures() },
+            onMarginTap = { x, y ->
+                val density = context.resources.displayMetrics.density
+                channel.onReaderTap(x / density, y / density)
+            },
             onSwipe = { phase, dx, dy, y, velocityX, durationMillis ->
                 val density = context.resources.displayMetrics.density
                 channel.onReaderDrag(phase, dx / density, dy / density, y, velocityX / density, durationMillis)
             })
         layout.id = generateViewId()
+        (creationParams["appViewportInsets"] as? List<*>)?.let { values ->
+            setAppViewportInsets(
+                (values.getOrNull(0) as? Number)?.toDouble() ?: 0.0,
+                (values.getOrNull(1) as? Number)?.toDouble() ?: 0.0,
+                (values.getOrNull(2) as? Number)?.toDouble() ?: 0.0,
+            )
+        }
         layout.setBackgroundColor(Color.TRANSPARENT)
         layout.setPadding(0, 0, 0, 0)
 
@@ -533,6 +549,7 @@ private class AppPageGestureLayout(
     context: Context,
     attrs: AttributeSet?,
     private val ownsGesture: () -> Boolean,
+    private val onMarginTap: (Float, Float) -> Unit,
     private val onSwipe: (String, Float, Float, Float, Float, Long) -> Unit,
 ) : LinearLayout(context, attrs) {
     private val configuration = ViewConfiguration.get(context)
@@ -542,10 +559,44 @@ private class AppPageGestureLayout(
     private var downY = 0f
     private var dragging = false
     private var multiplePointers = false
+    private var marginTouch = false
+    private var contentTop = 0
+    private var contentBottom = 0
+    private var minimumStatus = 0
+    private var hasReaderInsets = false
+
+    fun setReaderInsets(top: Double, bottom: Double, status: Double) {
+        val density = resources.displayMetrics.density
+        contentTop = kotlin.math.round(top * density).toInt()
+        contentBottom = kotlin.math.round(bottom * density).toInt()
+        minimumStatus = kotlin.math.round(status * density).toInt()
+        if (!hasReaderInsets) {
+            hasReaderInsets = true
+            ViewCompat.setOnApplyWindowInsetsListener(this) { _, window ->
+                applyReaderInsets(window)
+                window
+            }
+        }
+        applyReaderInsets(ViewCompat.getRootWindowInsets(this))
+    }
+
+    private fun applyReaderInsets(window: WindowInsetsCompat?) {
+        // The IME, fullscreen switches and transient system bars must not
+        // resize the same book page. Rotation still supplies its real insets.
+        val system = window?.getInsetsIgnoringVisibility(
+            WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.navigationBars() or
+                WindowInsetsCompat.Type.displayCutout(),
+        )
+        val top = maxOf(system?.top ?: 0, minimumStatus) + contentTop
+        val bottom = (system?.bottom ?: 0) + contentBottom
+        if (paddingTop != top || paddingBottom != bottom)
+            setPadding(paddingLeft, top, paddingRight, bottom)
+    }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
             recycleVelocityTracker()
+            marginTouch = false
             if (ownsGesture()) velocityTracker = VelocityTracker.obtain()
         }
         velocityTracker?.addMovement(event)
@@ -618,6 +669,26 @@ private class AppPageGestureLayout(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (!dragging && event.actionMasked == MotionEvent.ACTION_DOWN) {
+            marginTouch = hasReaderInsets && (event.y < paddingTop || event.y >= height - paddingBottom)
+        }
+        if (marginTouch && !dragging) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_MOVE -> if (ownsGesture() && kotlin.math.abs(event.x - downX) > slop) {
+                    dragging = true
+                    marginTouch = false
+                    onSwipe("Start", event.x - downX, event.y - downY, downY / height.coerceAtLeast(1), 0f, 0L)
+                    parent?.requestDisallowInterceptTouchEvent(true)
+                }
+                MotionEvent.ACTION_UP -> {
+                    marginTouch = false
+                    if (kotlin.math.abs(event.x - downX) <= slop && kotlin.math.abs(event.y - downY) <= slop)
+                        onMarginTap(event.x, event.y)
+                }
+                MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN -> marginTouch = false
+            }
+            return true
+        }
         if (!dragging) return super.onTouchEvent(event)
         when (event.actionMasked) {
             MotionEvent.ACTION_POINTER_DOWN -> {

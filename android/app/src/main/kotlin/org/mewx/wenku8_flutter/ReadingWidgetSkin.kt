@@ -3,12 +3,17 @@ package org.mewx.wenku8_flutter
 import android.graphics.*
 
 /** Native vector decorations: no extra full-resolution illustration bundle. */
-internal class ReadingWidgetSkin(val id: String, date: String) {
+internal class ReadingWidgetSkin(val id: String, date: String, darkOverride: Boolean? = null) {
     private val month = date.drop(5).take(2).toIntOrNull() ?: 1
     private val season = when (month) { in 3..5 -> 0; in 6..8 -> 1; in 9..11 -> 2; else -> 3 }
     private val seasons = listOf("#AF7D8B", "#5786A2", "#B18842", "#4F8985")
-    val background = Color.parseColor(when (id) { "night" -> "#101419"; "film" -> "#10100F"; "paper" -> "#ECECE5"; else -> "#F4F0E6" })
-    val ink = Color.parseColor(if (id == "night" || id == "film") "#F6F1E6" else "#272C29")
+    private val dark = darkOverride ?: (id == "night" || id == "film")
+    val background = Color.parseColor(if (dark) {
+        if (id == "film") "#10100F" else "#101419"
+    } else {
+        if (id == "paper") "#ECECE5" else "#F4F0E6"
+    })
+    val ink = Color.parseColor(if (dark) "#F6F1E6" else "#272C29")
     val accent = Color.parseColor(when (id) { "seasons" -> seasons[season]; "night", "film" -> "#DCB65E"; "paper" -> "#606D5D"; else -> "#4F8985" })
     val muted: Int get() = blend(ink, background, .65f)
     val secondary: Int get() = blend(ink, background, .12f)

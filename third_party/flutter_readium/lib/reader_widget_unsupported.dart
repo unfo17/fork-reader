@@ -6,6 +6,8 @@ class ReadiumReaderWidget extends StatelessWidget {
     required this.publication,
     this.loadingWidget = const Center(child: CircularProgressIndicator()),
     this.initialLocator,
+    EdgeInsets appContentPadding = EdgeInsets.zero,
+    double appMinimumStatusInset = 0,
     this.shouldShowControls,
     this.onReaderTap,
     this.onReaderDrag,

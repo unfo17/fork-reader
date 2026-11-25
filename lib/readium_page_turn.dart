@@ -241,6 +241,7 @@ class ReadiumPageTurnController {
 
   Future<void> freezeForRoute() async => _owner?._freezeForRoute();
   Future<void> thawAfterRoute() async => _owner?._thawAfterRoute();
+  void setOverlayOpen(bool open) => _owner?._setOverlayOpen(open);
 
   Future<void> get whenPrepared => _owner?._preparing ?? Future<void>.value();
 
@@ -347,6 +348,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   ReadiumPageFrame? _handoffTarget;
   bool _previewHandedOff = false;
   bool _preparationInterrupted = false, _routePaused = false;
+  bool _overlayOpen = false;
   ReadiumPageFrame? _routeCover;
   ReadiumPageFrame? _presented;
   int? _scrubCallback;
@@ -356,6 +358,24 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   double _visualDirection(int direction) =>
       (widget.rightToLeft || widget.preferences.mode == ReaderMode.vertical
           ? -direction : direction).toDouble();
+
+  void _setOverlayOpen(bool open) {
+    if (open == _overlayOpen) return;
+    _overlayOpen = open;
+    if (open) {
+      _warmTimer?.cancel();
+      if (!_busy && _preparing != null) widget.onPrioritize?.call();
+    } else {
+      final warming = _warming ? _warmDone?.future : _preparing;
+      if (warming == null) {
+        _warmLater();
+      } else {
+        unawaited(warming.whenComplete(() {
+          if (mounted && !_overlayOpen) _warmLater();
+        }));
+      }
+    }
+  }
 
   Widget _pageImage(ReadiumPageFrame frame) => RawImage(
     image: frame.image,
@@ -548,7 +568,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         _edges.retainWhere(offsets.contains);
       }
       for (final direction in offsets) {
-        if (!mounted || key != widget.frameKey || _routePaused || (requiredDirection == null && _preparationInterrupted)) break;
+        if (!mounted || key != widget.frameKey || _routePaused ||
+            (requiredDirection == null && (_preparationInterrupted || _overlayOpen))) break;
         if (direction.abs() > 1 && _edges.contains(direction.sign)) { _edges.add(direction); continue; }
         if (_neighbors.containsKey(direction) || _edges.contains(direction)) continue;
         _preparingOffset = direction;
@@ -962,13 +983,14 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   }
 
   void _refillAdoptedPage() {
-    if (!mounted || !_busy || !_primaryAdopted || _routePaused ||
+    if (!mounted || !_busy || !_primaryAdopted || _routePaused || _overlayOpen ||
         _nativeOverlaps != null || _preparing != null || _overlapLandingFailed) return;
     final origin = _cached;
     if (origin == null || identical(_refilledFrom, origin)) return;
-    final nearest = [_dragDirection, -_dragDirection].where((offset) =>
-      !_neighbors.containsKey(offset) && !_edges.contains(offset)).firstOrNull;
-    if (nearest == null) return;
+    // During a visible turn only refill its advancing side. Speculative
+    // captures from the other side compete for the platform thread.
+    final nearest = _dragDirection;
+    if (_neighbors.containsKey(nearest) || _edges.contains(nearest)) return;
     _refilledFrom = origin;
     _refilling = true;
     unawaited(_prepareNeighbors(origin, requiredDirection: nearest)
@@ -1063,7 +1085,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   void _warmLater() {
     _warmTimer?.cancel();
     _warmTimer = Timer(Duration(milliseconds: _cached == null ? 48 : 32), () async {
-      if (!mounted || _busy || _warming || _routePaused || _preparationInterrupted) return;
+      if (!mounted || _busy || _warming || _routePaused || _overlayOpen ||
+          _preparationInterrupted) return;
       if ((_cached != null && (widget.preview == null || _windowComplete)) ||
           !widget.preferences.mode.paginated || widget.preferences.pageEffect == ReaderPageEffect.none) {
         if (_presented != null) setState(_releasePresentedPage);
@@ -1535,7 +1558,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   Widget _entry(ReadiumPageFrame frame) {
     final direction = _visualDirection(1);
     if (_entryEffect == ReaderPageEffect.staggered) {
-      return CustomPaint(painter: _ReadiumParagraphTurn(
+      return CustomPaint(willChange: true, painter: _ReadiumParagraphTurn(
         frame, _returnClock, direction, true,
         !_entryFromBottom && widget.preferences.mode == ReaderMode.vertical,
         enterFromBottom: _entryFromBottom,
@@ -1570,8 +1593,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     children: [
       Opacity(
         opacity: _routeCover != null ||
-                (_effect == ReaderPageEffect.staggered && _sceneCoversPage &&
-                    widget.preview != null && _previewCover == null)
+                (_sceneCoversPage && widget.preview != null && _previewCover == null)
             ? 0 : 1,
         child: widget.child,
       ),
@@ -1588,7 +1610,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       if (_overlaps.isNotEmpty ||
           (_from != null && _effect == ReaderPageEffect.staggered && widget.preview != null))
         Positioned.fill(child: IgnorePointer(child: ExcludeSemantics(
-          child: RepaintBoundary(child: CustomPaint(painter: _combinedTurn())),
+          child: RepaintBoundary(child: CustomPaint(willChange: true, painter: _combinedTurn())),
         )))
       else if (_from case final frame?)
         Positioned.fill(
@@ -1609,6 +1631,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
                             else if (_to case final target?)
                               _pageImage(target),
                             CustomPaint(
+                              willChange: true,
                               painter: _ReadiumCurl(
                                 _direction < 0 && _to != null ? _to! : frame,
                                 _direction < 0 && _to != null ? ReverseAnimation(_clock) : _clock,

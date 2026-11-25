@@ -726,7 +726,9 @@ class EpubReaderFragment :
             epubNavigator.addInputListener(object : InputListener {
                 override fun onTap(event: TapEvent): Boolean {
                     val density = resources.displayMetrics.density
-                    ReadiumReader.currentReaderWidget?.channel?.onReaderTap(event.point.x / density, event.point.y / density)
+                    ReadiumReader.currentReaderWidget?.let { reader ->
+                        reader.channel.onReaderTap(event.point.x / density, (event.point.y + reader.getView().paddingTop) / density)
+                    }
                     return true
                 }
 

@@ -36,6 +36,8 @@ class ReadiumReaderWidget extends StatefulWidget {
     this.toggleShowControlsSemanticLabel = 'Toggle show controls',
     this.preloadPreviousPositionCount = 2,
     this.preloadNextPositionCount = 6,
+    this.appContentPadding = EdgeInsets.zero,
+    this.appMinimumStatusInset = 0,
     super.key,
   });
 
@@ -49,6 +51,10 @@ class ReadiumReaderWidget extends StatefulWidget {
 
   /// Optional locator to restore a previously saved reading position. `null` starts from the beginning.
   final Locator? initialLocator;
+
+  /// Android reader-owned space inside the full-viewport paper surface.
+  final EdgeInsets appContentPadding;
+  final double appMinimumStatusInset;
 
   /// Notifier that tells client whether it should show controls, based on user-interaction with the native viewer.
   final ValueNotifier<bool>? shouldShowControls;
@@ -325,6 +331,12 @@ class _ReadiumReaderWidgetState extends State<ReadiumReaderWidget>
     final creationParams = <String, dynamic>{
       'pubIdentifier': publication.identifier,
       'appSelectionToolbar': widget.onReaderTap != null,
+      if (Platform.isAndroid && widget.onReaderTap != null)
+        'appViewportInsets': [
+          widget.appContentPadding.top,
+          widget.appContentPadding.bottom,
+          widget.appMinimumStatusInset,
+        ],
       'preferences': defaultPreferences,
       'initialLocator': widget.initialLocator == null
           ? null

@@ -225,16 +225,40 @@ class ReadingWidgetCards extends ChangeNotifier {
     final base = ReadingWidgetController.forState(state).snapshot;
     final payload = <Map<String, Object?>>[];
     final oldFiles = <String>[];
+    Future<String?>? memoryCover;
     try {
-      _directory ??= await (await getTemporaryDirectory()).createTemp(
-        'reading-cards-',
-      );
       for (final card in configs) {
         final value = base.styled(
           design: card.design,
           skin: card.skin,
           showBookDetails: card.showBookDetails,
         );
+        final cardPayload = <String, Object?>{
+          ...card.toJson(),
+          'localDay': widgetDate(base.localDay),
+          'hasRecent':
+              card.design == ReadingWidgetDesign.focus &&
+              card.showBookDetails &&
+              base.currentBook != null,
+          'quotes': card.design == ReadingWidgetDesign.quote
+              ? quotes(details: card.showBookDetails)
+              : <Object>[],
+        };
+        payload.add(cardPayload);
+        if (Platform.isAndroid) {
+          // Android already has the original layouts, type and seasonal art.
+          // Publish its live values; the launcher sizes and places native text.
+          final snapshot = value.toJson();
+          final completion = value.latestCompletion;
+          if (card.design == ReadingWidgetDesign.memory &&
+              card.showBookDetails && completion != null) {
+            final cover = await (memoryCover ??= cachedReadingWidgetCover(state, completion));
+            snapshot['latestCompletion'] = completion.withCover(cover).toJson();
+          }
+          cardPayload['snapshot'] = snapshot;
+          continue;
+        }
+        _directory ??= await (await getTemporaryDirectory()).createTemp('reading-cards-');
         final visible = value.toJson()..remove('generatedAt');
         visible['verifiedTodaySeconds'] = value.verifiedTodaySeconds == null
             ? null
@@ -283,18 +307,7 @@ class ReadingWidgetCards extends ChangeNotifier {
           oldFiles.addAll(previous?.images.values ?? []);
           _cache[card.id] = (signature: signature, images: images);
         }
-        payload.add({
-          ...card.toJson(),
-          'images': images,
-          'localDay': widgetDate(base.localDay),
-          'hasRecent':
-              card.design == ReadingWidgetDesign.focus &&
-              card.showBookDetails &&
-              base.currentBook != null,
-          'quotes': card.design == ReadingWidgetDesign.quote
-              ? quotes(details: card.showBookDetails)
-              : <Object>[],
-        });
+        cardPayload['images'] = images;
       }
       if (_disposed) return;
       await ReadingWidgetBridge.channel.invokeMethod<void>('publishCards', {

@@ -338,6 +338,7 @@ class ReaderTools extends StatefulWidget {
     this.listeningBuilder,
     this.initialTab,
     this.scope = ReaderToolsScope.all,
+    this.lightweight = false,
     this.canHandoff = false,
     this.onStyleScopeChanged,
     this.onReaderTypefaceChanged,
@@ -357,6 +358,7 @@ class ReaderTools extends StatefulWidget {
   final WidgetBuilder? listeningBuilder;
   final String? initialTab;
   final ReaderToolsScope scope;
+  final bool lightweight;
   final bool canHandoff;
   final ValueChanged<double>? onFontPreview, onLineHeightPreview;
   final ValueChanged<bool>? onPreviewChanged;
@@ -995,7 +997,7 @@ class _ReaderToolsState extends State<ReaderTools>
           }
         },
         child:
-            widget.state.reduceMotion || MediaQuery.disableAnimationsOf(context)
+            widget.lightweight || widget.state.reduceMotion || MediaQuery.disableAnimationsOf(context)
             ? panel
             : AnimatedSize(
                 duration: const Duration(milliseconds: 320),
@@ -1055,7 +1057,7 @@ class _ReaderToolsState extends State<ReaderTools>
         ? tile.localToGlobal(Offset.zero) & tile.size
         : null;
     setState(() => _category = id);
-    if (widget.state.reduceMotion || MediaQuery.disableAnimationsOf(context)) {
+    if (widget.lightweight || widget.state.reduceMotion || MediaQuery.disableAnimationsOf(context)) {
       _expand.value = 1;
     } else {
       _expand.forward(from: 0);
@@ -1173,6 +1175,7 @@ class _ReaderToolsState extends State<ReaderTools>
 
   Widget _animatedBody(Widget child) {
     if (_category == null ||
+        widget.lightweight ||
         widget.state.reduceMotion ||
         MediaQuery.disableAnimationsOf(context)) {
       return child;
@@ -1430,7 +1433,7 @@ class _ReaderToolsState extends State<ReaderTools>
         ),
         const ValueKey('reader-line-height-slider'),
       ),
-    if (category == 'page')
+    if (category == 'page' || widget.scope == ReaderToolsScope.operations)
       _adjustment(
         Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1460,9 +1463,12 @@ class _ReaderToolsState extends State<ReaderTools>
               max: 80,
               divisions: 40,
               format: (v) => '${v.round()} px',
-              onPreview: (v) => _preferences(_withMargin(v), persist: false),
-              onInteractionChanged: (v) =>
-                  _preview(const ValueKey('reader-margin-slider'), v),
+              onPreview: widget.lightweight
+                  ? null
+                  : (v) => _preferences(_withMargin(v), persist: false),
+              onInteractionChanged: widget.lightweight
+                  ? null
+                  : (v) => _preview(const ValueKey('reader-margin-slider'), v),
               onCommitted: (v) => _preferences(_withMargin(v)),
             ),
           ],

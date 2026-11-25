@@ -198,10 +198,12 @@ Future<void> showReaderNote(
   BuildContext context,
   String text, {
   required bool reduceMotion,
+  bool lightweight = false,
   Widget Function(Widget)? surfaceWrapper,
 }) => showJellySheet<void>(
   context: context,
   reduceMotion: reduceMotion,
+  lightweight: lightweight,
   surfaceWrapper: surfaceWrapper,
   builder: (sheet) => SingleChildScrollView(
     padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),

@@ -112,6 +112,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       'script':
           '(function(){var s=window.getSelection();if(!s||!s.rangeCount||s.isCollapsed)return null;var r=s.getRangeAt(0).getBoundingClientRect();return JSON.stringify({x:r.x,y:r.y,w:r.width,h:r.height,v:window.innerWidth});})()',
     });
+    final top = await native.invokeMethod<double>('contentTop') ?? 0;
     if (_disposed || ticket != _selectionTicket || raw == null) return;
     Object? decoded = jsonDecode(raw);
     if (decoded is String) decoded = jsonDecode(decoded);
@@ -120,7 +121,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     final scale = box.size.width / (decoded['v'] as num).toDouble();
     final bounds = Rect.fromLTWH(
       (decoded['x'] as num).toDouble() * scale,
-      (decoded['y'] as num).toDouble() * scale,
+      top + (decoded['y'] as num).toDouble() * scale,
       (decoded['w'] as num).toDouble() * scale,
       (decoded['h'] as num).toDouble() * scale,
     ).shift(box.localToGlobal(Offset.zero));
@@ -1095,6 +1096,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
 
   int _preferencesTicket = 0;
   rd.Locator? _layoutAnchor;
+  EdgeInsets _pageInsets = EdgeInsets.zero;
+  double _minimumStatusInset = 0;
   Future<void> preferences(
     ReaderPreferences prefs, {
     required double fontSize,
@@ -1103,6 +1106,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     ColorScheme? systemPalette,
     required String? fontFamily,
     required EdgeInsets pageInsets,
+    required double minimumStatusInset,
     bool defaultsOnly = false,
     File? fontFile,
     File? backgroundFile,
@@ -1110,6 +1114,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
     String? onlyLanguage,
   }) {
     final ticket = ++_preferencesTicket;
+    _pageInsets = pageInsets;
+    _minimumStatusInset = minimumStatusInset;
     motionPreferences(prefs, dark, systemPalette: systemPalette);
     final paperColor = systemPalette?.surface ?? prefs.background(dark);
     final darkPaper = prefs.darkPaper(dark);
@@ -1154,6 +1160,11 @@ class ReadiumReaderBridge extends ChangeNotifier {
       notifyListeners();
       await api.setEPUBPreferences(nextPreferences);
       if (Platform.isAndroid) {
+        await native.invokeMethod<void>('viewportInsets', {
+          'top': pageInsets.top,
+          'bottom': pageInsets.bottom,
+          'minimumStatus': minimumStatusInset,
+        });
         _fixedLayout ??=
             await native.invokeMethod<bool>('fixedLayout') ?? false;
         _appliedStyleSignature = '${identityHashCode(this)}:$ticket';
@@ -1285,13 +1296,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
                 var image=${overrideBackground ? "'none'" : "bg.backgroundImage!=='none'?bg.backgroundImage:html.backgroundImage"};
                 s=document.createElement('style');s.id='wenku-reader-preferences';
                 s.textContent=${jsonEncode(css.toString())} + (image!=='none'&&!${overrideBackground}?'html{background-size:'+bg.backgroundSize+';background-repeat:'+bg.backgroundRepeat+';background-position:'+bg.backgroundPosition+';background-attachment:fixed;}':'');document.head.appendChild(s);
-                // Readium's :root[style] body rule is !important; inline padding
-                // keeps the user's margins inside each page rather than outside it.
-                // The column container owns block insets so every page has them.
-                // Body block padding applies only to the first/last fragment in WebView.
-                root.style.setProperty('box-sizing','border-box','important');
-                root.style.setProperty('padding-top','${pageInsets.top}px','important');
-                root.style.setProperty('padding-bottom','${pageInsets.bottom}px','important');
+                // Page height and vertical clearance belong to the navigator's
+                // native viewport. Inline body padding sets the column width.
                 body.style.setProperty('padding','0 ${pageInsets.right}px 0 ${pageInsets.left}px','important');
                 root.style.setProperty('background-color',color,'important');
                 if(!${backgroundFile != null})root.style.setProperty('background-image',image,'important');
@@ -1448,6 +1454,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
                     key: _viewKey,
                     publication: publication!,
                     initialLocator: initialLocator,
+                    appContentPadding: _pageInsets,
+                    appMinimumStatusInset: _minimumStatusInset,
                     shouldShowControls: controls,
                     // Android forwards only unhandled Readium taps through InputListener.
                     // Links, footnotes, annotations and selection handles retain their taps.

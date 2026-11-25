@@ -22,13 +22,19 @@ class ReadingWidgetSkinPicker extends StatelessWidget {
     children: [
       previewBuilder(value),
       const SizedBox(height: 12),
-      SegmentedButton<ReadingWidgetSkin>(
-        segments: [
+      Wrap(
+        alignment: WrapAlignment.center,
+        spacing: 8,
+        runSpacing: 4,
+        children: [
           for (final skin in ReadingWidgetSkin.values)
-            ButtonSegment(value: skin, label: Text(skin.label)),
+            if (skin != ReadingWidgetSkin.original)
+              ChoiceChip(
+                label: Text(skin.label),
+                selected: skin == value,
+                onSelected: onChanged == null ? null : (_) => onChanged!(skin),
+              ),
         ],
-        selected: {value},
-        onSelectionChanged: onChanged == null ? null : (s) => onChanged!(s.single),
       ),
     ],
   );

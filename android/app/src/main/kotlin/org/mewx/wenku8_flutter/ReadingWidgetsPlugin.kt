@@ -20,6 +20,8 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 private const val widgetChannel = "org.mewx.wenku8/reading_widgets"
 private const val widgetPreferences = "reading_widgets_v1"
@@ -63,13 +65,16 @@ class ReadingWidgetsPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     private var channel: MethodChannel? = null
     private var activity: ActivityPluginBinding? = null
     private val inbox = ReadingWidgetOpenInbox()
+    private lateinit var cardsPublisher: ExecutorService
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         context = binding.applicationContext
+        cardsPublisher = Executors.newSingleThreadExecutor()
         channel = MethodChannel(binding.binaryMessenger, widgetChannel).also { it.setMethodCallHandler(this) }
     }
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel?.setMethodCallHandler(null); channel = null
+        cardsPublisher.shutdown()
         inbox.pause()
     }
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
@@ -109,10 +114,14 @@ class ReadingWidgetsPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                 result.success(null)
                 if (handled) activity?.activity?.moveTaskToBack(true)
             } catch (_: Exception) { result.error("WIDGET_CONFIGURATION_FAILED", "小组件配置未能完成", null) }
-            "publishCards" -> try {
-                ReadingWidgetCards.publish(context, org.json.JSONArray(call.argument<List<Any>>("cards") ?: emptyList<Any>()).toString())
-                result.success(null)
-            } catch (_: Exception) { result.error("WIDGET_WRITE_FAILED", "小组件暂未更新", null) }
+            "publishCards" -> cardsPublisher.execute {
+                try {
+                    ReadingWidgetCards.publish(context, org.json.JSONArray(call.argument<List<Any>>("cards") ?: emptyList<Any>()).toString())
+                    result.success(null)
+                } catch (_: Exception) {
+                    result.error("WIDGET_WRITE_FAILED", "小组件暂未更新", null)
+                }
+            }
             "bindCard" -> try {
                 ReadingWidgetCards.bind(context, requireNotNull(call.argument<String>("widgetId")).toInt(), requireNotNull(call.argument<String>("cardId")))
                 result.success(null)

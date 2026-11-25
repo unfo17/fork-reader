@@ -62,17 +62,50 @@ class ReadingDesktopPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final dark = brightness == Brightness.dark;
-    final ink = dark ? const Color(0xfff3eee4) : const Color(0xff262923);
-    final paper = dark ? const Color(0xff222620) : const Color(0xfff7f5ed);
     final season = (data.localDay.month % 12) ~/ 3;
-    final accent = data.skin == ReadingWidgetSkin.seasons
-        ? const [Color(0xff626c98), Color(0xff54805d), Color(0xff287c83), Color(0xffab6338)][season]
-        : const Color(0xff66806e);
+    const seasons = [Color(0xff4f8985), Color(0xffaf7d8b), Color(0xff5786a2), Color(0xffb18842)];
+    final ink = dark ? const Color(0xfff6f1e6) : const Color(0xff272c29);
+    final paper = switch ((data.skin, dark)) {
+      (_, true) when data.skin == ReadingWidgetSkin.film => const Color(0xff10100f),
+      (_, true) => const Color(0xff101419),
+      (ReadingWidgetSkin.paper, false) => const Color(0xffecece5),
+      _ => const Color(0xfff4f0e6),
+    };
+    final accent = switch (data.skin) {
+      ReadingWidgetSkin.seasons => seasons[season],
+      ReadingWidgetSkin.night || ReadingWidgetSkin.film => const Color(0xffdcb65e),
+      ReadingWidgetSkin.paper => const Color(0xff606d5d),
+      _ => const Color(0xff4f8985),
+    };
     final brush = Paint();
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(Offset.zero & size, const Radius.circular(22)),
-      brush..color = Color.lerp(paper, accent, dark ? .16 : .08)!,
-    );
+    final surface = RRect.fromRectAndRadius(Offset.zero & size, const Radius.circular(22));
+    canvas.save();
+    canvas.clipRRect(surface);
+    canvas.drawColor(paper, BlendMode.srcOver);
+    switch (data.skin) {
+      case ReadingWidgetSkin.seasons:
+        for (final (i, tint) in seasons.indexed) {
+          canvas.drawRect(Rect.fromLTWH(size.width * i / 4, size.height - 5, size.width / 4, 5),
+              brush..color = tint);
+        }
+      case ReadingWidgetSkin.archive:
+        canvas.drawRect(Rect.fromLTWH(0, 0, 4, size.height), brush..color = accent);
+      case ReadingWidgetSkin.night:
+        final point = Offset(size.width - 25, 25);
+        canvas.drawCircle(point, 8, brush..color = accent);
+        canvas.drawCircle(point + const Offset(4, -4), 8, brush..color = paper);
+      case ReadingWidgetSkin.film:
+        for (var x = 12.0; x < size.width - 8; x += 14) {
+          canvas.drawRect(Rect.fromLTWH(x, 3, 6, 4), brush..color = const Color(0xffd6d2c7));
+          canvas.drawRect(Rect.fromLTWH(x, size.height - 7, 6, 4), brush);
+        }
+      case ReadingWidgetSkin.paper:
+        canvas.drawRect(Rect.fromLTWH(size.width - 37, 0, 24, 11),
+            brush..color = Color.lerp(paper, accent, .3)!);
+      case ReadingWidgetSkin.original:
+        break;
+    }
+    canvas.restore();
     final inset = size.width < 200 ? 14.0 : 20.0;
     final width = size.width - inset * 2;
     void text(String value, double y, double font, {int lines = 1, Color? tint}) {

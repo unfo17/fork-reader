@@ -6,6 +6,9 @@
     <TextView android:id="@+id/widget_rendered_date" android:layout_width="wrap_content" android:layout_height="wrap_content"
         android:layout_gravity="bottom|end" android:layout_margin="10dp" android:padding="3dp"
         android:textSize="10sp" android:textColor="#FFFFFF" android:background="#CC17191B" android:visibility="gone" />
+    <TextView android:id="@+id/widget_quote_heading" android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:layout_gravity="top|start" android:layout_margin="16dp" android:text="摘录卡"
+        android:textSize="12sp" android:visibility="gone" />
     <LinearLayout android:id="@+id/widget_quote_panel" android:orientation="vertical"
         android:layout_width="match_parent" android:layout_height="match_parent" android:visibility="gone">
         <TextView android:id="@+id/widget_quote_text" android:layout_width="match_parent" android:layout_height="0dp"

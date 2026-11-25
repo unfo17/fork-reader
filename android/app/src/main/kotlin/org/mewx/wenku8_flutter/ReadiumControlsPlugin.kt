@@ -32,6 +32,15 @@ class ReadiumControlsPlugin : FlutterPlugin {
                                 result.success(null)
                             }
                             "fixedLayout" -> result.success(ReadiumReader.appIsFixedLayout())
+                            "contentTop" -> result.success(ReadiumReader.appContentTop())
+                            "viewportInsets" -> {
+                                ReadiumReader.appSetViewportInsets(
+                                    call.argument<Number>("top")?.toDouble() ?: 0.0,
+                                    call.argument<Number>("bottom")?.toDouble() ?: 0.0,
+                                    call.argument<Number>("minimumStatus")?.toDouble() ?: 0.0,
+                                )
+                                result.success(null)
+                            }
                             "clearSelection" -> {
                                 ReadiumReader.appSelectionMode?.finish()
                                 ReadiumReader.epubEvaluateJavascript("window.getSelection().removeAllRanges();")

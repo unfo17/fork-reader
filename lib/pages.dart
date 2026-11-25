@@ -5803,7 +5803,8 @@ class _ReaderPageState extends State<ReaderPage>
       _nativeImageTimer?.cancel();
       _nativeImageTimer = Timer(const Duration(milliseconds: 300), () async {
         if (engine.turnBusy) await engine.whenPageIdle;
-        if (!mounted || _readium != engine || _nativeImageKey != key) return;
+        if (!mounted || _readium != engine || _nativeImageKey != key ||
+            _activityOverlays.isNotEmpty) return;
         final cache = _nativeImages ??= ReaderIllustrationCache(request: engine.imageBytes);
         try {
           final urls = await engine.visibleImages();
@@ -6045,19 +6046,23 @@ class _ReaderPageState extends State<ReaderPage>
     final hidden = widget.state.hiddenReaderLanguagesFor(widget.novel.id);
     final only = widget.state.onlyReaderLanguageFor(widget.novel.id);
     final safe = MediaQuery.viewPaddingOf(context);
+    final nativeSafeArea = LocalPlatform.android;
+    final statusBand = ReaderStatusFooter.contentHeightFor(
+      context,
+      fontSize: prefs.statusFontSize,
+    ) + math.max(0.0, prefs.statusTopOffset);
     final pageInsets = EdgeInsets.fromLTRB(
       safe.left + prefs.leftMargin,
-      (prefs.hideSystemStatus ? _systemStatusExtent(context) : safe.top) +
-          prefs.marginTop,
+      (nativeSafeArea ? 0 : math.max(safe.top, statusBand)) + prefs.marginTop,
       safe.right + prefs.rightMargin,
-      safe.bottom +
+      (nativeSafeArea ? 0 : safe.bottom) +
           prefs.marginBottom +
           // Visibility belongs to the footer overlay. Keep its page margin
           // stable so toggling information never reflows the native chapter.
           ReaderScrollLocation.extentOf(context),
     );
     final key =
-        '$pageInsets|${prefs.layoutKey}|${prefs.paper.name}|${prefs.nightTextBrightness}|${prefs.backgroundImage}|${prefs.backgroundOpacity}|${prefs.backgroundFit}|${prefs.hideSystemStatus}|${prefs.showStatusInfo}|$_fontSize|$_lineHeight|$_readerFontId|$dark|${scheme?.surface.toARGB32()}|${scheme?.onSurface.toARGB32()}|$hidden|$only';
+        '$pageInsets|$statusBand|${prefs.layoutKey}|${prefs.paper.name}|${prefs.nightTextBrightness}|${prefs.backgroundImage}|${prefs.backgroundOpacity}|${prefs.backgroundFit}|$_fontSize|$_lineHeight|$_readerFontId|$dark|${scheme?.surface.toARGB32()}|${scheme?.onSurface.toARGB32()}|$hidden|$only';
     if (_activityForeground && key != _nativePreferencesKey) {
       _nativePreferencesKey = key;
       // Supply initial defaults synchronously, before creating the native view.
@@ -6070,6 +6075,7 @@ class _ReaderPageState extends State<ReaderPage>
           systemPalette: scheme,
           fontFamily: null,
           pageInsets: pageInsets,
+          minimumStatusInset: statusBand,
           defaultsOnly: true,
         ),
       );
@@ -6088,6 +6094,7 @@ class _ReaderPageState extends State<ReaderPage>
             systemPalette: scheme,
             fontFamily: _readerFontFamily,
             pageInsets: pageInsets,
+            minimumStatusInset: statusBand,
             fontFile: font,
             backgroundFile: background,
             hiddenLanguages: hidden,
@@ -6104,6 +6111,7 @@ class _ReaderPageState extends State<ReaderPage>
             systemPalette: scheme,
             fontFamily: null,
             pageInsets: pageInsets,
+            minimumStatusInset: statusBand,
             hiddenLanguages: hidden,
             onlyLanguage: only,
           );
@@ -6112,7 +6120,12 @@ class _ReaderPageState extends State<ReaderPage>
     }
     return ReaderTouchSurface(
       canRecord: () => _activityEligible && !_selection.value,
-      child: bridge.view(),
+      child: nativeSafeArea
+          ? bridge.view()
+          : Padding(
+              padding: EdgeInsets.only(top: pageInsets.top, bottom: pageInsets.bottom),
+              child: bridge.view(),
+            ),
     );
   }
 
@@ -6226,6 +6239,7 @@ class _ReaderPageState extends State<ReaderPage>
     } else {
       _activityOverlays.remove(overlay);
     }
+    _readium?.turns.setOverlayOpen(_activityOverlays.isNotEmpty);
     _syncReadingActivity();
   }
 
@@ -7610,6 +7624,7 @@ class _ReaderPageState extends State<ReaderPage>
             ? null
             : _readerDockKey.currentContext,
         reduceMotion: widget.state.reduceMotion,
+        lightweight: _readium != null && LocalPlatform.android,
         surfaceWrapper: _readerSurface,
         builder: (context) => ReaderCatalogue(
           novel: _sourceBook,
@@ -8428,6 +8443,7 @@ class _ReaderPageState extends State<ReaderPage>
         context,
         note,
         reduceMotion: widget.state.reduceMotion,
+        lightweight: _readium != null && LocalPlatform.android,
         surfaceWrapper: _readerSurface,
       );
     } finally {
@@ -8828,6 +8844,10 @@ class _ReaderPageState extends State<ReaderPage>
           MediaQuery.viewPaddingOf(context).top,
           AppWindowInsets.viewPaddingOf(context).top,
         );
+
+  double _readingStatusInset(BuildContext context, ReaderPreferences prefs) =>
+      ReaderStatusFooter.heightFor(context, fontSize: prefs.statusFontSize) +
+      math.max(0.0, prefs.statusTopOffset);
 
   double _chromeStatusInset(BuildContext context) => _hideSystemStatus
       ? (_systemStatusExtent(context) - MediaQuery.viewPaddingOf(context).top)
@@ -11156,10 +11176,7 @@ class _ReaderPageState extends State<ReaderPage>
       child: Padding(
         padding: EdgeInsets.only(
           top:
-              (prefs.hideSystemStatus
-                  ? _systemStatusExtent(context)
-                  : safe.top) +
-              prefs.marginTop,
+              _readingStatusInset(context, prefs) + prefs.marginTop,
           left: safe.left,
           right: safe.right,
           // Hidden information and visible controls share this fixed viewport.
@@ -11385,19 +11402,13 @@ class _ReaderPageState extends State<ReaderPage>
             final safe = MediaQuery.viewPaddingOf(context);
             // Fixed information rows keep their home-indicator clearance in
             // both chrome states; showing controls never changes this geometry.
-            final pagedBottomInset = safe.bottom;
             final pagedPadding = EdgeInsets.fromLTRB(
               prefs.leftMargin + safe.left,
-              (prefs.hideSystemStatus
-                      ? _systemStatusExtent(context)
-                      : safe.top) +
-                  prefs.marginTop,
+              _readingStatusInset(context, prefs) + prefs.marginTop,
               prefs.rightMargin + safe.right,
-              pagedBottomInset +
+              safe.bottom +
                   prefs.marginBottom +
-                  ((prefs.showChapterInfo || prefs.showReadingProgress)
-                      ? ReaderScrollLocation.extentOf(context)
-                      : 0),
+                  ReaderScrollLocation.extentOf(context),
             );
             ReaderPagedChapter? adjacent(int direction) {
               final index = _chapter + direction;
@@ -11548,6 +11559,7 @@ class _ReaderPageState extends State<ReaderPage>
             : _readerDockKey.currentContext,
         reduceMotion: widget.state.reduceMotion,
         previewing: preview,
+        lightweight: _readium != null && LocalPlatform.android,
         maxWidth: 720,
         maxHeight: math.min(760, MediaQuery.sizeOf(context).height * .86),
         surfaceWrapper: _readerSurface,
@@ -11587,6 +11599,7 @@ class _ReaderPageState extends State<ReaderPage>
           initialBookmarks: bookmarks,
           initialTab: initialTab,
           scope: scope,
+          lightweight: _readium != null && LocalPlatform.android,
           canHandoff: _canHandoff(context),
           listeningBuilder: _listening == null
               ? null
@@ -11756,6 +11769,7 @@ class _ReaderPageState extends State<ReaderPage>
             ? null
             : _readerDockKey.currentContext,
         reduceMotion: widget.state.reduceMotion,
+        lightweight: _readium != null && LocalPlatform.android,
         surfaceWrapper: _readerSurface,
         builder: (sheet) => ReaderSearchPanel(
           content: content,

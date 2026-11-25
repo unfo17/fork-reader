@@ -35,27 +35,23 @@ internal object ReadingWidgetCards {
     fun remove(c: Context, id: Int) { prefs(c).edit().remove("binding_$id").remove("quote_$id").apply() }
     fun publish(c: Context, input: String) {
         val next = JSONArray(input)
-        val directory = File(c.filesDir, "reading-cards").apply { mkdirs() }
-        val retained = mutableSetOf<String>(); val created = mutableListOf<File>(); val old = all(cards(c))
-        try {
-            for (card in all(next)) {
-                require(card.getString("id").matches(Regex("[a-zA-Z0-9_-]{1,64}")))
-                val previous = old.firstOrNull { it.optString("id") == card.getString("id") }
-                val images = card.getJSONObject("images"); val sources = JSONObject(images.toString())
-                for (size in listOf("small", "medium", "large")) for (mode in listOf("light", "dark")) {
-                    val key = "${size}_$mode"; val source = File(images.getString(key)).canonicalFile
-                    sources.put(key, source.path)
-                    require(source.path.startsWith(File(c.applicationInfo.dataDir).canonicalPath + "/") && source.length() in 8..2_097_152)
-                    val reuse = previous?.optJSONObject("images")?.optString(key)?.takeIf {
-                        previous.optJSONObject("sources")?.optString(key) == source.path && File(it).parentFile == directory && File(it).isFile }
-                    val path = reuse ?: File(directory, "${java.util.UUID.randomUUID()}.png").also { source.copyTo(it); created.add(it) }.path
-                    images.put(key, path); retained.add(path)
+        for (card in all(next)) {
+            require(card.getString("id").matches(Regex("[a-zA-Z0-9_-]{1,64}")))
+            val snapshot = card.getJSONObject("snapshot")
+            require(snapshot.getInt("version") == 1 && snapshot.getJSONArray("week").length() == 7)
+            if (!card.optBoolean("showBookDetails")) {
+                snapshot.put("showBookDetails", false)
+                snapshot.remove("currentBook")
+                snapshot.optJSONObject("latestCompletion")?.let { completion ->
+                    for (key in listOf("bookId", "title", "author", "coverPath")) completion.remove(key)
                 }
-                card.put("sources", sources)
+                card.optJSONArray("quotes")?.let { quotes -> all(quotes).forEach { it.remove("source") } }
             }
-            check(prefs(c).edit().putString("cards", next.toString()).commit())
-        } catch (error: Exception) { created.forEach { it.delete() }; throw error }
-        directory.listFiles()?.filter { it.path !in retained }?.forEach { it.delete() }
+        }
+        check(prefs(c).edit().putString("cards", next.toString()).commit())
+        // Bindings and quote cursors remain untouched. Only the previously
+        // generated card images are obsolete once every card has live data.
+        File(c.filesDir, "reading-cards").listFiles()?.forEach { it.delete() }
         ReadingWidgetProvider.refreshAll(c)
     }
     fun next(c: Context, id: Int) {
@@ -74,22 +70,43 @@ internal object ReadingWidgetCards {
         val card = card(c, id) ?: return null
         val size = listOf("small", "medium", "large")[family]; val appearance = card.optString("appearance", "system")
         val dark = appearance == "dark" || appearance == "system" && c.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+        val design = card.getString("design")
+        val snapshot = card.optJSONObject("snapshot")
+        val bounds = manager.getAppWidgetOptions(id)
+        val width = bounds.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, if (family == 0) 170 else 364).coerceIn(140, 480)
+        val height = bounds.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, if (family == 2) 382 else 170).coerceIn(140, 530)
+        val density = c.resources.displayMetrics.density.coerceAtMost(1.5f)
         fun icon(mode: String): Icon {
             val path = card.getJSONObject("images").getString("${size}_$mode")
             require(File(path).parentFile == File(c.filesDir, "reading-cards"))
             val bytes = File(path).readBytes(); return Icon.createWithData(bytes, 0, bytes.size)
         }
         return runCatching {
+            val route = when (design) { "memory" -> "moments"; "quote" -> "excerpts"; else -> "statistics" }
+            if (snapshot != null && design != "quote") {
+                val content = ReadingWidgetContent(snapshot)
+                val nativeDesign = ReadingWidgetDesignViews.id(snapshot)
+                val views = ReadingWidgetDesignViews.create(c, content, nativeDesign, family, width, height, dark)
+                views.setContentDescription(R.id.reading_widget_root, card.getString("name"))
+                views.setOnClickPendingIntent(R.id.reading_widget_root, open(c, id, route))
+                val recent = snapshot.optJSONObject("currentBook")?.optString("title").orEmpty()
+                if (family == 2 && card.optBoolean("hasRecent") && recent.isNotEmpty()) {
+                    views.setViewVisibility(R.id.design_footer, View.VISIBLE)
+                    views.setTextViewText(R.id.design_footer, "继续 · $recent")
+                    views.setOnClickPendingIntent(R.id.design_footer, open(c, id, "continue"))
+                }
+                return@runCatching views
+            }
             val views = RemoteViews(c.packageName, R.layout.reading_widget_rendered)
-            if (Build.VERSION.SDK_INT >= 31 && appearance == "system") views.setIcon(R.id.widget_rendered_face, "setImageIcon", icon("light"), icon("dark"))
+            val skin = snapshot?.let { ReadingWidgetSkin(it.optString("skinId"), it.optString("localDay"), dark) }
+            if (skin != null) views.setImageViewBitmap(R.id.widget_rendered_face, skin.background(width, height, density))
+            else if (Build.VERSION.SDK_INT >= 31 && appearance == "system") views.setIcon(R.id.widget_rendered_face, "setImageIcon", icon("light"), icon("dark"))
             else views.setImageViewIcon(R.id.widget_rendered_face, icon(if (dark) "dark" else "light"))
-            val design = card.getString("design")
             val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.ROOT).format(java.util.Date())
             if (design != "quote" && card.optString("localDay") != today) {
                 views.setViewVisibility(R.id.widget_rendered_date, View.VISIBLE)
                 views.setTextViewText(R.id.widget_rendered_date, "截至 " + card.optString("localDay").replace('-', '.'))
             }
-            val route = when (design) { "memory" -> "moments"; "quote" -> "excerpts"; else -> "statistics" }
             views.setOnClickPendingIntent(R.id.reading_widget_root, open(c, id, route))
             views.setContentDescription(R.id.widget_rendered_face, card.getString("name"))
             if (family == 2 && card.optBoolean("hasRecent")) {
@@ -99,11 +116,12 @@ internal object ReadingWidgetCards {
             if (design == "quote") {
                 val quotes = card.optJSONArray("quotes") ?: JSONArray(); val selected = prefs(c).getString("quote_$id", null)
                 val quote = all(quotes).firstOrNull { it.optString("id") == selected } ?: quotes.optJSONObject(0)
-                val bounds = manager.getAppWidgetOptions(id)
-                val width = bounds.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, if (family == 0) 170 else 364)
-                val height = bounds.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, if (family == 2) 382 else 170)
                 val sx = width / (if (family == 0) 170f else 364f); val sy = height / (if (family == 2) 382f else 170f)
                 fun px(v: Float) = (v * c.resources.displayMetrics.density).toInt()
+                if (skin != null) {
+                    views.setViewVisibility(R.id.widget_quote_heading, View.VISIBLE)
+                    views.setTextColor(R.id.widget_quote_heading, skin.muted)
+                }
                 views.setViewVisibility(R.id.widget_quote_panel, View.VISIBLE)
                 views.setViewPadding(R.id.widget_quote_panel, px((if (family == 1) 30 else 16) * sx), px((if (family == 2) 230 else if (family == 0) 62 else 50) * sy), px(16 * sx), px((if (family == 2) 44 else 36) * sy))
                 views.setTextViewText(R.id.widget_quote_text, quote?.optString("text") ?: "在阅读中留下喜欢的句子")
@@ -111,7 +129,8 @@ internal object ReadingWidgetCards {
                 views.setTextViewTextSize(R.id.widget_quote_text, TypedValue.COMPLEX_UNIT_DIP, (if (family == 2) 20 else if (family == 1) 16 else 14) * sx)
                 if (family == 2 && quotes.length() > 0) { views.setViewVisibility(R.id.widget_quote_count, View.VISIBLE); views.setTextViewText(R.id.widget_quote_count, "共 ${quotes.length()} 条摘录") }
                 for (view in listOf(R.id.widget_quote_text, R.id.widget_quote_source, R.id.widget_quote_count)) {
-                    if (Build.VERSION.SDK_INT >= 31 && appearance == "system") views.setColorInt(view, "setTextColor", Color.rgb(32,35,41), Color.rgb(242,239,232))
+                    if (skin != null) views.setTextColor(view, skin.ink)
+                    else if (Build.VERSION.SDK_INT >= 31 && appearance == "system") views.setColorInt(view, "setTextColor", Color.rgb(32,35,41), Color.rgb(242,239,232))
                     else views.setTextColor(view, if (dark) Color.rgb(242,239,232) else Color.rgb(32,35,41))
                 }
                 if (quotes.length() > 1) {

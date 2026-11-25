@@ -440,11 +440,24 @@ object ReadiumReader :
         val root = currentReaderWidget?.getView() ?: return
         var view: android.view.View? = appVisibleWebView()
         while (view != null) {
-            view.setBackgroundColor(color)
-            if (view === root) break
+            if ((view.background as? android.graphics.drawable.ColorDrawable)?.color != color)
+                view.setBackgroundColor(color)
+            if (view === root) return
             view = view.parent as? android.view.View
         }
-        root.setBackgroundColor(color)
+        if ((root.background as? android.graphics.drawable.ColorDrawable)?.color != color)
+            root.setBackgroundColor(color)
+    }
+
+    fun appSetViewportInsets(top: Double, bottom: Double, minimumStatus: Double) =
+        currentReaderWidget?.setAppViewportInsets(top, bottom, minimumStatus)
+
+    fun appContentTop(): Double {
+        val root = currentReaderWidget?.getView() ?: return 0.0
+        val page = appVisibleWebView() ?: return 0.0
+        val rootLocation = IntArray(2).also(root::getLocationInWindow)
+        val pageLocation = IntArray(2).also(page::getLocationInWindow)
+        return (pageLocation[1] - rootLocation[1]) / root.resources.displayMetrics.density.toDouble()
     }
 
     fun appOwnsPageGestures(): Boolean = appSelectionToolbar &&
@@ -525,6 +538,10 @@ object ReadiumReader :
         if (metadata == "null" || visualKey != appVisualPageKey()) return null
         val info = JSONObject(org.json.JSONTokener(metadata).nextValue().toString())
         val geometry = info.getJSONObject("geometry")
+        val rootPosition = IntArray(2).also(root::getLocationInWindow)
+        val pagePosition = IntArray(2).also(view::getLocationInWindow)
+        val bandOffset = if (vertical) pagePosition[0] - rootPosition[0] else pagePosition[1] - rootPosition[1]
+        val bandExtent = if (vertical) view.width else view.height
         val visibleLocator = appLocatorAtGeometry(locator, view, geometry)
         val color = info.getJSONArray("color")
         val paper = fixedLayoutPaper ?: android.graphics.Color.rgb(color.getInt(0), color.getInt(1), color.getInt(2))
@@ -567,8 +584,8 @@ object ReadiumReader :
                 val gaps = info.getJSONArray("gaps")
                 for (i in 0 until gaps.length()) {
                     val gap = gaps.getJSONArray(i)
-                    val low = kotlin.math.ceil(gap.getDouble(0)*length).toInt().coerceIn(1,length-1)
-                    val high = kotlin.math.floor(gap.getDouble(1)*length).toInt().coerceIn(1,length-1)
+                    val low = kotlin.math.ceil(bandOffset + gap.getDouble(0)*bandExtent).toInt().coerceIn(1,length-1)
+                    val high = kotlin.math.floor(bandOffset + gap.getDouble(1)*bandExtent).toInt().coerceIn(1,length-1)
                     if (low > high) continue
                     val middle = (low+high)/2
                     var found = -1

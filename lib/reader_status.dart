@@ -36,16 +36,16 @@ class ReaderStatusFooter extends StatefulWidget {
   static const height = 24.0;
   // Reuse the cutout/status band, not another row below it. Time and battery
   // sit at opposite edges, leaving the camera/sensor area in the middle clear.
+  static double contentHeightFor(BuildContext context, {double fontSize = 11}) =>
+      math.max(height, MediaQuery.textScalerOf(context).scale(fontSize) * 1.4 + 8);
+
   static double heightFor(BuildContext context, {double fontSize = 11}) =>
       math.max(
         math.max(
           MediaQuery.viewPaddingOf(context).top,
           AppWindowInsets.viewPaddingOf(context).top,
         ),
-        (MediaQuery.textScalerOf(context).scale(fontSize) * 1.4 + 8).clamp(
-          height,
-          double.infinity,
-        ),
+        contentHeightFor(context, fontSize: fontSize),
       );
   static const events = EventChannel('org.mewx.wenku8/reader_status');
   // Incoming/outgoing sheets share one native subscription and the same data.

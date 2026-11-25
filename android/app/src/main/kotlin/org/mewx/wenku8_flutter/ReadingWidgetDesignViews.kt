@@ -17,7 +17,7 @@ internal object ReadingWidgetDesignViews {
         ?.takeIf { it in listOf("focus", "week", "calendar", "memory") } ?: "classic"
 
     fun create(context: Context, content: ReadingWidgetContent, design: String,
-               family: Int, width: Int, height: Int): RemoteViews {
+               family: Int, width: Int, height: Int, dark: Boolean? = null): RemoteViews {
         val illustrated = design == "focus" && content.skin == "seasons" && family > 0
         val layout = if (illustrated) {
             if (family == 2) R.layout.reading_widget_design_focus_large else R.layout.reading_widget_design_focus_medium
@@ -28,7 +28,7 @@ internal object ReadingWidgetDesignViews {
             else -> R.layout.reading_widget_design_memory
         }
         val views = RemoteViews(context.packageName, layout)
-        val skin = ReadingWidgetSkin(content.skin, content.localDay)
+        val skin = ReadingWidgetSkin(content.skin, content.localDay, dark)
         if (illustrated) {
             val month = content.localDay.drop(5).take(2).toIntOrNull() ?: 1
             val art = when (month) {
