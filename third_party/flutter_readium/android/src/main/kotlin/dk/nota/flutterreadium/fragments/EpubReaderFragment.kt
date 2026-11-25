@@ -588,13 +588,18 @@ class EpubReaderFragment :
     }
 
     /**
-     * Android lifecycle pause method, detaches the navigator to save resources and prevent caches.
+     * Retain the app-managed reader across a transient Activity pause.
      */
     override fun onPause() {
         try {
             PluginLog.d(TAG, "::onPause - $instance")
 
             epubVm?.locator = currentLocator?.value
+
+            if (ReadiumReader.appSelectionToolbar) {
+                super.onPause()
+                return
+            }
 
             epubNavigator?.let { fragment ->
                 childFragmentManager.commitNow {

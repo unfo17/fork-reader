@@ -37,7 +37,7 @@ class _ReadiumMotionShape extends ChangeNotifier {
 }
 
 class _ReadiumOverlap {
-  static const partialReveal = .32;
+  static const partialReveal = .24;
 
   _ReadiumOverlap({
     required TickerProvider vsync,
@@ -57,6 +57,7 @@ class _ReadiumOverlap {
   final Duration duration;
   final shape = _ReadiumMotionShape();
   final released = Completer<void>();
+  final landed = Completer<bool>();
   Future<void>? settling;
   Future<void>? preparing;
   int direction;
@@ -93,6 +94,7 @@ class _ReadiumOverlap {
 
   void abandon() {
     if (!released.isCompleted) released.complete();
+    if (!landed.isCompleted) landed.complete(false);
     clock.stop();
   }
 
@@ -105,10 +107,21 @@ class _ReadiumOverlap {
   }
 }
 
+class _ReadiumPaperGrab {
+  _ReadiumPaperGrab(this.clock, this.overlap, this.wasCommitted, this.touchY)
+    : progress = clock.value;
+
+  final AnimationController clock;
+  final _ReadiumOverlap? overlap;
+  final double progress, touchY;
+  final bool wasCommitted;
+  final released = Completer<void>();
+}
+
 class ReadiumPageTurnController {
   _ReadiumPageSurfaceState? _owner;
   Completer<bool>? _release;
-  double _progress = 0, _sign = 1, _width = 1, _lastDistance = 0, _velocity = 0;
+  double _progress = 0, _displacement = 0, _sign = 1, _width = 1, _lastDistance = 0, _velocity = 0;
   final _watch = Stopwatch();
   int _lastMicros = 0;
   double _initialSign = 1, _directionMultiplier = -1;
@@ -134,7 +147,7 @@ class ReadiumPageTurnController {
     if (touchY != null) _touchY = touchY.clamp(0.0, 1.0);
     if (_release == null || _release!.isCompleted) return;
     final nextSign = dx.abs() < 1 ? _sign : (dx < 0 ? -1.0 : 1.0);
-    if (_owner?.widget.preview != null && nextSign != _sign) {
+    if (_owner?.widget.preview != null && _owner?._paperGrab == null && nextSign != _sign) {
       _sign = nextSign;
       _lastDistance = dx * _sign;
       _lastMicros = _watch.elapsedMicroseconds;
@@ -147,7 +160,8 @@ class ReadiumPageTurnController {
       _lastDistance = distance;
       _lastMicros = now;
     }
-    _progress = (distance / _width).clamp(0.0, 1.0);
+    _displacement = distance / _width;
+    _progress = _displacement.clamp(0.0, 1.0);
     _owner?._scrub(shapeChanged: previousY != _touchY);
   }
 
@@ -161,6 +175,11 @@ class ReadiumPageTurnController {
     if (_watch.elapsedMicroseconds - _lastMicros > 100000) _velocity = 0;
     _watch.stop();
     if (releaseVelocity != null) _velocity = releaseVelocity * _sign;
+    if (_owner?._paperGrab != null) {
+      release.complete(false);
+      _owner?._releasePaper(cancel, _velocity);
+      return;
+    }
     // Very short gestures may have too few movement samples for a useful
     // release velocity. Use their native touch duration and displacement.
     final shortSwipe = durationMillis != null &&
@@ -177,8 +196,9 @@ class ReadiumPageTurnController {
   }
 
   bool beginOverlappingDrag(int direction, double dx, double width, double touchY) {
-    if (_release?.isCompleted == false ||
-        _owner?._addOverlap(direction) != true) return false;
+    final owner = _owner;
+    if (_release?.isCompleted == false || owner == null ||
+        !(owner._grabPaper(direction) || owner._addOverlap(direction))) return false;
     beginDrag(dx, width, touchY);
     _directionMultiplier = direction / _initialSign;
     return true;
@@ -248,6 +268,7 @@ class ReadiumPageSurface extends StatefulWidget {
     this.layoutKey,
     this.lookAhead = 1,
     this.onPrioritize,
+    this.onTurnAvailable,
     this.replayTap,
     this.refreshRateLimit = 0,
   });
@@ -261,6 +282,7 @@ class ReadiumPageSurface extends StatefulWidget {
   final int lookAhead;
   final double refreshRateLimit;
   final VoidCallback? onPrioritize;
+  final VoidCallback? onTurnAvailable;
   final Future<void> Function(Offset fraction)? replayTap;
   final Future<bool> Function(int direction)? canTurn;
   final Future<ReadiumPageFrame?> Function(int direction, ReadiumPageFrame origin)? preview;
@@ -285,6 +307,9 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   double _primaryTouchY = .5, _primaryStartY = .5;
   final _overlaps = <_ReadiumOverlap>[];
   _ReadiumOverlap? _trackingOverlap;
+  Future<void>? _nativeOverlaps;
+  bool _overlapLandingFailed = false;
+  _ReadiumPaperGrab? _paperGrab;
   ReadiumPageFrame? _cached;
   Timer? _warmTimer;
   bool _warming = false;
@@ -487,6 +512,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     if (_busy || !mounted) return;
     _busy = true;
     _primaryCommit = _primaryAdopted = false;
+    _overlapLandingFailed = false;
     _previewHandedOff = false;
     _handoffTarget = null;
     _dragDirection = direction;
@@ -532,11 +558,11 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       if (target != null && !held.contains(target)) held.add(target.retain());
       if (_to != target && mounted) setState(() => _to = target);
       if (target == null) { finish = false; await widget.canTurn?.call(_dragDirection); }
-      Future<bool>? landing;
-      if (finish && target != null) {
-        final origin = from;
+      final paper = _effect == ReaderPageEffect.paper;
+      final origin = from;
+      Future<bool> adopt(ReadiumPageFrame target) async {
         _adoptingPage = true;
-        landing = (() async {
+        try {
           await _preparing;
           if (!mounted) return false;
           if (!await widget.land!(target) || !mounted) return false;
@@ -545,19 +571,23 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
           _shiftWindow(_dragDirection, origin);
           _primaryAdopted = true;
           _handoffTarget = null;
-          if (_overlaps.firstOrNull case final overlap?) {
-            _prepareExposedPage(overlap);
-          }
+          _startNativeOverlaps();
           return true;
-        })().catchError((Object _) => false);
+        } catch (_) {
+          return false;
+        }
       }
+      final landing = finish && target != null && !paper ? adopt(target) : null;
       if (gesture != null) {
         if (_settling == null) _finishDrag(finish);
-        await _settling;
       } else {
         _primaryCommit = finish && target != null;
-        await _clock.animateTo(1, duration: animated ? widget.preferences.pageSpeed.durationFor(_effect) : Duration.zero, curve: Curves.easeInOutCubic).orCancel;
+        _settling = _animatePage(_clock, 1,
+          animated ? widget.preferences.pageSpeed.durationFor(_effect) : Duration.zero,
+          Curves.easeInOutCubic);
       }
+      await _waitForCurrentSettle(() => _settling);
+      if (paper) finish = _primaryCommit && target != null;
       if (!finish) {
         _handoffTarget = null;
         await _preparing;
@@ -567,7 +597,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       if (finish && target != null) {
         // Hold the complete target bitmap while Readium adopts its exact anchor.
         // No live target layout is exposed in the middle of a gesture.
-        committed = await landing!;
+        committed = await (landing ?? adopt(target));
         if (!committed) {
           if (mounted) setState(_clearOverlaps);
           await _clock.animateTo(0, duration: const Duration(milliseconds: 180)).orCancel;
@@ -577,7 +607,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
               _holdPresentedPage(target);
               _from = _to = null;
             });
-            await _landOverlaps();
+            await _retireSettledOverlaps();
           }
         }
       }
@@ -587,6 +617,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       _dragPrepared = false;
       _settling = null;
       _primaryCommit = _primaryAdopted = false;
+      _releaseAbandonedGrab();
       _clearOverlaps();
       _handoffTarget = null;
       _previewHandedOff = false;
@@ -618,14 +649,16 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   }
 
   bool _addOverlap(int direction, {bool drag = true, bool animated = true}) {
-    if (!mounted || !_primaryCommit || _routePaused || _overlaps.length >= 3) return false;
+    if (!mounted || !_primaryCommit || _routePaused || _overlapLandingFailed ||
+        _overlaps.length >= 4) return false;
     final tail = _overlaps.lastOrNull;
     final origin = tail == null ? _to : tail.target;
     if (origin == null || (tail != null && !tail.committed)) return false;
     // The offsets are relative to the last native page that has been adopted.
     // The cache moves only when Readium confirms the corresponding locator.
     final offset = (_primaryAdopted ? 0 : _dragDirection) +
-        _overlaps.fold<int>(0, (position, turn) => position + turn.direction);
+        _overlaps.where((turn) => !turn.landed.isCompleted)
+            .fold<int>(0, (position, turn) => position + turn.direction);
     ReadiumPageFrame? at(int index) =>
         index == 0 ? _cached ?? _from : _neighbors[index];
     final previous = at(offset - 1), next = at(offset + 1);
@@ -643,13 +676,92 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       if (drag) _trackingOverlap = overlap;
     });
     if (!drag) overlap.finish(true);
-    _prepareExposedPage(overlap);
+    _startNativeOverlaps();
     return true;
+  }
+
+  void _offerNextTurn() {
+    scheduleMicrotask(() {
+      if (mounted) widget.onTurnAvailable?.call();
+    });
+  }
+
+  bool _grabPaper(int direction) {
+    if (!mounted || _routePaused || _effect != ReaderPageEffect.paper) return false;
+    final overlap = _overlaps.lastOrNull;
+    final clock = overlap?.clock ?? _clock;
+    final currentDirection = overlap?.direction ?? _dragDirection;
+    if (direction != -currentDirection || clock.value <= 0 || clock.value >= 1) return false;
+    if (overlap == null) {
+      if (_from == null || _to == null || _settling == null || _primaryAdopted) return false;
+    } else if (overlap.target == null || overlap.settling == null || overlap.landed.isCompleted) {
+      return false;
+    }
+    final grab = _ReadiumPaperGrab(
+      clock, overlap, overlap?.committed ?? _primaryCommit,
+      overlap?.touchY ?? _primaryTouchY,
+    );
+    _paperGrab = grab;
+    if (overlap == null) {
+      _settling = grab.released.future;
+    } else {
+      overlap.settling = grab.released.future;
+    }
+    clock.stop();
+    return true;
+  }
+
+  void _releasePaper(bool cancel, double velocity) {
+    final grab = _paperGrab;
+    if (grab == null) return;
+    _paintDrag();
+    _paperGrab = null;
+    _nextDragTick = null;
+    final progress = grab.clock.value;
+    final commit = cancel ? grab.wasCommitted
+        : velocity > 700 && progress < .9 ? false
+        : velocity < -700 && progress > .1 ? true
+        : progress > .5;
+    if (grab.overlap case final overlap?) {
+      overlap.committed = commit;
+    } else {
+      _primaryCommit = commit;
+      _handoffTarget = commit ? _to : null;
+    }
+    final target = commit ? 1.0 : 0.0;
+    final duration = widget.preferences.pageSpeed.durationFor(ReaderPageEffect.paper);
+    unawaited(_animatePage(grab.clock, target,
+      Duration(microseconds: (duration.inMicroseconds * (.3 + .7 * (target - progress).abs())).round()),
+      Curves.easeOutSine).whenComplete(() {
+        grab.released.complete();
+        _offerNextTurn();
+      }));
+  }
+
+  void _releaseAbandonedGrab() {
+    _paperGrab?.released.complete();
+    _paperGrab = null;
+  }
+
+  Future<void> _animatePage(AnimationController clock, double target, Duration duration, Curve curve) {
+    return clock.animateTo(
+      target, duration: clock.value == target ? Duration.zero : duration, curve: curve,
+    ).orCancel.catchError((Object error) {
+      if (error is! TickerCanceled) throw error;
+    });
+  }
+
+  Future<void> _waitForCurrentSettle(Future<void>? Function() current) async {
+    Future<void>? animation;
+    do {
+      animation = current();
+      await animation;
+    } while (mounted && animation != current());
   }
 
   void _prepareExposedPage(_ReadiumOverlap overlap) {
     if (overlap.target != null || overlap.preparing != null ||
-        !_primaryAdopted || _overlaps.firstOrNull != overlap ||
+        !_primaryAdopted || overlap.landed.isCompleted ||
         !identical(_cached, overlap.from)) return;
     overlap.preparing = _fillExposedPage(overlap).whenComplete(() {
       overlap.preparing = null;
@@ -658,9 +770,9 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
 
   Future<void> _fillExposedPage(_ReadiumOverlap overlap) async {
     var direction = overlap.direction;
-    while (mounted && _overlaps.firstOrNull == overlap && overlap.target == null) {
+    while (mounted && !overlap.landed.isCompleted && overlap.target == null) {
       await _prepareNeighbors(overlap.from, requiredDirection: direction);
-      if (!mounted || _overlaps.firstOrNull != overlap) return;
+      if (!mounted || overlap.landed.isCompleted) return;
       if (_neighbors[direction] case final frame?) {
         setState(() => overlap.attachTarget(direction, frame));
       }
@@ -679,22 +791,55 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     } else if (overlap.released.isCompleted) {
       overlap.settle();
     }
+    _offerNextTurn();
   }
 
-  Future<void> _landOverlaps() async {
-    while (mounted && _overlaps.isNotEmpty) {
-      final overlap = _overlaps.first;
+  void _startNativeOverlaps() {
+    if (!mounted || !_primaryAdopted || _nativeOverlaps != null ||
+        _overlapLandingFailed || _overlaps.every((turn) => turn.landed.isCompleted)) return;
+    _nativeOverlaps = _adoptReleasedOverlaps().whenComplete(() {
+      _nativeOverlaps = null;
+      _startNativeOverlaps();
+    });
+  }
+
+  Future<void> _adoptReleasedOverlaps() async {
+    while (mounted) {
+      final overlap = _overlaps.where((turn) => !turn.landed.isCompleted).firstOrNull;
+      if (overlap == null) return;
+      _prepareExposedPage(overlap);
       await overlap.released.future;
-      if (!mounted || _overlaps.firstOrNull != overlap) return;
+      if (!mounted || overlap.landed.isCompleted) return;
       if (overlap.committed) _prepareExposedPage(overlap);
       await overlap.preparing;
-      if (!mounted || _overlaps.firstOrNull != overlap) return;
+      if (!mounted || overlap.landed.isCompleted) return;
       overlap.settle();
+      if (_effect == ReaderPageEffect.paper) {
+        await _waitForCurrentSettle(() => overlap.settling);
+        if (!mounted || overlap.landed.isCompleted) return;
+      }
       final target = overlap.committed ? overlap.target : null;
-      final landing = target == null ? null : widget.land!(target).catchError((Object _) => false);
-      await overlap.settling;
-      final landed = landing != null && await landing;
+      final landed = target == null || await widget.land!(target).catchError((Object _) => false);
+      if (!mounted || overlap.landed.isCompleted) return;
+      if (landed && target != null) {
+        _cached?.dispose();
+        _cached = target.retain();
+        _dragDirection = overlap.direction;
+        _shiftWindow(overlap.direction, overlap.from);
+      }
+      _overlapLandingFailed = !landed;
+      overlap.landed.complete(landed);
+      if (!landed) return;
+    }
+  }
+
+  Future<void> _retireSettledOverlaps() async {
+    while (mounted && _overlaps.isNotEmpty) {
+      final overlap = _overlaps.first;
+      final landed = await overlap.landed.future;
+      await _waitForCurrentSettle(() => overlap.settling);
       if (!mounted || _overlaps.firstOrNull != overlap) return;
+      final target = overlap.committed ? overlap.target : null;
       if (target != null && !landed) {
         // A later sheet depends on this anchor. Drop it before returning to the
         // last confirmed page so a failed native seek cannot skip a page.
@@ -711,15 +856,12 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       }
       setState(() {
         if (landed && target != null) {
-          _cached?.dispose();
-          _cached = target.retain();
-          _dragDirection = overlap.direction;
-          _shiftWindow(overlap.direction, overlap.from);
           _holdPresentedPage(target);
         }
         _overlaps.removeAt(0);
       });
       _retireOverlap(overlap);
+      _offerNextTurn();
     }
   }
 
@@ -792,7 +934,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   }
 
   void _scrub({bool shapeChanged = false}) {
-    if ((!_dragPrepared && _trackingOverlap == null) ||
+    if ((!_dragPrepared && _trackingOverlap == null && _paperGrab == null) ||
         widget.controller._release?.isCompleted != false) return;
     _shapeChanged |= shapeChanged;
     final limit = widget.refreshRateLimit;
@@ -806,7 +948,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
 
   void _sampleDrag(Duration timestamp) {
     _scrubCallback = null;
-    if (!mounted || (!_dragPrepared && _trackingOverlap == null) ||
+    if (!mounted || (!_dragPrepared && _trackingOverlap == null && _paperGrab == null) ||
         widget.controller._release?.isCompleted != false) return;
     final limit = widget.refreshRateLimit;
     final next = _nextDragTick ?? timestamp;
@@ -823,6 +965,20 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   }
 
   void _paintDrag() {
+    if (_paperGrab case final grab?) {
+      final controller = widget.controller;
+      final height = (grab.touchY + controller._touchY - controller._startY).clamp(0.0, 1.0);
+      if (grab.overlap case final overlap?) {
+        overlap.touchY = height;
+        overlap.shape.notify();
+      } else {
+        _primaryTouchY = height;
+        controller._shape.value++;
+      }
+      grab.clock.value = (grab.progress - controller._displacement).clamp(0.0, 1.0);
+      _shapeChanged = false;
+      return;
+    }
     if (_trackingOverlap case final overlap?) {
       overlap.touchY = widget.controller._touchY;
       overlap.startY = widget.controller._startY;
@@ -849,6 +1005,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       _trackingOverlap = null;
       _nextDragTick = null;
       overlap.finish(commit);
+      _offerNextTurn();
       return;
     }
     if (!commit) _handoffTarget = null;
@@ -862,18 +1019,9 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _nextDragTick = null;
     final target = commit ? (_destinationReady ? 1.0 : .92) : 0.0;
     _primaryCommit = widget.preview != null && target == 1;
-    _settling = _clock
-        .animateTo(
-          target,
-          duration: _clock.value == target
-              ? Duration.zero
-              : widget.preferences.pageSpeed.durationFor(_effect),
-          curve: Curves.easeOutSine,
-        )
-        .orCancel
-        .catchError((Object error) {
-          if (error is! TickerCanceled) throw error;
-        });
+    _offerNextTurn();
+    _settling = _animatePage(_clock, target,
+      widget.preferences.pageSpeed.durationFor(_effect), Curves.easeOutSine);
   }
 
   @override
@@ -1267,6 +1415,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _routeCover?.dispose(); _routeCover = null;
     _clearNeighbors();
     widget.controller.endDrag(cancel: true);
+    _releaseAbandonedGrab();
     for (final overlap in _overlaps) {
       overlap.abandon();
       overlap.dispose();

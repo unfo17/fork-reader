@@ -6019,7 +6019,7 @@ class _ReaderPageState extends State<ReaderPage>
     );
     final key =
         '$pageInsets|${prefs.layoutKey}|${prefs.paper.name}|${prefs.nightTextBrightness}|${prefs.backgroundImage}|${prefs.backgroundOpacity}|${prefs.backgroundFit}|${prefs.hideSystemStatus}|${prefs.showStatusInfo}|$_fontSize|$_lineHeight|$_readerFontId|$dark|$hidden|$only';
-    if (key != _nativePreferencesKey) {
+    if (_activityForeground && key != _nativePreferencesKey) {
       _nativePreferencesKey = key;
       // Supply initial defaults synchronously, before creating the native view.
       unawaited(
@@ -8445,6 +8445,7 @@ class _ReaderPageState extends State<ReaderPage>
     _followScroll.cancel();
     _listeningTarget = null;
     if (state == AppLifecycleState.resumed) {
+      if (mounted && _readium != null) setState(() {});
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _listeningChanged();
       });
