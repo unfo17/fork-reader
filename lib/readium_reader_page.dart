@@ -188,6 +188,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       turns.endDrag(
         cancel: phase == 'Cancel',
         releaseVelocity: (event['velocityX'] as num?)?.toDouble(),
+        durationMillis: (event['durationMillis'] as num?)?.toInt(),
       );
     }
   }

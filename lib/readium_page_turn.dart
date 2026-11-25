@@ -78,15 +78,26 @@ class ReadiumPageTurnController {
     _owner?._scrub(shapeChanged: previousY != _touchY);
   }
 
-  void endDrag({bool cancel = false, double? releaseVelocity}) {
+  void endDrag({
+    bool cancel = false,
+    double? releaseVelocity,
+    int? durationMillis,
+  }) {
     final release = _release;
     if (release == null || release.isCompleted) return;
     if (_watch.elapsedMicroseconds - _lastMicros > 100000) _velocity = 0;
     _watch.stop();
     if (releaseVelocity != null) _velocity = releaseVelocity * _sign;
+    // Very short gestures may have too few movement samples for a useful
+    // release velocity. Use their native touch duration and displacement.
+    final shortSwipe = durationMillis != null &&
+        durationMillis > 0 &&
+        durationMillis <= 140 &&
+        _progress >= .12 &&
+        _velocity >= 0;
     final commit =
         !cancel &&
-        (_progress >= .25 || (_progress > .06 && _velocity > 700)) &&
+        (_progress >= .25 || (_progress > .06 && _velocity > 700) || shortSwipe) &&
         _velocity > -600;
     release.complete(commit);
     _owner?._finishDrag(commit);

@@ -143,9 +143,9 @@ class ReadiumReaderWidget(
 
         layout = AppPageGestureLayout(context, attrs,
             ownsGesture = { ReadiumReader.appOwnsPageGestures() },
-            onSwipe = { phase, dx, dy, y, velocityX ->
+            onSwipe = { phase, dx, dy, y, velocityX, durationMillis ->
                 val density = context.resources.displayMetrics.density
-                channel.onReaderDrag(phase, dx / density, dy / density, y, velocityX / density)
+                channel.onReaderDrag(phase, dx / density, dy / density, y, velocityX / density, durationMillis)
             })
         layout.id = generateViewId()
         layout.setBackgroundColor(Color.TRANSPARENT)
@@ -533,7 +533,7 @@ private class AppPageGestureLayout(
     context: Context,
     attrs: AttributeSet?,
     private val ownsGesture: () -> Boolean,
-    private val onSwipe: (String, Float, Float, Float, Float) -> Unit,
+    private val onSwipe: (String, Float, Float, Float, Float, Long) -> Unit,
 ) : LinearLayout(context, attrs) {
     private val configuration = ViewConfiguration.get(context)
     private val slop = configuration.scaledTouchSlop
@@ -591,7 +591,7 @@ private class AppPageGestureLayout(
                     // Own that same displacement before its native scroller starts.
                     kotlin.math.abs(dx) > slop) {
                     dragging = true
-                    onSwipe("Start", dx, dy, (downY / height.coerceAtLeast(1)).coerceIn(0f, 1f), 0f)
+                    onSwipe("Start", dx, dy, (downY / height.coerceAtLeast(1)).coerceIn(0f, 1f), 0f, 0L)
                     parent?.requestDisallowInterceptTouchEvent(true)
                     return true
                 }
@@ -635,6 +635,6 @@ private class AppPageGestureLayout(
 
     private fun emitSwipe(phase: String, event: MotionEvent, velocityX: Float = 0f) {
         val y = (event.y / height.coerceAtLeast(1)).coerceIn(0f, 1f)
-        onSwipe(phase, event.x - downX, event.y - downY, y, velocityX)
+        onSwipe(phase, event.x - downX, event.y - downY, y, velocityX, event.eventTime - event.downTime)
     }
 }
