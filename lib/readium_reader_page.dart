@@ -19,6 +19,7 @@ class _HeldReaderDrag {
   _HeldReaderDrag(this.start);
   final Map<String, dynamic> start;
   Map<String, dynamic>? latest;
+  int? expiresAt;
 }
 
 /// Engine adapter only. ReaderPage retains every Flutter control and panel.
@@ -133,13 +134,22 @@ class ReadiumReaderBridge extends ChangeNotifier {
   }
   bool _dragInFlight = false, _receivingDrag = false;
   rd.Locator? _dragLocation;
+  final _dragClock = Stopwatch()..start();
   _HeldReaderDrag? _heldDrag;
   ({int direction, bool animated})? _pendingTap;
+
+  _HeldReaderDrag? get _availableDrag {
+    if (_heldDrag?.expiresAt case final expiry? when _dragClock.elapsedMilliseconds >= expiry) {
+      _heldDrag = null;
+    }
+    return _heldDrag;
+  }
 
   void _pageDrag(Map<String, dynamic> event) {
     if (_disposed || _owner != this) return;
     if (event['phase'] == 'Start') {
       if (!ready) return;
+      _heldDrag = null;
       if (_pagePending) {
         if (!_receivingDrag && _startOverlappingDrag(event)) return;
         _heldDrag = _HeldReaderDrag(event);
@@ -150,8 +160,18 @@ class ReadiumReaderBridge extends ChangeNotifier {
       return;
     }
     if (_heldDrag case final drag?) {
-      if (event['phase'] == 'End' || event['phase'] == 'Cancel') {
+      if (event['phase'] == 'Cancel') {
         _heldDrag = null;
+      } else if (event['phase'] == 'End') {
+        if (_appearance.pageEffect == ReaderPageEffect.staggered) {
+          // A handoff may be one frame behind the next swipe. Keep at most
+          // the most recent relay gesture for a short compositor delay.
+          drag.latest = event;
+          drag.expiresAt = _dragClock.elapsedMilliseconds + 150;
+          _continueHeldDrag();
+        } else {
+          _heldDrag = null;
+        }
       } else {
         drag.latest = event;
       }
@@ -173,7 +193,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
 
   bool _startOverlappingDrag(Map<String, dynamic> event) {
     final start = _dragStart(event);
-    if (!turns.beginOverlappingDrag(start.direction, start.dx, start.width, start.y)) return false;
+    if (!turns.beginOverlappingDrag(start.direction, start.dx, start.width, start.y,
+        requireReady: _appearance.pageEffect == ReaderPageEffect.staggered)) return false;
     _pendingTap = null;
     _dragInFlight = true;
     _receivingDrag = true;
@@ -183,7 +204,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
 
   void _continueHeldDrag() {
     if (_disposed || _owner != this || !ready || !_pagePending || _receivingDrag) return;
-    if (_heldDrag case final drag?) {
+    if (_availableDrag case final drag?) {
       if (!_startOverlappingDrag(drag.start)) return;
       _resumeHeldDrag(drag);
     }
@@ -231,7 +252,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     final tap = _pendingTap;
     _pendingTap = null;
     if (!_disposed && _owner == this && ready) {
-      if (_heldDrag case final drag?) {
+      if (_availableDrag case final drag?) {
         _startPageDrag(drag.start);
         _resumeHeldDrag(drag);
         return;
@@ -614,10 +635,10 @@ class ReadiumReaderBridge extends ChangeNotifier {
   Future<void> pageBy(int direction, {bool animated = true}) async {
     if (_disposed || _navigating) return;
     if (_pagePending) {
-      if (_heldDrag == null && !_receivingDrag &&
+      if (_availableDrag == null && !_receivingDrag &&
           turns.turnExposedPage(direction, animated: animated)) {
         onUserNavigation();
-      } else if (_heldDrag == null) {
+      } else if (_availableDrag == null) {
         _pendingTap = (direction: direction, animated: animated);
       }
       return;
@@ -804,7 +825,10 @@ class ReadiumReaderBridge extends ChangeNotifier {
       bands,
       Color.fromARGB(255, color[0].round(), color[1].round(), color[2].round()),
       anchor: pixels['anchor'] as String?,
-      returnCuts: (pixels['returnCuts'] as List?)?.cast<double>() ?? const [],
+      returnRows: (pixels['returnRows'] as List?)?.map((values) {
+        final row = (values as List).cast<num>();
+        return (bottom: row[0].toDouble(), clearance: row[1].toDouble());
+      }).toList(growable: false) ?? const [],
     );
   }
 

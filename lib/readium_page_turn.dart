@@ -11,12 +11,12 @@ import 'reader_turn_motion.dart';
 /// A retained image of Readium's rendered page, never re-typeset Flutter text.
 class ReadiumPageFrame {
   ReadiumPageFrame(this.image, this.location, this.bands, this.paper, {
-    this.anchor, this.returnCuts = const [],
+    this.anchor, this.returnRows = const [],
   });
   final ui.Image image;
   final String location;
   final List<Rect> bands;
-  final List<double> returnCuts;
+  final List<({double bottom, double clearance})> returnRows;
   final Color paper;
   final String? anchor;
   int _references = 1;
@@ -196,10 +196,12 @@ class ReadiumPageTurnController {
     _owner?._finishDrag(commit);
   }
 
-  bool beginOverlappingDrag(int direction, double dx, double width, double touchY) {
+  bool beginOverlappingDrag(int direction, double dx, double width, double touchY, {
+    bool requireReady = false,
+  }) {
     final owner = _owner;
     if (_release?.isCompleted == false || owner == null ||
-        !(owner._grabPaper(direction) || owner._addOverlap(direction))) return false;
+        !(owner._grabPaper(direction) || owner._addOverlap(direction, requireReady: requireReady))) return false;
     beginDrag(dx, width, touchY);
     _directionMultiplier = direction / _initialSign;
     return true;
@@ -756,7 +758,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     }
   }
 
-  bool _addOverlap(int direction, {bool drag = true, bool animated = true}) {
+  bool _addOverlap(int direction, {bool drag = true, bool animated = true, bool requireReady = false}) {
     if (!mounted || !_primaryCommit || _routePaused || _overlapLandingFailed ||
         _overlaps.length >= 4) return false;
     final tail = _overlaps.lastOrNull;
@@ -771,7 +773,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         index == 0 ? _cached ?? _from : _neighbors[index];
     final previous = at(offset - 1), next = at(offset + 1);
     if (_edges.contains(offset + direction)) return false;
-    if (!drag && (direction > 0 ? next : previous) == null) return false;
+    if ((!drag || requireReady) && (direction > 0 ? next : previous) == null) return false;
     if (_refilling && _preparingOffset != offset + direction) {
       widget.onPrioritize?.call();
     }
@@ -1466,12 +1468,15 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     );
   }
 
+  bool get _sceneCoversPage =>
+      _overlaps.isNotEmpty || (_from != null && !_liveDestination);
+
   @override
   Widget build(BuildContext context) => Stack(
     fit: StackFit.expand,
     children: [
       Opacity(opacity: _routeCover == null ? 1 : 0, child: widget.child),
-      if (_presented case final frame?)
+      if (_presented case final frame? when !_sceneCoversPage && _previewCover == null && _routeCover == null)
         Positioned.fill(child: IgnorePointer(child: _pageImage(frame))),
       if (_routeCover case final cover?)
         Positioned.fill(child: IgnorePointer(child: RawImage(image: cover.image, fit: BoxFit.fill, filterQuality: FilterQuality.none))),
@@ -1479,7 +1484,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         Positioned.fill(child: GestureDetector(
           behavior: HitTestBehavior.translucent,
           onTapUp: widget.replayTap == null ? null : (details) => unawaited(_replayPreviewTap(details.localPosition)),
-          child: IgnorePointer(child: _pageImage(cover)),
+          child: IgnorePointer(child: _sceneCoversPage ? const SizedBox.expand() : _pageImage(cover)),
         )),
       if (_overlaps.isNotEmpty ||
           (_from != null && _effect == ReaderPageEffect.staggered && widget.preview != null))
@@ -1582,20 +1587,24 @@ class _ReadiumReturnRows extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final bounds = Offset.zero & size;
     canvas.drawRect(bounds, Paint()..color = frame.paper);
-    final cuts = frame.returnCuts.length >= 2 ? frame.returnCuts : const [0.0, 1.0];
+    final bands = frame.returnRows.isEmpty
+        ? const [(bottom: 1.0, clearance: 0.02)]
+        : frame.returnRows;
     final width = frame.image.width.toDouble(), height = frame.image.height.toDouble();
-    final rows = cuts.length - 1;
+    final rows = bands.length;
     final scale = size.height / height;
+    var top = 0.0;
     for (var index = 0; index < rows; index++) {
-      final top = cuts[index], bottom = cuts[index + 1];
+      final (bottom: bottom, clearance: clearance) = bands[index];
       final band = Rect.fromLTRB(0, top * size.height, size.width, bottom * size.height);
       final start = rows == 1 ? 0.0 : .5 * (rows - 1 - index) / (rows - 1);
       final progress = ((clock.value - start) * 2).clamp(0.0, 1.0);
-      final travel = math.min(12.0, band.height * .25);
+      final travel = math.min(12.0, math.min(band.height * .25, clearance * size.height));
       final dy = ((1 - Curves.easeOutCubic.transform(progress)) * travel / scale).round() * scale;
       final source = Rect.fromLTRB(0, top * height, width, bottom * height - dy / scale);
       final destination = Rect.fromLTRB(0, band.top + dy, size.width, band.bottom);
       if (!destination.isEmpty) canvas.drawImageRect(frame.image, source, destination, _ink);
+      top = bottom;
     }
   }
 

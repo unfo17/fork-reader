@@ -556,9 +556,9 @@ object ReadiumReader :
                 }
                 cuts.add(1.0)
                 val bands = cuts.zipWithNext { a,b -> if (vertical) listOf(a,0.0,b,1.0) else listOf(0.0,a,1.0,b) }
-                val returnCuts = appHorizontalCuts(rgba, width, height)
+                val returnRows = appHorizontalRows(rgba, width, height)
                 mapOf("width" to width, "height" to height, "pixels" to rgba,
-                    "bands" to bands, "returnCuts" to returnCuts, "color" to (0..2).map { color.getInt(it) },
+                    "bands" to bands, "returnRows" to returnRows, "color" to (0..2).map { color.getInt(it) },
                     "locator" to visibleLocator, "identity" to identity,
                     "anchor" to JSONObject().put("locator", JSONObject(visibleLocator)).put("geometry", geometry)
                         .put("x", geometry.getDouble("x")).put("y", geometry.getDouble("y")).toString())
@@ -567,8 +567,9 @@ object ReadiumReader :
     }
 
     // Separate horizontal rows in the rendered bitmap for the foreground
-    // animation. Sample to find gaps, then verify both cut edges at full width.
-    private fun appHorizontalCuts(rgba: ByteArray, width: Int, height: Int): List<Double> {
+    // animation. Sample to find gaps, then measure travel at full width so
+    // moving the strip inside its original bounds never crops the line's ink.
+    private fun appHorizontalRows(rgba: ByteArray, width: Int, height: Int): List<List<Double>> {
         val stride = (width / 96).coerceAtLeast(1)
         fun quiet(row: Int, sampleSpacing: Int): Boolean {
             val first = row * width * 4
@@ -583,7 +584,13 @@ object ReadiumReader :
             }
             return true
         }
-        val cuts = mutableListOf(0.0)
+        val rows = mutableListOf<List<Double>>()
+        fun addRow(bottom: Int, gap: Int) {
+            val limit = maxOf(gap, bottom - height / 30)
+            var ink = bottom - 1
+            while (ink >= limit && quiet(ink, 1)) ink--
+            rows.add(listOf(bottom.toDouble() / height, (bottom - 1 - ink).toDouble() / height))
+        }
         var hadInk = false
         var gap = -1
         for (row in 0 until height) {
@@ -592,14 +599,14 @@ object ReadiumReader :
             } else {
                 if (gap >= 0 && row - gap >= 3) {
                     val cut = (gap + row) / 2
-                    if (quiet(cut - 1, 1) && quiet(cut, 1)) cuts.add(cut.toDouble() / height)
+                    if (quiet(cut - 1, 1) && quiet(cut, 1)) addRow(cut, gap)
                 }
                 hadInk = true
                 gap = -1
             }
         }
-        cuts.add(1.0)
-        return cuts
+        addRow(height, gap.coerceAtLeast(0))
+        return rows
     }
 
     private var appRef: WeakReference<Application>? = null
