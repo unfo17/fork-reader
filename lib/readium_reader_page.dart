@@ -141,9 +141,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
     if (event['phase'] == 'Start') {
       if (!ready) return;
       if (_pagePending) {
+        if (!_receivingDrag && _startOverlappingDrag(event)) return;
         _pendingDrag = _PendingReaderDrag(event);
         _pendingTap = null;
-        if (!_receivingDrag) turns.followingDragStarted();
       } else {
         _startPageDrag(event);
       }
@@ -156,20 +156,36 @@ class ReadiumReaderBridge extends ChangeNotifier {
     }
   }
 
-  void _startPageDrag(Map<String, dynamic> event) {
+  ({int direction, double dx, double width, double y}) _dragStart(Map<String, dynamic> event) {
     final dx = (event['dx'] as num).toDouble();
     final box = _viewKey.currentContext?.findRenderObject();
     final width = box is RenderBox && box.hasSize ? box.size.width : 400.0;
     final rtl = _preferences.verticalText == true ||
         publication?.metadata.readingProgression == rd.ReadingProgression.rtl;
     final direction = (dx < 0 ? 1 : -1) * (rtl ? -1 : 1);
+    return (direction: direction, dx: dx, width: width, y: (event['y'] as num?)?.toDouble() ?? .5);
+  }
+
+  bool _startOverlappingDrag(Map<String, dynamic> event) {
+    final start = _dragStart(event);
+    if (!turns.beginOverlappingDrag(start.direction, start.dx, start.width, start.y)) return false;
+    _pendingDrag = null;
+    _pendingTap = null;
+    _receivingDrag = true;
+    onUserNavigation();
+    return true;
+  }
+
+  void _startPageDrag(Map<String, dynamic> event) {
+    final start = _dragStart(event);
+    final direction = start.direction;
     turns.requestTurn(direction);
     _pagePending = true;
     _pageIdle ??= Completer<void>();
     _dragInFlight = _receivingDrag = true;
     _dragLocation = null;
     onUserNavigation();
-    turns.beginDrag(dx, width, (event['y'] as num?)?.toDouble() ?? .5);
+    turns.beginDrag(start.dx, start.width, start.y);
     unawaited(command(() => turns.drag(direction), waitForPreparation: false).whenComplete(() {
       _dragInFlight = _receivingDrag = false;
       final at = _dragLocation;
