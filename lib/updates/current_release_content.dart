@@ -7,9 +7,9 @@ class ReleaseSection {
 }
 
 const _swipes =
-    '扩大可用内存下的双向预载，并在翻页收尾期间补齐相邻页。';
-const _resume = '从后台返回时增加短暂的原页过渡，保留阅读位置和排版。';
-const _curl = '双层仿真翻页使用连续的折痕和方向，目标页就绪时接入正文纹理。';
+    '合并段落接续的绘制，拖动时按屏幕刷新节奏更新动画。';
+const _resume = '从后台返回阅读页时，正文从底部开始逐行归位。';
+const _curl = '仿真翻页等目标页就绪后才露出下一页，等待时松手会结束当次手势。';
 const _androidInstall = '已安装本仓库固定签名版的 Android 用户可以直接覆盖更新，书籍和阅读记录会保留。';
 
 const publicReleaseNotes =

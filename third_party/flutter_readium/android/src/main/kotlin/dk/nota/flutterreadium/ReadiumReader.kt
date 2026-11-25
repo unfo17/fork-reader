@@ -556,12 +556,50 @@ object ReadiumReader :
                 }
                 cuts.add(1.0)
                 val bands = cuts.zipWithNext { a,b -> if (vertical) listOf(a,0.0,b,1.0) else listOf(0.0,a,1.0,b) }
+                val returnCuts = appHorizontalCuts(rgba, width, height)
                 mapOf("width" to width, "height" to height, "pixels" to rgba,
-                    "bands" to bands, "color" to (0..2).map { color.getInt(it) }, "locator" to visibleLocator, "identity" to identity,
+                    "bands" to bands, "returnCuts" to returnCuts, "color" to (0..2).map { color.getInt(it) },
+                    "locator" to visibleLocator, "identity" to identity,
                     "anchor" to JSONObject().put("locator", JSONObject(visibleLocator)).put("geometry", geometry)
                         .put("x", geometry.getDouble("x")).put("y", geometry.getDouble("y")).toString())
             }
         } finally { bitmap.recycle() }
+    }
+
+    // Separate horizontal rows in the rendered bitmap for the foreground
+    // animation. Sample to find gaps, then verify both cut edges at full width.
+    private fun appHorizontalCuts(rgba: ByteArray, width: Int, height: Int): List<Double> {
+        val stride = (width / 96).coerceAtLeast(1)
+        fun quiet(row: Int, sampleSpacing: Int): Boolean {
+            val first = row * width * 4
+            val r = rgba[first].toInt() and 255
+            val g = rgba[first + 1].toInt() and 255
+            val b = rgba[first + 2].toInt() and 255
+            for (x in sampleSpacing until width step sampleSpacing) {
+                val pixel = first + x * 4
+                if (kotlin.math.abs((rgba[pixel].toInt() and 255) - r) > 12 ||
+                    kotlin.math.abs((rgba[pixel + 1].toInt() and 255) - g) > 12 ||
+                    kotlin.math.abs((rgba[pixel + 2].toInt() and 255) - b) > 12) return false
+            }
+            return true
+        }
+        val cuts = mutableListOf(0.0)
+        var hadInk = false
+        var gap = -1
+        for (row in 0 until height) {
+            if (quiet(row, stride)) {
+                if (hadInk && gap < 0) gap = row
+            } else {
+                if (gap >= 0 && row - gap >= 3) {
+                    val cut = (gap + row) / 2
+                    if (quiet(cut - 1, 1) && quiet(cut, 1)) cuts.add(cut.toDouble() / height)
+                }
+                hadInk = true
+                gap = -1
+            }
+        }
+        cuts.add(1.0)
+        return cuts
     }
 
     private var appRef: WeakReference<Application>? = null

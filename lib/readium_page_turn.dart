@@ -10,10 +10,13 @@ import 'reader_turn_motion.dart';
 
 /// A retained image of Readium's rendered page, never re-typeset Flutter text.
 class ReadiumPageFrame {
-  ReadiumPageFrame(this.image, this.location, this.bands, this.paper, {this.anchor});
+  ReadiumPageFrame(this.image, this.location, this.bands, this.paper, {
+    this.anchor, this.returnCuts = const [],
+  });
   final ui.Image image;
   final String location;
   final List<Rect> bands;
+  final List<double> returnCuts;
   final Color paper;
   final String? anchor;
   int _references = 1;
@@ -37,8 +40,6 @@ class _ReadiumMotionShape extends ChangeNotifier {
 }
 
 class _ReadiumOverlap {
-  static const partialReveal = .24;
-
   _ReadiumOverlap({
     required TickerProvider vsync,
     required ReadiumPageFrame origin,
@@ -234,7 +235,7 @@ class ReadiumPageTurnController {
 
   void requestTurn(int direction) => _owner?._prioritizeTurn(direction);
 
-  void animateReturn() => _owner?._animateReturn();
+  void animateReturn() => unawaited(_owner?._animateReturn());
 
   Future<void> freezeForRoute() async => _owner?._freezeForRoute();
   Future<void> thawAfterRoute() async => _owner?._thawAfterRoute();
@@ -300,9 +301,9 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     with TickerProviderStateMixin {
   late final _clock = AnimationController(vsync: this);
   late final _returnClock = AnimationController(
-    vsync: this, duration: const Duration(milliseconds: 240),
+    vsync: this, duration: const Duration(milliseconds: 360),
   );
-  bool _returning = false;
+  int _returnEpoch = 0;
   ReadiumPageFrame? _returnFrame;
   ReadiumPageFrame? _from, _to;
   ReaderPageEffect _effect = ReaderPageEffect.none;
@@ -389,31 +390,41 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _warmTimer?.cancel();
   }
 
-  void _animateReturn() {
-    if (!mounted || _routePaused || MediaQuery.disableAnimationsOf(context)) return;
+  Future<void> _animateReturn() async {
+    if (!mounted || _busy || _routePaused || MediaQuery.disableAnimationsOf(context)) return;
     _stopReturnAnimation();
-    setState(() {
-      _returning = true;
-      _returnFrame = _busy ? null : (_presented ?? _cached)?.retain();
-    });
+    final epoch = _returnEpoch, key = widget.frameKey;
+    ReadiumPageFrame? frame = (_presented ?? _cached)?.retain();
+    if (frame == null) {
+      try {
+        if (_warming) await _warmDone?.future;
+        await _preparing;
+        if (!mounted || _returnEpoch != epoch || _busy) return;
+        frame = (_presented ?? _cached)?.retain() ?? await widget.capture();
+      } catch (_) {
+        return;
+      }
+    }
+    if (frame == null) return;
+    if (!mounted || _returnEpoch != epoch || key != widget.frameKey || _busy || _routePaused) {
+      frame.dispose();
+      return;
+    }
+    setState(() => _returnFrame = frame);
     unawaited(_returnClock.forward(from: 0).orCancel.then((_) {
-      if (mounted) _stopReturnAnimation();
+      if (mounted && _returnEpoch == epoch) _stopReturnAnimation();
     }).catchError((Object error) {
       if (error is! TickerCanceled) throw error;
     }));
   }
 
   void _stopReturnAnimation() {
-    if (!_returning) return;
-    _returnClock.stop();
+    _returnEpoch++;
     final frame = _returnFrame;
-    setState(() {
-      _returning = false;
-      _returnFrame = null;
-    });
-    if (frame != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => frame.dispose());
-    }
+    if (frame == null) return;
+    _returnClock.stop();
+    setState(() => _returnFrame = null);
+    WidgetsBinding.instance.addPostFrameCallback((_) => frame.dispose());
   }
 
   Future<void> _freezeForRoute() async {
@@ -589,15 +600,32 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     final held = <ReadiumPageFrame>[];
     var committed = false;
     try {
-      if (_cached != null && (_neighbors.containsKey(direction) || _edges.contains(direction))) {
-        from = _cached!.retain();
+      if (_cached case final cached?) {
+        from = cached.retain();
       } else {
         await _preparing;
         from = await _takeFrame(widget.capture);
       }
       if (from == null || !mounted) return;
       final requested = gesture == null ? direction : (widget.controller._sign * widget.controller._directionMultiplier).round();
-      await _prepareNeighbors(from, requiredDirection: requested);
+      final missing = !_neighbors.containsKey(requested) && !_edges.contains(requested);
+      final preparation = _prepareNeighbors(from, requiredDirection: requested);
+      if (gesture != null && missing) {
+        final readyWhileHeld = await Future.any([
+          preparation.then((_) => true),
+          gesture.future.then((_) =>
+              _neighbors.containsKey(requested) || _edges.contains(requested)),
+        ]);
+        if (!readyWhileHeld) {
+          // Keep warming the neighbour for the next touch. The released
+          // gesture must not start an animation when the bitmap arrives.
+          await preparation;
+          if (mounted && _edges.contains(requested)) await widget.canTurn?.call(requested);
+          return;
+        }
+      } else {
+        await preparation;
+      }
       if (!mounted) return;
       // Keep both neighbours alive through frame-key changes during landing.
       for (final frame in _neighbors.values) { held.add(frame.retain()); }
@@ -620,9 +648,14 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       });
       _settling = null;
       _dragPrepared = gesture != null;
+      if (gesture?.isCompleted == false && _to == null && !_edges.contains(initialDirection)) {
+        // The finger may have crossed back over the origin while the other
+        // side was being captured.
+        unawaited(_prepareReversedNeighbor(initialDirection, from));
+      }
       await WidgetsBinding.instance.endOfFrame;
       var finish = gesture == null || await gesture.future;
-      if (!_neighbors.containsKey(_dragDirection) && !_edges.contains(_dragDirection)) await _preparing;
+      if (gesture != null && _settling != null) finish = _primaryCommit;
       final target = _neighbors[_dragDirection];
       if (target != null && !held.contains(target)) held.add(target.retain());
       if (_to != target && mounted) setState(() => _to = target);
@@ -738,6 +771,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         index == 0 ? _cached ?? _from : _neighbors[index];
     final previous = at(offset - 1), next = at(offset + 1);
     if (_edges.contains(offset + direction)) return false;
+    if (!drag && (direction > 0 ? next : previous) == null) return false;
     if (_refilling && _preparingOffset != offset + direction) {
       widget.onPrioritize?.call();
     }
@@ -841,6 +875,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
 
   void _prepareExposedPage(_ReadiumOverlap overlap) {
     if (overlap.target != null || overlap.preparing != null ||
+        overlap.released.isCompleted ||
         !_primaryAdopted || overlap.landed.isCompleted ||
         !identical(_cached, overlap.from)) return;
     overlap.preparing = _fillExposedPage(overlap).whenComplete(() {
@@ -1037,12 +1072,6 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     if ((!_dragPrepared && _trackingOverlap == null && _paperGrab == null) ||
         widget.controller._release?.isCompleted != false) return;
     _shapeChanged |= shapeChanged;
-    final limit = widget.refreshRateLimit;
-    final display = View.of(context).display.refreshRate;
-    if (limit <= 0 || limit >= display - .5) {
-      _paintDrag();
-      return;
-    }
     _scrubCallback ??= SchedulerBinding.instance.scheduleFrameCallback(_sampleDrag);
   }
 
@@ -1050,7 +1079,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _scrubCallback = null;
     if (!mounted || (!_dragPrepared && _trackingOverlap == null && _paperGrab == null) ||
         widget.controller._release?.isCompleted != false) return;
-    final limit = widget.refreshRateLimit;
+    final display = View.of(context).display.refreshRate;
+    final limit = widget.refreshRateLimit >= display - .5 ? 0.0 : widget.refreshRateLimit;
     final next = _nextDragTick ?? timestamp;
     if (limit <= 0 || timestamp + const Duration(microseconds: 500) >= next) {
       _paintDrag();
@@ -1082,8 +1112,9 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     if (_trackingOverlap case final overlap?) {
       overlap.touchY = widget.controller._touchY;
       overlap.startY = widget.controller._startY;
-      overlap.clock.value = math.min(widget.controller._progress,
-        overlap.target == null ? _ReadiumOverlap.partialReveal : .85);
+      overlap.clock.value = overlap.target == null
+          ? 0
+          : math.min(widget.controller._progress, .85);
       if (_shapeChanged) overlap.shape.notify();
       _shapeChanged = false;
       return;
@@ -1104,15 +1135,12 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       _paintDrag();
       _trackingOverlap = null;
       _nextDragTick = null;
-      overlap.finish(commit);
+      overlap.finish(commit && overlap.target != null);
       _offerNextTurn();
       return;
     }
     if (!commit) _handoffTarget = null;
-    if (widget.preview != null && _to == null) {
-      if (!_edges.contains(_dragDirection)) return;
-      commit = false;
-    }
+    if (widget.preview != null && _to == null) commit = false;
     if (!_dragPrepared || _settling != null || !mounted) return;
     _paintDrag();
     _dragPrepared = false;
@@ -1453,7 +1481,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
           onTapUp: widget.replayTap == null ? null : (details) => unawaited(_replayPreviewTap(details.localPosition)),
           child: IgnorePointer(child: _pageImage(cover)),
         )),
-      if (_overlaps.isNotEmpty)
+      if (_overlaps.isNotEmpty ||
+          (_from != null && _effect == ReaderPageEffect.staggered && widget.preview != null))
         Positioned.fill(child: IgnorePointer(child: ExcludeSemantics(
           child: RepaintBoundary(child: CustomPaint(painter: _combinedTurn())),
         )))
@@ -1503,23 +1532,9 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
             ),
           ),
         ),
-      if (_returning)
+      if (_returnFrame case final frame?)
         Positioned.fill(key: const ValueKey('readium-return-page'), child: IgnorePointer(child: ExcludeSemantics(
-          child: ClipRect(child: AnimatedBuilder(
-            animation: _returnClock,
-            child: _returnFrame == null ? null : _pageImage(_returnFrame!),
-            builder: (context, child) {
-              final remaining = 1 - Curves.easeOutCubic.transform(_returnClock.value);
-              return Stack(fit: StackFit.expand, children: [
-                if (child != null)
-                  ColoredBox(
-                    color: _returnFrame!.paper,
-                    child: Transform.translate(offset: Offset(0, 9 * remaining), child: child),
-                  ),
-                ColoredBox(color: Colors.black.withValues(alpha: .16 * remaining)),
-              ]);
-            },
-          )),
+          child: RepaintBoundary(child: CustomPaint(painter: _ReadiumReturnRows(frame, _returnClock))),
         ))),
     ],
   );
@@ -1554,6 +1569,39 @@ void _drawReadiumPage(Canvas canvas, Size size, ReadiumPageFrame frame) {
   canvas.drawImageRect(image,
     Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
     Offset.zero & size, Paint()..filterQuality = FilterQuality.none);
+}
+
+class _ReadiumReturnRows extends CustomPainter {
+  _ReadiumReturnRows(this.frame, this.clock) : super(repaint: clock);
+
+  final ReadiumPageFrame frame;
+  final Animation<double> clock;
+  final Paint _ink = Paint()..filterQuality = FilterQuality.none;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final bounds = Offset.zero & size;
+    canvas.drawRect(bounds, Paint()..color = frame.paper);
+    final cuts = frame.returnCuts.length >= 2 ? frame.returnCuts : const [0.0, 1.0];
+    final width = frame.image.width.toDouble(), height = frame.image.height.toDouble();
+    final rows = cuts.length - 1;
+    final scale = size.height / height;
+    for (var index = 0; index < rows; index++) {
+      final top = cuts[index], bottom = cuts[index + 1];
+      final band = Rect.fromLTRB(0, top * size.height, size.width, bottom * size.height);
+      final start = rows == 1 ? 0.0 : .5 * (rows - 1 - index) / (rows - 1);
+      final progress = ((clock.value - start) * 2).clamp(0.0, 1.0);
+      final travel = math.min(12.0, band.height * .25);
+      final dy = ((1 - Curves.easeOutCubic.transform(progress)) * travel / scale).round() * scale;
+      final source = Rect.fromLTRB(0, top * height, width, bottom * height - dy / scale);
+      final destination = Rect.fromLTRB(0, band.top + dy, size.width, band.bottom);
+      if (!destination.isEmpty) canvas.drawImageRect(frame.image, source, destination, _ink);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ReadiumReturnRows old) =>
+      old.frame != frame || old.clock != clock;
 }
 
 /// A turn paints the next turn in its destination's place. Earlier sheets
@@ -1595,7 +1643,7 @@ class _ReadiumCompositeTurn extends CustomPainter {
     } else if (to case final target?) {
       _drawReadiumPage(canvas, size, target);
     } else {
-      canvas.drawRect(Offset.zero & size, Paint()..color = from.paper);
+      _drawReadiumPage(canvas, size, from);
     }
   }
 
@@ -1622,12 +1670,13 @@ class _ReadiumCompositeTurn extends CustomPainter {
         case ReaderPageEffect.staggered:
           canvas.drawRect(bounds, Paint()..color = from.paper);
           _outgoing!.paint(canvas, size);
-          if (below case final turn?) {
-            final recorder = ui.PictureRecorder();
-            turn.paint(Canvas(recorder, bounds), size);
-            final picture = recorder.endRecording();
-            _incoming!.paintBands(canvas, size, picture: picture);
-            picture.dispose();
+          if (below case final turn? when _incoming != null) {
+            // Expose the next turn through the moving bands in one pass.
+            // Its content follows its own clock in screen coordinates.
+            canvas.save();
+            canvas.clipPath(_incoming!.visibleBands(size), doAntiAlias: false);
+            turn.paint(canvas, size);
+            canvas.restore();
           } else {
             _incoming?.paint(canvas, size);
           }
@@ -1693,12 +1742,10 @@ class _ReadiumParagraphTurn extends CustomPainter {
   Size? _size;
   late ReaderTurnScope _motion;
   late List<({Rect source, Rect bounds})> _parts;
-  final _ink = Paint()..filterQuality = FilterQuality.low;
+  late Float32List _transforms, _sources;
+  final _ink = Paint()..filterQuality = FilterQuality.none;
 
-  @override
-  void paint(Canvas canvas, Size size) => paintBands(canvas, size);
-
-  void paintBands(Canvas canvas, Size size, {ui.Picture? picture}) {
+  void _layout(Size size) {
     if (_size != size) {
       _size = size;
       _motion = ReaderTurnScope(
@@ -1718,24 +1765,50 @@ class _ReadiumParagraphTurn extends CustomPainter {
         bounds: Rect.fromLTRB(band.left * size.width, band.top * size.height,
           band.right * size.width, band.bottom * size.height),
       )];
+      _transforms = Float32List(_parts.length * 4);
+      _sources = Float32List(_parts.length * 4);
     }
+  }
+
+  Path visibleBands(Size size) {
+    _layout(size);
+    final path = Path();
     final viewport = Offset.zero & size;
     for (var i = 0; i < _parts.length; i++) {
       final part = _parts[i];
       final offset = _motion.displacementFor(i, _parts.length, bounds: part.bounds);
-      final destination = part.bounds.shift(offset);
-      if (destination.overlaps(viewport)) {
-        if (picture == null) {
-          canvas.drawImageRect(frame.image, part.source, destination, _ink);
-        } else {
-          canvas.save();
-          canvas.clipRect(destination, doAntiAlias: false);
-          canvas.translate(offset.dx, offset.dy);
-          canvas.drawPicture(picture);
-          canvas.restore();
-        }
-      }
+      final destination = part.bounds.shift(offset).intersect(viewport);
+      if (!destination.isEmpty) path.addRect(destination);
     }
+    return path;
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    _layout(size);
+    final scaleX = size.width / frame.image.width;
+    final scaleY = size.height / frame.image.height;
+    var used = 0;
+    for (var i = 0; i < _parts.length; i++) {
+      final part = _parts[i];
+      final offset = _motion.displacementFor(i, _parts.length, bounds: part.bounds);
+      final x = part.source.left + (offset.dx / scaleX).round();
+      if (x >= frame.image.width || x + part.source.width <= 0) continue;
+      _sources[used] = part.source.left;
+      _sources[used + 1] = part.source.top;
+      _sources[used + 2] = part.source.right;
+      _sources[used + 3] = part.source.bottom;
+      _transforms[used] = 1;
+      _transforms[used + 2] = x;
+      _transforms[used + 3] = part.source.top;
+      used += 4;
+    }
+    if (used == 0) return;
+    canvas.save();
+    canvas.scale(scaleX, scaleY);
+    canvas.drawRawAtlas(frame.image, Float32List.sublistView(_transforms, 0, used),
+        Float32List.sublistView(_sources, 0, used), null, null, null, _ink);
+    canvas.restore();
   }
 
   @override

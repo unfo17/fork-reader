@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -16,8 +15,8 @@ import 'local_books.dart';
 import 'reader_preferences.dart';
 import 'readium_page_turn.dart';
 
-class _PendingReaderDrag {
-  _PendingReaderDrag(this.start);
+class _HeldReaderDrag {
+  _HeldReaderDrag(this.start);
   final Map<String, dynamic> start;
   Map<String, dynamic>? latest;
 }
@@ -134,8 +133,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
   }
   bool _dragInFlight = false, _receivingDrag = false;
   rd.Locator? _dragLocation;
-  final _pendingDrags = Queue<_PendingReaderDrag>();
-  _PendingReaderDrag? _queuedPointer;
+  _HeldReaderDrag? _heldDrag;
   ({int direction, bool animated})? _pendingTap;
 
   void _pageDrag(Map<String, dynamic> event) {
@@ -143,18 +141,20 @@ class ReadiumReaderBridge extends ChangeNotifier {
     if (event['phase'] == 'Start') {
       if (!ready) return;
       if (_pagePending) {
-        if (_pendingDrags.isEmpty && !_receivingDrag && _startOverlappingDrag(event)) return;
-        final drag = _queuedPointer = _PendingReaderDrag(event);
-        if (_pendingDrags.length < 6) _pendingDrags.addLast(drag);
+        if (!_receivingDrag && _startOverlappingDrag(event)) return;
+        _heldDrag = _HeldReaderDrag(event);
         _pendingTap = null;
       } else {
         _startPageDrag(event);
       }
       return;
     }
-    if (_queuedPointer case final pending?) {
-      pending.latest = event;
-      if (event['phase'] == 'End' || event['phase'] == 'Cancel') _queuedPointer = null;
+    if (_heldDrag case final drag?) {
+      if (event['phase'] == 'End' || event['phase'] == 'Cancel') {
+        _heldDrag = null;
+      } else {
+        drag.latest = event;
+      }
     } else if (_receivingDrag) {
       _updatePageDrag(event);
     }
@@ -181,24 +181,16 @@ class ReadiumReaderBridge extends ChangeNotifier {
     return true;
   }
 
-  void _continueQueuedDrag() {
+  void _continueHeldDrag() {
     if (_disposed || _owner != this || !ready || !_pagePending || _receivingDrag) return;
-    _discardCancelledDrags();
-    if (_pendingDrags.firstOrNull case final drag?) {
+    if (_heldDrag case final drag?) {
       if (!_startOverlappingDrag(drag.start)) return;
-      _pendingDrags.removeFirst();
-      _replayDrag(drag);
+      _resumeHeldDrag(drag);
     }
   }
 
-  void _discardCancelledDrags() {
-    while (_pendingDrags.firstOrNull?.latest?['phase'] == 'Cancel') {
-      _pendingDrags.removeFirst();
-    }
-  }
-
-  void _replayDrag(_PendingReaderDrag drag) {
-    if (identical(_queuedPointer, drag)) _queuedPointer = null;
+  void _resumeHeldDrag(_HeldReaderDrag drag) {
+    _heldDrag = null;
     if (drag.latest case final event?) _updatePageDrag(event);
   }
 
@@ -239,11 +231,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
     final tap = _pendingTap;
     _pendingTap = null;
     if (!_disposed && _owner == this && ready) {
-      _discardCancelledDrags();
-      if (_pendingDrags.isNotEmpty) {
-        final drag = _pendingDrags.removeFirst();
+      if (_heldDrag case final drag?) {
         _startPageDrag(drag.start);
-        _replayDrag(drag);
+        _resumeHeldDrag(drag);
         return;
       }
       if (tap != null) {
@@ -251,7 +241,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
         return;
       }
     }
-    _pendingDrags.clear();
+    _heldDrag = null;
     _pageIdle?.complete();
     _pageIdle = null;
   }
@@ -624,10 +614,10 @@ class ReadiumReaderBridge extends ChangeNotifier {
   Future<void> pageBy(int direction, {bool animated = true}) async {
     if (_disposed || _navigating) return;
     if (_pagePending) {
-      if (_pendingDrags.isEmpty && !_receivingDrag &&
+      if (_heldDrag == null && !_receivingDrag &&
           turns.turnExposedPage(direction, animated: animated)) {
         onUserNavigation();
-      } else if (_pendingDrags.isEmpty) {
+      } else if (_heldDrag == null) {
         _pendingTap = (direction: direction, animated: animated);
       }
       return;
@@ -814,6 +804,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       bands,
       Color.fromARGB(255, color[0].round(), color[1].round(), color[2].round()),
       anchor: pixels['anchor'] as String?,
+      returnCuts: (pixels['returnCuts'] as List?)?.cast<double>() ?? const [],
     );
   }
 
@@ -1300,7 +1291,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
           rightToLeft: _rightToLeft,
           refreshRateLimit: _refreshRateLimit,
           onPrioritize: _interruptPreview,
-          onTurnAvailable: _continueQueuedDrag,
+          onTurnAvailable: _continueHeldDrag,
           replayTap: (point) => native.invokeMethod<void>('tap', {'x': point.dx, 'y': point.dy}),
           child: Stack(
             fit: StackFit.expand,
