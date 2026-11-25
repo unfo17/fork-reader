@@ -196,12 +196,10 @@ class ReadiumPageTurnController {
     _owner?._finishDrag(commit);
   }
 
-  bool beginOverlappingDrag(int direction, double dx, double width, double touchY, {
-    bool requireReady = false,
-  }) {
+  bool beginOverlappingDrag(int direction, double dx, double width, double touchY) {
     final owner = _owner;
     if (_release?.isCompleted == false || owner == null ||
-        !(owner._grabPaper(direction) || owner._addOverlap(direction, requireReady: requireReady))) return false;
+        !(owner._grabPaper(direction) || owner._addOverlap(direction))) return false;
     beginDrag(dx, width, touchY);
     _directionMultiplier = direction / _initialSign;
     return true;
@@ -598,6 +596,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _previewHandedOff = false;
     _handoffTarget = null;
     _dragDirection = direction;
+    final paper = widget.preferences.pageEffect == ReaderPageEffect.paper;
     ReadiumPageFrame? from;
     final held = <ReadiumPageFrame>[];
     var committed = false;
@@ -612,7 +611,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       final requested = gesture == null ? direction : (widget.controller._sign * widget.controller._directionMultiplier).round();
       final missing = !_neighbors.containsKey(requested) && !_edges.contains(requested);
       final preparation = _prepareNeighbors(from, requiredDirection: requested);
-      if (gesture != null && missing) {
+      if (paper && gesture != null && missing) {
         final readyWhileHeld = await Future.any([
           preparation.then((_) => true),
           gesture.future.then((_) =>
@@ -657,12 +656,14 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       }
       await WidgetsBinding.instance.endOfFrame;
       var finish = gesture == null || await gesture.future;
-      if (gesture != null && _settling != null) finish = _primaryCommit;
+      if (paper && gesture != null && _settling != null) finish = _primaryCommit;
+      if (!paper && !_neighbors.containsKey(_dragDirection) && !_edges.contains(_dragDirection)) {
+        await _preparing;
+      }
       final target = _neighbors[_dragDirection];
       if (target != null && !held.contains(target)) held.add(target.retain());
       if (_to != target && mounted) setState(() => _to = target);
       if (target == null) { finish = false; await widget.canTurn?.call(_dragDirection); }
-      final paper = _effect == ReaderPageEffect.paper;
       final origin = from;
       Future<bool> adopt(ReadiumPageFrame target) async {
         _adoptingPage = true;
@@ -758,7 +759,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     }
   }
 
-  bool _addOverlap(int direction, {bool drag = true, bool animated = true, bool requireReady = false}) {
+  bool _addOverlap(int direction, {bool drag = true, bool animated = true}) {
     if (!mounted || !_primaryCommit || _routePaused || _overlapLandingFailed ||
         _overlaps.length >= 4) return false;
     final tail = _overlaps.lastOrNull;
@@ -773,7 +774,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         index == 0 ? _cached ?? _from : _neighbors[index];
     final previous = at(offset - 1), next = at(offset + 1);
     if (_edges.contains(offset + direction)) return false;
-    if ((!drag || requireReady) && (direction > 0 ? next : previous) == null) return false;
+    if (!drag && _effect == ReaderPageEffect.paper && (direction > 0 ? next : previous) == null) return false;
     if (_refilling && _preparingOffset != offset + direction) {
       widget.onPrioritize?.call();
     }
@@ -877,7 +878,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
 
   void _prepareExposedPage(_ReadiumOverlap overlap) {
     if (overlap.target != null || overlap.preparing != null ||
-        overlap.released.isCompleted ||
+        (overlap.released.isCompleted && !overlap.committed) ||
         !_primaryAdopted || overlap.landed.isCompleted ||
         !identical(_cached, overlap.from)) return;
     overlap.preparing = _fillExposedPage(overlap).whenComplete(() {
@@ -1137,12 +1138,15 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       _paintDrag();
       _trackingOverlap = null;
       _nextDragTick = null;
-      overlap.finish(commit && overlap.target != null);
+      overlap.finish(commit && (_effect != ReaderPageEffect.paper || overlap.target != null));
       _offerNextTurn();
       return;
     }
     if (!commit) _handoffTarget = null;
-    if (widget.preview != null && _to == null) commit = false;
+    if (widget.preview != null && _to == null) {
+      if (_effect != ReaderPageEffect.paper && !_edges.contains(_dragDirection)) return;
+      commit = false;
+    }
     if (!_dragPrepared || _settling != null || !mounted) return;
     _paintDrag();
     _dragPrepared = false;

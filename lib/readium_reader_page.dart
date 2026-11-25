@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -15,11 +16,10 @@ import 'local_books.dart';
 import 'reader_preferences.dart';
 import 'readium_page_turn.dart';
 
-class _HeldReaderDrag {
-  _HeldReaderDrag(this.start);
+class _PendingReaderDrag {
+  _PendingReaderDrag(this.start);
   final Map<String, dynamic> start;
   Map<String, dynamic>? latest;
-  int? expiresAt;
 }
 
 /// Engine adapter only. ReaderPage retains every Flutter control and panel.
@@ -134,46 +134,30 @@ class ReadiumReaderBridge extends ChangeNotifier {
   }
   bool _dragInFlight = false, _receivingDrag = false;
   rd.Locator? _dragLocation;
-  final _dragClock = Stopwatch()..start();
-  _HeldReaderDrag? _heldDrag;
+  final _pendingDrags = Queue<_PendingReaderDrag>();
+  _PendingReaderDrag? _queuedPointer;
   ({int direction, bool animated})? _pendingTap;
-
-  _HeldReaderDrag? get _availableDrag {
-    if (_heldDrag?.expiresAt case final expiry? when _dragClock.elapsedMilliseconds >= expiry) {
-      _heldDrag = null;
-    }
-    return _heldDrag;
-  }
 
   void _pageDrag(Map<String, dynamic> event) {
     if (_disposed || _owner != this) return;
     if (event['phase'] == 'Start') {
       if (!ready) return;
-      _heldDrag = null;
       if (_pagePending) {
-        if (!_receivingDrag && _startOverlappingDrag(event)) return;
-        _heldDrag = _HeldReaderDrag(event);
+        if (_pendingDrags.isEmpty && !_receivingDrag && _startOverlappingDrag(event)) return;
+        final drag = _queuedPointer = _PendingReaderDrag(event);
+        if (_pendingDrags.length < 6) _pendingDrags.addLast(drag);
         _pendingTap = null;
       } else {
         _startPageDrag(event);
       }
       return;
     }
-    if (_heldDrag case final drag?) {
-      if (event['phase'] == 'Cancel') {
-        _heldDrag = null;
-      } else if (event['phase'] == 'End') {
-        if (_appearance.pageEffect == ReaderPageEffect.staggered) {
-          // A handoff may be one frame behind the next swipe. Keep at most
-          // the most recent relay gesture for a short compositor delay.
-          drag.latest = event;
-          drag.expiresAt = _dragClock.elapsedMilliseconds + 150;
-          _continueHeldDrag();
-        } else {
-          _heldDrag = null;
-        }
-      } else {
-        drag.latest = event;
+    if (_queuedPointer case final pending?) {
+      pending.latest = event;
+      if (event['phase'] == 'End' || event['phase'] == 'Cancel') {
+        // A paper swipe that could not start while held has no sheet to settle.
+        if (_appearance.pageEffect == ReaderPageEffect.paper) _pendingDrags.remove(pending);
+        _queuedPointer = null;
       }
     } else if (_receivingDrag) {
       _updatePageDrag(event);
@@ -193,8 +177,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
 
   bool _startOverlappingDrag(Map<String, dynamic> event) {
     final start = _dragStart(event);
-    if (!turns.beginOverlappingDrag(start.direction, start.dx, start.width, start.y,
-        requireReady: _appearance.pageEffect == ReaderPageEffect.staggered)) return false;
+    if (!turns.beginOverlappingDrag(start.direction, start.dx, start.width, start.y)) return false;
     _pendingTap = null;
     _dragInFlight = true;
     _receivingDrag = true;
@@ -202,16 +185,24 @@ class ReadiumReaderBridge extends ChangeNotifier {
     return true;
   }
 
-  void _continueHeldDrag() {
+  void _continueQueuedDrag() {
     if (_disposed || _owner != this || !ready || !_pagePending || _receivingDrag) return;
-    if (_availableDrag case final drag?) {
+    _discardCancelledDrags();
+    if (_pendingDrags.firstOrNull case final drag?) {
       if (!_startOverlappingDrag(drag.start)) return;
-      _resumeHeldDrag(drag);
+      _pendingDrags.removeFirst();
+      _replayDrag(drag);
     }
   }
 
-  void _resumeHeldDrag(_HeldReaderDrag drag) {
-    _heldDrag = null;
+  void _discardCancelledDrags() {
+    while (_pendingDrags.firstOrNull?.latest?['phase'] == 'Cancel') {
+      _pendingDrags.removeFirst();
+    }
+  }
+
+  void _replayDrag(_PendingReaderDrag drag) {
+    if (identical(_queuedPointer, drag)) _queuedPointer = null;
     if (drag.latest case final event?) _updatePageDrag(event);
   }
 
@@ -252,9 +243,11 @@ class ReadiumReaderBridge extends ChangeNotifier {
     final tap = _pendingTap;
     _pendingTap = null;
     if (!_disposed && _owner == this && ready) {
-      if (_availableDrag case final drag?) {
+      _discardCancelledDrags();
+      if (_pendingDrags.isNotEmpty) {
+        final drag = _pendingDrags.removeFirst();
         _startPageDrag(drag.start);
-        _resumeHeldDrag(drag);
+        _replayDrag(drag);
         return;
       }
       if (tap != null) {
@@ -262,7 +255,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
         return;
       }
     }
-    _heldDrag = null;
+    _pendingDrags.clear();
     _pageIdle?.complete();
     _pageIdle = null;
   }
@@ -635,10 +628,10 @@ class ReadiumReaderBridge extends ChangeNotifier {
   Future<void> pageBy(int direction, {bool animated = true}) async {
     if (_disposed || _navigating) return;
     if (_pagePending) {
-      if (_availableDrag == null && !_receivingDrag &&
+      if (_pendingDrags.isEmpty && !_receivingDrag &&
           turns.turnExposedPage(direction, animated: animated)) {
         onUserNavigation();
-      } else if (_availableDrag == null) {
+      } else if (_pendingDrags.isEmpty) {
         _pendingTap = (direction: direction, animated: animated);
       }
       return;
@@ -1315,7 +1308,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
           rightToLeft: _rightToLeft,
           refreshRateLimit: _refreshRateLimit,
           onPrioritize: _interruptPreview,
-          onTurnAvailable: _continueHeldDrag,
+          onTurnAvailable: _continueQueuedDrag,
           replayTap: (point) => native.invokeMethod<void>('tap', {'x': point.dx, 'y': point.dy}),
           child: Stack(
             fit: StackFit.expand,
