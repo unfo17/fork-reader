@@ -716,6 +716,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
           final destination = turns.pendingPage;
           if (!await _landFrame(destination ?? origin, publish: false)) throw StateError('阅读位置未能恢复');
           if (destination != null) turns.previewHandedOff();
+        } catch (_) {
+          frame?.dispose();
+          rethrow;
         } finally { _previewing = false; }
       }
     })();

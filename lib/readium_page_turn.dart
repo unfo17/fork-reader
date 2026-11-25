@@ -503,11 +503,23 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         if (direction.abs() > 1 && _edges.contains(direction.sign)) { _edges.add(direction); continue; }
         if (_neighbors.containsKey(direction) || _edges.contains(direction)) continue;
         _preparingOffset = direction;
-        ReadiumPageFrame? frame;
-        try { frame = await widget.preview!(direction, origin); } catch (_) { continue; }
-        if (!mounted || key != widget.frameKey) { frame?.dispose(); break; }
-        if (frame == null) { _edges.add(direction); }
-        else { _neighbors[direction] = frame; }
+        for (var attempt = 0; attempt < (requiredDirection == null || _refilling ? 1 : 2); attempt++) {
+          if (!mounted || key != widget.frameKey || _routePaused) break;
+          ReadiumPageFrame? frame;
+          try {
+            frame = await widget.preview!(direction, origin);
+          } catch (_) {
+            continue;
+          }
+          if (!mounted || key != widget.frameKey) {
+            frame?.dispose();
+          } else if (frame == null) {
+            _edges.add(direction);
+          } else {
+            _neighbors[direction] = frame;
+          }
+          break;
+        }
       }
     } finally {
       final cover = _previewCover;
@@ -877,7 +889,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         _nativeOverlaps != null || _preparing != null || _overlapLandingFailed) return;
     final origin = _cached;
     if (origin == null || identical(_refilledFrom, origin)) return;
-    final nearest = _warmOffsets(origin).where((offset) =>
+    final nearest = [_dragDirection, -_dragDirection].where((offset) =>
       !_neighbors.containsKey(offset) && !_edges.contains(offset)).firstOrNull;
     if (nearest == null) return;
     _refilledFrom = origin;
