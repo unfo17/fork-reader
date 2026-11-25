@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'reading_widget_snapshot.dart';
+import 'reading_widget_design.dart';
+import 'reading_widget_skin.dart';
 export 'reading_widget_skin.dart';
 
 enum ReadingDesktopSize {
@@ -28,8 +30,9 @@ class ReadingDesktopCard extends StatelessWidget {
   final String quoteSource;
   final int quoteCount;
   @override
-  Widget build(BuildContext context) => AspectRatio(
-    aspectRatio: size.width / size.height,
+  Widget build(BuildContext context) => SizedBox(
+    width: size.width,
+    height: size.height,
     child: CustomPaint(
       painter: ReadingDesktopPainter(
         data,
@@ -47,49 +50,97 @@ class ReadingDesktopPainter extends CustomPainter {
     this.brightness, {
     this.quoteText,
     this.quoteSource = '',
+    this.paintQuote = true,
   });
+
   final ReadingWidgetSnapshot data;
   final Brightness brightness;
   final String? quoteText;
   final String quoteSource;
+  final bool paintQuote;
+
   @override
   void paint(Canvas canvas, Size size) {
     final dark = brightness == Brightness.dark;
-    final color = dark ? const Color(0xffe8e0d5) : const Color(0xff332e29);
+    final ink = dark ? const Color(0xfff3eee4) : const Color(0xff262923);
+    final paper = dark ? const Color(0xff222620) : const Color(0xfff7f5ed);
+    final season = (data.localDay.month % 12) ~/ 3;
+    final accent = data.skin == ReadingWidgetSkin.seasons
+        ? const [Color(0xff626c98), Color(0xff54805d), Color(0xff287c83), Color(0xffab6338)][season]
+        : const Color(0xff66806e);
+    final brush = Paint();
     canvas.drawRRect(
       RRect.fromRectAndRadius(Offset.zero & size, const Radius.circular(22)),
-      Paint()
-        ..color = (dark ? const Color(0xff242320) : const Color(0xfff6f0e5)),
+      brush..color = Color.lerp(paper, accent, dark ? .16 : .08)!,
     );
-    void text(String text, double y, double fontSize) {
+    final inset = size.width < 200 ? 14.0 : 20.0;
+    final width = size.width - inset * 2;
+    void text(String value, double y, double font, {int lines = 1, Color? tint}) {
       final painter = TextPainter(
         text: TextSpan(
-          text: text,
-          style: TextStyle(color: color, fontSize: fontSize, height: 1.35),
+          text: value,
+          style: TextStyle(color: tint ?? ink, fontSize: font, height: 1.25),
         ),
         textDirection: TextDirection.ltr,
-        maxLines: 3,
+        maxLines: lines,
         ellipsis: '…',
-      )..layout(maxWidth: size.width - 36);
-      painter.paint(canvas, Offset(18, y));
+      )..layout(maxWidth: width);
+      painter.paint(canvas, Offset(inset, y));
+      painter.dispose();
     }
 
-    text('阅读 · ${data.localDay.month}/${data.localDay.day}', 18, 14);
-    text(
-      quoteText ?? '今日 ${(data.verifiedTodaySeconds ?? 0) ~/ 60} 分钟',
-      size.height * .32,
-      20,
-    );
-    text(
-      quoteText != null ? quoteSource : '连续 ${data.qualifiedStreakDays ?? 0} 天',
-      size.height - 39,
-      12,
-    );
+    void heatmap(List<int?> values, int columns, int rows) {
+      const gap = 3.0;
+      final cell = ((width - (columns - 1) * gap) / columns)
+          .clamp(1.0, (size.height - 90 - (rows - 1) * gap) / rows);
+      for (final (i, seconds) in values.indexed) {
+        final opacity = seconds == null ? .08 : seconds == 0 ? .2 : (.35 + seconds / 4500).clamp(.35, 1.0);
+        final x = inset + i ~/ rows * (cell + gap);
+        final y = 54 + i % rows * (cell + gap);
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(Rect.fromLTWH(x, y, cell, cell), const Radius.circular(2)),
+          brush..color = accent.withValues(alpha: opacity),
+        );
+      }
+    }
+
+    String minutes(int? seconds) => seconds == null ? '暂无记录' : '${seconds ~/ 60} 分钟';
+    text(data.design.label, 17, 13);
+    switch (data.design) {
+      case ReadingWidgetDesign.week:
+        heatmap(data.week.map((day) => day.verifiedSeconds).toList(), 7, 1);
+        text(minutes(data.weekSeconds), size.height - 42, 15);
+      case ReadingWidgetDesign.calendar:
+        final columns = size.width < 200 ? 12 : ReadingWidgetHeatmap.weeks;
+        final values = data.heatmap.verifiedSeconds;
+        heatmap(values.sublist(values.length - columns * 7), columns, 7);
+        text('阅读记录', size.height - 31, 12);
+      case ReadingWidgetDesign.memory:
+        final completion = data.latestCompletion;
+        text(completion?.title ?? (completion == null ? '暂无纪念' : '阅读纪念'), 54, 22, lines: 2);
+        if (completion != null) {
+          text(widgetDate(completion.completedAt), size.height - 34, 12);
+        }
+      case ReadingWidgetDesign.quote:
+        if (paintQuote) {
+          text(quoteText ?? '在阅读中留下喜欢的句子', 56, 16, lines: 3);
+          if (quoteSource.isNotEmpty) text(quoteSource, size.height - 28, 11);
+        }
+      case ReadingWidgetDesign.classic:
+      case ReadingWidgetDesign.focus:
+        text(minutes(data.verifiedTodaySeconds), 51, 28);
+        final goal = data.dailyGoalMinutes;
+        if (goal > 0) {
+          final fraction = ((data.verifiedTodaySeconds ?? 0) / (goal * 60)).clamp(0.0, 1.0);
+          canvas.drawRect(Rect.fromLTWH(inset, 101, width, 4), brush..color = accent.withValues(alpha: .2));
+          canvas.drawRect(Rect.fromLTWH(inset, 101, width * fraction, 4), brush..color = accent);
+        }
+        text(data.currentBook?.title ?? '连续 ${data.qualifiedStreakDays ?? 0} 天', size.height - 33, 12);
+    }
   }
 
   @override
   bool shouldRepaint(covariant ReadingDesktopPainter old) =>
-      old.data != data ||
-      old.brightness != brightness ||
-      old.quoteText != quoteText;
+      old.data != data || old.brightness != brightness || old.paintQuote != paintQuote ||
+      old.quoteText != quoteText || old.quoteSource != quoteSource;
 }

@@ -16,6 +16,7 @@ Future<Uint8List> renderReadingDesktopCard(
   ReadingDesktopPainter(
     data,
     brightness,
+    paintQuote: paintQuote,
   ).paint(canvas, Size(size.width, size.height));
   final picture = recorder.endRecording();
   final image = await picture.toImage(

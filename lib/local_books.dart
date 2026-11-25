@@ -3044,6 +3044,33 @@ class LocalBookStore extends ChangeNotifier
     return null;
   }
 
+  /// A managed EPUB already belongs to this sandbox. Give Readium a stable,
+  /// typed filename without streaming another copy on every reader entry.
+  Future<File?> managedEpubForReadium(int id) async {
+    final digest = _sources[id]?['digest'];
+    if (!Platform.isAndroid ||
+        !isReadiumEpub(id) ||
+        _directOriginal(id) ||
+        digest is! String ||
+        !RegExp(r'^[0-9a-f]{64}$').hasMatch(digest)) return null;
+    final folder = '${directory.path}/$id';
+    final source = File('$folder/original');
+    if (!await source.exists()) return null;
+    final alias = Link('$folder/.readium-$digest.epub');
+    try {
+      if (!await alias.exists()) {
+        try {
+          await alias.create('original');
+        } on FileSystemException {
+          if (!await alias.exists()) return null;
+        }
+      }
+      return await alias.target() == 'original' ? File(alias.path) : null;
+    } on FileSystemException {
+      return null;
+    }
+  }
+
   /// Stream a byte-identical EPUB while its scoped-storage lease is alive.
   Future<void> copyEpubForReadium(int id, File target) async {
     if (!isReadiumEpub(id)) throw const FormatException('本书不是独立 EPUB 原书');

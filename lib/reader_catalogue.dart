@@ -65,6 +65,8 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
     offset: widget.position?.textOffset ?? 0,
   );
   late final _volumes = NovelVolume.of(_directoryChapters);
+  late final _hierarchy = widget.novel.directoryHierarchy;
+  late final _expandedBranches = _hierarchy.ancestorsOf(_current).toSet();
   late final Set<String> _expanded = {
     for (final volume in _volumes)
       if (_current >= volume.start && _current < volume.end) volume.key,
@@ -233,7 +235,16 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
     }
     final matches = _matches.toSet();
     // Reorder only the display projection; row indices remain source addresses.
+    final authored = widget.novel.navigation != null;
     final rows = <({NovelVolume? volume, int? chapter})>[
+      if (authored)
+        for (final index in _hierarchy.visible(
+          _expandedBranches,
+          reversed: _reversed,
+          matches: _search.text.trim().isNotEmpty ? matches : null,
+        ))
+          (volume: null, chapter: index)
+      else
       for (final volume in _reversed ? _volumes.reversed : _volumes)
         if (Iterable.generate(
           volume.length,
@@ -345,6 +356,9 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
     final entry = _entries[index];
     final chapter = widget.novel.chapters[entry.chapter];
     final current = index == _current;
+    final hasChildren = widget.novel.navigation != null && _hierarchy.hasChildren(index);
+    final searching = _search.text.trim().isNotEmpty;
+    final expanded = searching || _expandedBranches.contains(index);
     return Semantics(
       selected: current,
       child: JellyTapSurface(
@@ -374,6 +388,15 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
           ),
           child: Row(
             children: [
+              if (hasChildren)
+                GlassIconButton(
+                  key: ValueKey('reader-toc-toggle-$index'),
+                  icon: expanded ? CupertinoIcons.chevron_down : CupertinoIcons.chevron_right,
+                  label: expanded ? '收起 ${entry.title}' : '展开 ${entry.title}',
+                  onPressed: searching ? null : () => _changeRows(() {
+                    if (!_expandedBranches.add(index)) _expandedBranches.remove(index);
+                  }),
+                ),
               SizedBox(
                 width: 38,
                 child: FittedBox(

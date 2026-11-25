@@ -27,6 +27,10 @@ class ReadiumControlsPlugin : FlutterPlugin {
                             "jump" -> result.success(ReadiumReader.appJumpToPage(call.argument<String>("locator") ?: "{}", call.argument<Boolean>("seek") == true))
                             "locator" -> result.success(ReadiumReader.appCurrentLocatorJson())
                             "pageKey" -> result.success(ReadiumReader.appPageKeyJson())
+                            "parkPublication" -> {
+                                ReadiumReader.visualClose()
+                                result.success(null)
+                            }
                             "fixedLayout" -> result.success(ReadiumReader.appIsFixedLayout())
                             "clearSelection" -> {
                                 ReadiumReader.appSelectionMode?.finish()

@@ -29,11 +29,13 @@ class ReadiumReaderBridge extends ChangeNotifier {
     required this.books,
     required this.initialChapter,
     this.restoreLocator = true,
+    this.coverInitialEntry = false,
     required this.onLocation,
     required this.onPage,
     required this.onAction,
     required this.onTap,
     required this.onUserNavigation,
+    required this.onPageTurn,
     required this.onAnnotation,
     required this.onSelection,
     required this.onSelectionEnd,
@@ -70,10 +72,12 @@ class ReadiumReaderBridge extends ChangeNotifier {
   final LocalBookStore books;
   final int initialChapter;
   final bool restoreLocator;
+  final bool coverInitialEntry;
   bool get hasSavedLocator => _hasSavedLocator;
   bool _hasSavedLocator = false;
   static ReadiumReaderBridge? _owner;
   static Future<void> _lifecycle = Future.value();
+  static Timer? _idlePublicationClose;
   var _firstLocation = Completer<void>();
   bool _suspended = false;
   bool _openedOnce = false;
@@ -85,6 +89,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
   final void Function(String action, String text) onAction;
   final ValueChanged<Offset> onTap;
   final VoidCallback onUserNavigation;
+  final VoidCallback onPageTurn;
   final ValueChanged<String> onAnnotation;
   final void Function(String text, Rect bounds) onSelection;
   final VoidCallback onSelectionEnd;
@@ -309,26 +314,73 @@ class ReadiumReaderBridge extends ChangeNotifier {
   int _locationTicket = 0;
   static const native = MethodChannel('org.mewx.wenku8/readium_controls');
   String get _key => 'readium.locator.v1.${book.id}';
-  rd.Link? linkForChapter(int index) {
+  final _chapterLinks = <int, rd.Link?>{};
+  final _chaptersByHref = <String, List<int>>{};
+  Novel? _indexedBook;
+  rd.Publication? _indexedPublication;
+
+  void _indexChapters() {
+    if (identical(book, _indexedBook) && identical(publication, _indexedPublication)) return;
+    _indexedBook = book;
+    _indexedPublication = publication;
+    _chapterLinks.clear();
+    _chaptersByHref.clear();
     final pub = publication;
-    if (pub == null || index < 0 || index >= book.chapters.length) return null;
-    final id = book.chapters[index].id;
-    final origin =
-        books.readiumChapterHref(book.id, index) ??
-        book.navigation?.targets.entries
-            .where((e) => e.value.chapterId == id)
-            .map((e) => e.key)
-            .firstOrNull;
-    if (origin != null && pub.linkWithHref(origin) != null)
-      return rd.Link(href: origin, title: book.chapters[index].title);
-    final names = {
-      book.chapters[index].title,
-      ...?book.navigation?.entries
-          .where((e) => e.target.chapterId == id)
-          .map((e) => e.title),
-    };
-    return pub.tocFlattened.where((l) => names.contains(l.title)).firstOrNull;
+    if (pub == null) return;
+    final origins = <int, String>{};
+    final tocTitles = <int, Set<String>>{};
+    final linksByTitle = <String?, ({int order, rd.Link link})>{};
+    for (final (order, link) in pub.tocFlattened.indexed) {
+      linksByTitle.putIfAbsent(link.title, () => (order: order, link: link));
+    }
+    final addresses = <String>{};
+    void addAddresses(Iterable<rd.Link> links) {
+      for (final link in links) {
+        addresses.add(link.href);
+        addAddresses(link.alternates ?? const []);
+        addAddresses(link.children ?? const []);
+      }
+    }
+    addAddresses(pub.readingOrder);
+    addAddresses(pub.resources);
+    addAddresses(pub.links);
+    final navigation = book.navigation;
+    if (navigation != null) {
+      for (final entry in navigation.targets.entries) {
+        origins.putIfAbsent(entry.value.chapterId, () => entry.key);
+      }
+      for (final entry in navigation.entries) {
+        (tocTitles[entry.target.chapterId] ??= {}).add(entry.title);
+      }
+    }
+    for (final (index, source) in book.chapters.indexed) {
+      final origin = books.readiumChapterHref(book.id, index) ?? origins[source.id];
+      rd.Link? link;
+      if (origin != null &&
+          (addresses.contains(origin) || addresses.contains(origin.split(RegExp(r'[?#]')).first))) {
+        link = rd.Link(href: origin, title: source.title);
+      } else {
+        var earliest = linksByTitle[source.title];
+        for (final title in tocTitles[source.id] ?? const <String>{}) {
+          final candidate = linksByTitle[title];
+          if (candidate != null && (earliest == null || candidate.order < earliest.order)) {
+            earliest = candidate;
+          }
+        }
+        link = earliest?.link;
+      }
+      _chapterLinks[index] = link;
+      if (link != null) {
+        (_chaptersByHref[link.href.split('#').first] ??= []).add(index);
+      }
+    }
   }
+
+  rd.Link? linkForChapter(int index) {
+    _indexChapters();
+    return _chapterLinks[index];
+  }
+
 
   String get chapterTitle {
     final tocHref = locator?.locations?.toJson()['tocHref'];
@@ -404,11 +456,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
         if (i >= 0) return i;
       }
     }
-    final candidates = <int>[];
-    for (var i = 0; i < book.chapters.length; i++) {
-      final link = linkForChapter(i);
-      if (link != null && link.href.split('#').first == href) candidates.add(i);
-    }
+    _indexChapters();
+    final candidates = _chaptersByHref[href] ?? const [];
     if (candidates.length == 1) return candidates.single;
     if (candidates.contains(chapter)) return chapter;
     if (candidates.isNotEmpty) return candidates.first;
@@ -448,14 +497,18 @@ class ReadiumReaderBridge extends ChangeNotifier {
   Future<void> _open() async {
     try {
       _prefs = await SharedPreferences.getInstance();
-      _staging ??= await (await getTemporaryDirectory()).createTemp(
-        'readium-render-',
-      );
-      final file = File('${_staging!.path}/publication.epub');
-      if (!await file.exists()) await books.copyEpubForReadium(book.id, file);
+      final managed = await books.managedEpubForReadium(book.id);
+      if (managed == null) {
+        _staging ??= await (await getTemporaryDirectory()).createTemp('readium-render-');
+      }
+      final file = managed ?? File('${_staging!.path}/publication.epub');
+      if (managed == null && !await file.exists()) {
+        await books.copyEpubForReadium(book.id, file);
+      }
       if (_disposed) return;
       final acquire = _lifecycle.catchError((Object _) {}).then((_) async {
         if (_disposed) return;
+        _idlePublicationClose?.cancel();
         final previous = _owner;
         if (previous != null) {
           await previous._events?.cancel();
@@ -562,7 +615,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _navigate(rd.Locator at, {int? transitionDirection, bool seek = false}) async {
+  Future<void> _navigate(rd.Locator at, {
+    int? transitionDirection, bool seek = false, bool chapterEntrance = false,
+  }) async {
     _navigating = Platform.isAndroid;
     _nativeEventTicket++;
     try {
@@ -585,7 +640,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
           if (visible != null) _located(visible);
         }
       }, capture: () => _capturePage(allowNavigating: true),
-        transitionDirection: transitionDirection);
+        transitionDirection: transitionDirection, chapterEntrance: chapterEntrance);
     } finally {
       _navigating = false;
       if (!_disposed) notifyListeners();
@@ -860,7 +915,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
   }
 
   int _seekTicket = 0;
-  Future<bool> goTarget(BookReadingTarget target, {bool animated = false}) async {
+  Future<bool> goTarget(BookReadingTarget target, {
+    bool animated = false, bool chapterEntrance = false,
+  }) async {
     final addresses = book.navigation?.targets.entries
         .where((entry) {
           final value = entry.value;
@@ -896,7 +953,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
       if (at == null) return;
       applied = true;
       final direction = chapterFor(at).compareTo(chapter);
-      await _navigate(at, transitionDirection: animated ? (direction == 0 ? 1 : direction) : null);
+      await _navigate(at, transitionDirection: animated ? (direction == 0 ? 1 : direction) : null,
+        chapterEntrance: chapterEntrance && direction != 0);
     }, waitForPreparation: false);
     return applied;
   }
@@ -908,6 +966,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     String? before,
     String? after,
     bool animated = false,
+    bool chapterEntrance = false,
   }) {
     final ticket = ++_seekTicket;
     return command(() async {
@@ -921,7 +980,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
       );
       if (at == null) throw const FormatException('原书目录没有对应的阅读位置');
       final direction = index.compareTo(chapter);
-      await _navigate(at, transitionDirection: animated ? (direction == 0 ? 1 : direction) : null);
+      await _navigate(at, transitionDirection: animated ? (direction == 0 ? 1 : direction) : null,
+        chapterEntrance: chapterEntrance && direction != 0);
     }, waitForPreparation: false);
   }
 
@@ -1312,6 +1372,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
           paper: pagePaper,
           capture: _capturePage,
           step: _stepPage,
+          onPageTurn: onPageTurn,
+          coverInitialEntry: coverInitialEntry,
+          entryReady: ready,
           canTurn: _canTurnPage,
           preview: Platform.isAndroid && _appearance.mode.paginated && _appearance.pageEffect != ReaderPageEffect.none ? _previewPage : null,
           land: (frame) => _landFrame(frame),
@@ -1388,8 +1451,23 @@ class ReadiumReaderBridge extends ChangeNotifier {
         final release = _lifecycle.catchError((Object _) {}).then((_) async {
           await _commands;
           if (_owner == this) {
-            await api.closePublication();
             _owner = null;
+            if (Platform.isAndroid && _staging == null && publication != null) {
+              try {
+                await native.invokeMethod<void>('parkPublication');
+                _idlePublicationClose?.cancel();
+                _idlePublicationClose = Timer(const Duration(seconds: 45), () {
+                  final close = _lifecycle.catchError((Object _) {}).then((_) async {
+                    if (_owner == null) await api.closePublication();
+                  });
+                  _lifecycle = close.catchError((Object _) {});
+                });
+              } catch (_) {
+                await api.closePublication();
+              }
+            } else {
+              await api.closePublication();
+            }
           }
           await _saves;
           if (_staging != null) await _staging!.delete(recursive: true);

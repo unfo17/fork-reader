@@ -213,7 +213,14 @@ class ReadingWidgetCards extends ChangeNotifier {
         .invokeMethod<bool>('cardsSupported')
         .then((value) => value == true)
         .catchError((Object _) => false);
-    if (!await _hostReady! || _disposed) return;
+    if (!await _hostReady! || _disposed) {
+      _hostReady = null;
+      if (!_disposed) {
+        error = '桌面组件暂未更新，请重试';
+        notifyListeners();
+      }
+      return;
+    }
     final configs = List<ReadingWidgetCardConfig>.of(_cards);
     final base = ReadingWidgetController.forState(state).snapshot;
     final payload = <Map<String, Object?>>[];
@@ -250,7 +257,9 @@ class ReadingWidgetCards extends ChangeNotifier {
             : jsonEncode(visible);
         final previous = _cache[card.id];
         Map<String, String> images;
-        if (previous?.signature == signature) {
+        if (previous?.signature == signature &&
+            (await Future.wait(previous!.images.values.map((path) => File(path).exists())))
+                .every((exists) => exists)) {
           images = previous!.images;
         } else {
           images = {};

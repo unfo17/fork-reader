@@ -236,6 +236,8 @@ class ReadiumPageTurnController {
   void requestTurn(int direction) => _owner?._prioritizeTurn(direction);
 
   void animateReturn() => unawaited(_owner?._animateReturn());
+  void animateEntry(ReaderPageEffect effect) =>
+      unawaited(_owner?._animateReturn(effect: effect));
 
   Future<void> freezeForRoute() async => _owner?._freezeForRoute();
   Future<void> thawAfterRoute() async => _owner?._thawAfterRoute();
@@ -246,10 +248,12 @@ class ReadiumPageTurnController {
     Future<void> Function() action, {
     Future<ReadiumPageFrame?> Function()? capture,
     int? transitionDirection,
+    bool chapterEntrance = false,
   }) async {
     final owner = _owner;
     if (owner == null) return action();
-    await owner._navigate(action, capture: capture, transitionDirection: transitionDirection);
+    await owner._navigate(action, capture: capture, transitionDirection: transitionDirection,
+      chapterEntrance: chapterEntrance);
   }
 }
 
@@ -273,6 +277,9 @@ class ReadiumPageSurface extends StatefulWidget {
     this.rightToLeft = false,
     this.onPrioritize,
     this.onTurnAvailable,
+    this.onPageTurn,
+    this.coverInitialEntry = false,
+    this.entryReady = false,
     this.replayTap,
     this.refreshRateLimit = 0,
   });
@@ -288,6 +295,8 @@ class ReadiumPageSurface extends StatefulWidget {
   final double refreshRateLimit;
   final VoidCallback? onPrioritize;
   final VoidCallback? onTurnAvailable;
+  final VoidCallback? onPageTurn;
+  final bool coverInitialEntry, entryReady;
   final Future<void> Function(Offset fraction)? replayTap;
   final Future<bool> Function(int direction)? canTurn;
   final Future<ReadiumPageFrame?> Function(int direction, ReadiumPageFrame origin)? preview;
@@ -303,6 +312,9 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   late final _returnClock = AnimationController(vsync: this);
   int _returnEpoch = 0;
   ReadiumPageFrame? _returnFrame;
+  ReaderPageEffect _entryEffect = ReaderPageEffect.staggered;
+  bool _entryFromBottom = true;
+  late bool _coverInitialEntry = widget.coverInitialEntry;
   ReadiumPageFrame? _from, _to;
   ReaderPageEffect _effect = ReaderPageEffect.none;
   double _direction = 1;
@@ -380,6 +392,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   );
   void _prioritizeTurn(int direction) {
     _stopReturnAnimation();
+    if (_coverInitialEntry) setState(() => _coverInitialEntry = false);
     if (!_preparationInterrupted && _preparingOffset != direction) {
       widget.onPrioritize?.call();
     }
@@ -388,19 +401,40 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _warmTimer?.cancel();
   }
 
-  Future<void> _animateReturn() async {
-    if (!mounted || _busy || _routePaused || MediaQuery.disableAnimationsOf(context)) return;
+  Future<void> _animateReturn({ReaderPageEffect? effect}) async {
+    final initial = effect != null;
+    void clearEntryCover() {
+      if (initial && mounted && _coverInitialEntry) {
+        setState(() => _coverInitialEntry = false);
+      }
+    }
+    if (!mounted || _busy || _routePaused || effect == ReaderPageEffect.none ||
+        MediaQuery.disableAnimationsOf(context)) {
+      clearEntryCover();
+      return;
+    }
     _stopReturnAnimation();
     final epoch = _returnEpoch, key = widget.frameKey;
+    if (initial) {
+      _warmTimer?.cancel();
+      widget.onPrioritize?.call();
+      _preparationInterrupted = true;
+    }
     ReadiumPageFrame? frame = (_presented ?? _cached)?.retain();
-    if (frame == null) {
-      try {
+    try {
+      if (frame == null) {
         if (_warming) await _warmDone?.future;
         await _preparing;
         if (!mounted || _returnEpoch != epoch || _busy) return;
         frame = (_presented ?? _cached)?.retain() ?? await widget.capture();
-      } catch (_) {
-        return;
+      }
+    } catch (_) {
+      return;
+    } finally {
+      clearEntryCover();
+      if (initial && mounted && _returnEpoch == epoch && !_busy) {
+        _preparationInterrupted = false;
+        _warmLater();
       }
     }
     if (frame == null) return;
@@ -408,8 +442,13 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       frame.dispose();
       return;
     }
-    _returnClock.duration = widget.preferences.pageSpeed.durationFor(ReaderPageEffect.staggered);
-    setState(() => _returnFrame = frame);
+    final entryEffect = effect ?? ReaderPageEffect.staggered;
+    _returnClock.duration = widget.preferences.pageSpeed.durationFor(entryEffect);
+    setState(() {
+      _returnFrame = frame;
+      _entryEffect = entryEffect;
+      _entryFromBottom = effect == null;
+    });
     unawaited(_returnClock.forward(from: 0).orCancel.then((_) {
       if (mounted && _returnEpoch == epoch) _stopReturnAnimation();
     }).catchError((Object error) {
@@ -670,6 +709,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
           await _preparing;
           if (!mounted) return false;
           if (!await widget.land!(target) || !mounted) return false;
+          widget.onPageTurn?.call();
           _cached?.dispose();
           _cached = target.retain();
           _shiftWindow(_dragDirection, origin);
@@ -959,6 +999,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       final landed = target == null || await widget.land!(target).catchError((Object _) => false);
       if (!mounted || overlap.landed.isCompleted) return;
       if (landed && target != null) {
+        widget.onPageTurn?.call();
         _cached?.dispose();
         _cached = target.retain();
         _dragDirection = overlap.direction;
@@ -1208,7 +1249,9 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     Future<void> Function() action, {
     Future<ReadiumPageFrame?> Function()? capture,
     int? transitionDirection,
+    bool chapterEntrance = false,
   }) async {
+    _stopReturnAnimation();
     widget.onPrioritize?.call();
     _preparationInterrupted = true;
     _warmTimer?.cancel();
@@ -1235,17 +1278,29 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         await WidgetsBinding.instance.endOfFrame;
       }
       await action();
-      if (!mounted || from == null || transitionDirection == null ||
+      if (!mounted || (!chapterEntrance && (from == null || transitionDirection == null)) ||
           MediaQuery.disableAnimationsOf(context)) return;
       for (var attempt = 0; attempt < 2 && mounted; attempt++) {
         target = await capturePage();
-        if (target != null && target.location != from.location) break;
+        if (target != null && target.location != from?.location) break;
         target?.dispose();
         target = null;
         if (attempt == 0 && mounted) await WidgetsBinding.instance.endOfFrame;
       }
       if (!mounted) return;
       final prefs = widget.preferences;
+      if (chapterEntrance && target != null) {
+        _returnClock.duration = prefs.pageSpeed.durationFor(ReaderPageEffect.staggered);
+        setState(() {
+          _returnFrame = target!.retain();
+          _entryEffect = ReaderPageEffect.staggered;
+          _entryFromBottom = true;
+        });
+        await _returnClock.forward(from: 0).orCancel;
+        _stopReturnAnimation();
+        return;
+      }
+      if (from == null || transitionDirection == null) return;
       final direction = _visualDirection(transitionDirection);
       final effect = prefs.pageEffect == ReaderPageEffect.none ||
               (target == null && (prefs.pageEffect != ReaderPageEffect.paper || direction < 0))
@@ -1290,8 +1345,9 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         !prefs.mode.paginated ||
         prefs.pageEffect == ReaderPageEffect.none ||
         MediaQuery.disableAnimationsOf(context)) {
-      if (gesture == null || await gesture.future)
-        await widget.step(direction, false);
+      if ((gesture == null || await gesture.future) && await widget.step(direction, false) && mounted) {
+        widget.onPageTurn?.call();
+      }
       return;
     }
     _busy = true;
@@ -1302,8 +1358,9 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       from = await _takeFrame(widget.capture);
       if (!mounted) return;
       if (from == null) {
-        if (gesture == null || await gesture.future)
-          await widget.step(direction, false);
+        if ((gesture == null || await gesture.future) && await widget.step(direction, false) && mounted) {
+          widget.onPageTurn?.call();
+        }
         return;
       }
       setState(() {
@@ -1389,6 +1446,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
             .orCancel;
       }
       committed = finish;
+      if (committed) widget.onPageTurn?.call();
       if (!finish) {
         await widget.step(-direction, false);
         moved = false;
@@ -1474,11 +1532,49 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   bool get _sceneCoversPage =>
       _overlaps.isNotEmpty || (_from != null && !_liveDestination);
 
+  Widget _entry(ReadiumPageFrame frame) {
+    final direction = _visualDirection(1);
+    if (_entryEffect == ReaderPageEffect.staggered) {
+      return CustomPaint(painter: _ReadiumParagraphTurn(
+        frame, _returnClock, direction, true,
+        !_entryFromBottom && widget.preferences.mode == ReaderMode.vertical,
+        enterFromBottom: _entryFromBottom,
+        fillPaper: true,
+      ));
+    }
+    if (_entryEffect == ReaderPageEffect.paper) {
+      return ColoredBox(color: frame.paper, child: CustomPaint(painter: _ReadiumCurl(
+        frame, ReverseAnimation(_returnClock), -direction, () => .78, () => .78,
+        widget.controller._shape,
+      )));
+    }
+    if (_entryEffect == ReaderPageEffect.slide) {
+      return ColoredBox(color: frame.paper, child: SlideTransition(
+        position: _returnClock.drive(Tween(begin: Offset(direction, 0), end: Offset.zero)),
+        child: _pageImage(frame),
+      ));
+    }
+    return ColoredBox(
+      color: frame.paper,
+      child: ReaderSheetMotion(
+        animation: _returnClock, effect: _entryEffect, direction: direction,
+        incoming: true, front: true, active: true, paper: frame.paper,
+        child: _pageImage(frame),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => Stack(
     fit: StackFit.expand,
     children: [
-      Opacity(opacity: _routeCover == null ? 1 : 0, child: widget.child),
+      Opacity(
+        opacity: _routeCover != null ||
+                (_effect == ReaderPageEffect.staggered && _sceneCoversPage &&
+                    widget.preview != null && _previewCover == null)
+            ? 0 : 1,
+        child: widget.child,
+      ),
       if (_presented case final frame? when !_sceneCoversPage && _previewCover == null && _routeCover == null)
         Positioned.fill(child: IgnorePointer(child: _pageImage(frame))),
       if (_routeCover case final cover?)
@@ -1542,10 +1638,10 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         ),
       if (_returnFrame case final frame?)
         Positioned.fill(key: const ValueKey('readium-return-page'), child: IgnorePointer(child: ExcludeSemantics(
-          child: RepaintBoundary(child: CustomPaint(
-            painter: _ReadiumParagraphTurn(frame, _returnClock, 1, true, false, enterFromBottom: true),
-          )),
+          child: RepaintBoundary(child: ClipRect(child: _entry(frame))),
         ))),
+      if (_coverInitialEntry && widget.entryReady)
+        Positioned.fill(child: IgnorePointer(child: ColoredBox(color: widget.paper))),
     ],
   );
 
@@ -1712,12 +1808,14 @@ class _ReadiumParagraphTurn extends CustomPainter {
     this.incoming,
     this.vertical, {
     this.enterFromBottom = false,
+    this.fillPaper = false,
   }) : super(repaint: clock);
 
   final ReadiumPageFrame frame;
   final Animation<double> clock;
   final double direction;
   final bool incoming, vertical, enterFromBottom;
+  final bool fillPaper;
   Size? _size;
   late List<({Rect source, Interval timing})> _parts;
   late double _scaleX, _scaleY;
@@ -1770,8 +1868,8 @@ class _ReadiumParagraphTurn extends CustomPainter {
 
   double _travel(Interval timing, double progress) {
     final fraction = timing.transform(progress);
-    final distance = (incoming ? 1 - fraction : -fraction) * direction;
-    return (distance * (enterFromBottom ? frame.image.height : frame.image.width)).roundToDouble();
+    final distance = (incoming ? 1 - fraction : -fraction) * (enterFromBottom ? 1 : direction);
+    return (distance * (enterFromBottom ? frame.image.height / 2 : frame.image.width)).roundToDouble();
   }
 
   Path visibleBands(Size size) {
@@ -1795,7 +1893,7 @@ class _ReadiumParagraphTurn extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
     final progress = clock.value;
-    if (enterFromBottom) {
+    if (fillPaper) {
       if (progress >= 1) {
         _drawReadiumPage(canvas, size, frame);
         return;
@@ -1822,7 +1920,7 @@ class _ReadiumParagraphTurn extends CustomPainter {
     }
     if (used == 0) return;
     canvas.save();
-    if (enterFromBottom) canvas.clipRect(Offset.zero & size, doAntiAlias: false);
+    if (fillPaper) canvas.clipRect(Offset.zero & size, doAntiAlias: false);
     canvas.scale(_scaleX, _scaleY);
     canvas.drawRawAtlas(frame.image, Float32List.sublistView(_transforms, 0, used),
         Float32List.sublistView(_sources, 0, used), null, null, null, _ink);
@@ -1836,7 +1934,7 @@ class _ReadiumParagraphTurn extends CustomPainter {
       old.incoming != incoming ||
       old.direction != direction ||
       old.vertical != vertical ||
-      old.enterFromBottom != enterFromBottom;
+      old.enterFromBottom != enterFromBottom || old.fillPaper != fillPaper;
 }
 
 /// Textured fold around a tilted cylindrical axis. One image shader and three

@@ -1673,6 +1673,7 @@ class _ReaderLoaderPageState extends State<ReaderLoaderPage> {
           repository: widget.repository,
           initialChapter: chapter,
           directEntry: true,
+          animateEntry: widget.state.hasRead(book.id),
         );
       }
       final preferences = _readerPreferences;
@@ -4314,6 +4315,8 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
   int? _resumeDirectory;
   final Set<String> _expandedVolumes = {};
   final Set<String> _directoryVolumeKeys = {};
+  final Set<int> _expandedDirectory = {};
+  NovelDirectoryHierarchy? _detailHierarchy;
   int? _directoryBook;
 
   List<({NovelVolume? volume, int? chapter})> _directory() {
@@ -4330,6 +4333,20 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
       paragraph: state.positionFor(novel.id)?.paragraphIndex ?? 0,
       offset: state.positionFor(novel.id)?.textOffset ?? 0,
     );
+    if (novel.navigation != null) {
+      final hierarchy = novel.directoryHierarchy;
+      if (!identical(_detailHierarchy, hierarchy)) {
+        _detailHierarchy = hierarchy;
+        _expandedDirectory
+          ..clear()
+          ..addAll(hierarchy.ancestorsOf(current));
+        _directoryBook = novel.id;
+      }
+      return [
+        for (final index in hierarchy.visible(_expandedDirectory, reversed: _catalogueReversed))
+          (volume: null, chapter: index),
+      ];
+    }
     for (final volume in volumes) {
       if (current >= volume.start &&
           current < volume.end &&
@@ -5465,6 +5482,8 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
   Widget _chapterRow(BuildContext context, int index) {
     final entry = novel.directory[index];
     final current = _resumeDirectory == index;
+    final branch = novel.navigation != null && novel.directoryHierarchy.hasChildren(index);
+    final expanded = _expandedDirectory.contains(index);
     return _cacheReactive(
       () => JellyTapSurface(
         key: ValueKey('detail-directory-entry-$index'),
@@ -5476,7 +5495,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
               : null,
         ),
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 16),
+          padding: EdgeInsets.only(top: 16, bottom: 16, left: entry.depth.clamp(0, 6) * 12.0),
           decoration: BoxDecoration(
             border: Border(
               bottom: BorderSide(
@@ -5488,6 +5507,15 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
+              if (branch)
+                GlassIconButton(
+                  key: ValueKey('detail-toc-toggle-$index'),
+                  icon: expanded ? CupertinoIcons.chevron_down : CupertinoIcons.chevron_right,
+                  label: expanded ? '收起 ${entry.title}' : '展开 ${entry.title}',
+                  onPressed: () => _changeDirectory(() {
+                    if (!_expandedDirectory.add(index)) _expandedDirectory.remove(index);
+                  }),
+                ),
               SizedBox(
                 width: 36,
                 child: AppText(
@@ -5611,6 +5639,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
           state: state,
           repository: repository,
           initialChapter: chapter,
+          animateEntry: target == null && _resumeChapter != null,
           initialPosition: target == null
               ? null
               : _bookTargetPosition(novel, target),
@@ -5657,6 +5686,7 @@ class ReaderPage extends StatefulWidget {
     required this.repository,
     required this.initialChapter,
     this.directEntry = false,
+    this.animateEntry = false,
     this.initialBookmark,
     this.initialPosition,
     this.dictionaryLauncher,
@@ -5667,6 +5697,7 @@ class ReaderPage extends StatefulWidget {
   final NovelRepository repository;
   final int initialChapter;
   final bool directEntry;
+  final bool animateEntry;
   final ReaderBookmark? initialBookmark;
   final ReadingPosition? initialPosition;
   final Future<bool> Function(String selectedText)? dictionaryLauncher;
@@ -5708,29 +5739,38 @@ class _ReaderPageState extends State<ReaderPage>
   Object? _nativePublication;
   bool _nativeInitialRestored = false;
   bool _nativeAutoBusy = false;
+  void _nativeEntry() {
+    if (!mounted || !widget.animateEntry) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _readium?.turns.animateEntry(widget.state.reduceMotion || !_activityRouteCurrent
+            ? ReaderPageEffect.none : _readerPreferences.pageEffect);
+      }
+    });
+  }
+
   void _restoreNativePosition() {
     final engine = _readium;
     final content = _currentContent;
-    if (_nativeInitialRestored ||
-        engine == null ||
-        !engine.ready ||
-        content == null)
-      return;
-    _nativeInitialRestored = true;
+    if (_nativeInitialRestored || engine == null || !engine.ready) return;
     final saved = _restorePending;
+    final needsRestore = saved != null && (!engine.hasSavedLocator ||
+        widget.initialBookmark != null || widget.initialPosition != null);
+    if (needsRestore && content == null) return;
+    _nativeInitialRestored = true;
     _restorePending = null;
     _restoring = false;
-    if (saved != null &&
-        (!engine.hasSavedLocator ||
-            widget.initialBookmark != null ||
-            widget.initialPosition != null)) {
+    if (needsRestore && content != null) {
       final i = saved.paragraphIndex;
       final text = i != null && i >= 0 && i < content.paragraphs.length
           ? content.paragraphs[i].substring(
               (saved.textOffset ?? 0).clamp(0, content.paragraphs[i].length),
             )
           : null;
-      unawaited(engine.go(_chapter, progression: saved.fraction, text: text));
+      unawaited(engine.go(_chapter, progression: saved.fraction, text: text)
+          .whenComplete(_nativeEntry));
+    } else {
+      _nativeEntry();
     }
   }
 
@@ -5756,10 +5796,6 @@ class _ReaderPageState extends State<ReaderPage>
     _restoreNativePosition();
     _syncReadingActivity();
     _scheduleAutoPage();
-    if (_ready && _chapterRevealPending) {
-      _chapterRevealPending = false;
-      _chapterReveal.forward(from: 0);
-    }
     final engine = _readium!;
     final key = '${engine.locator?.href}|${engine.fraction}';
     if (_ready && _nativeImageKey != key) {
@@ -5889,6 +5925,7 @@ class _ReaderPageState extends State<ReaderPage>
 
   void _nativeAction(String action, String text) {
     if (action == 'boundary') {
+      AppHaptics.play(context, HapticCue.boundary);
       if (text == '已到书籍末页') unawaited(_completeReadingAtEnd(present: false));
       showNovelFeedback(context, text);
       return;
@@ -6075,7 +6112,7 @@ class _ReaderPageState extends State<ReaderPage>
     }
     return ReaderTouchSurface(
       canRecord: () => _activityEligible && !_selection.value,
-      child: FadeTransition(opacity: _chapterReveal, child: bridge.view()),
+      child: bridge.view(),
     );
   }
 
@@ -6795,6 +6832,8 @@ class _ReaderPageState extends State<ReaderPage>
         initialChapter: _chapter,
         restoreLocator:
             widget.initialBookmark == null && widget.initialPosition == null,
+        coverInitialEntry: widget.animateEntry && !widget.state.reduceMotion &&
+            _readerPreferences.pageEffect != ReaderPageEffect.none,
         chromeVisible: _chromeTarget,
         onLocation: _nativeLocation,
         onPage: _pageBy,
@@ -6815,6 +6854,9 @@ class _ReaderPageState extends State<ReaderPage>
         onUserNavigation: () {
           _stopAutoScroll();
           _suspendListeningFollow();
+        },
+        onPageTurn: () {
+          if (mounted) AppHaptics.play(context, HapticCue.pageTurn);
         },
       )..addListener(_nativeChanged);
       _readium!.controls.addListener(_syncNativeChrome);
@@ -7341,6 +7383,8 @@ class _ReaderPageState extends State<ReaderPage>
     if (_readium != null) {
       if (!_nativeLocationChanging) {
         final nativeTicket = ++_chapterSwitchTicket;
+        final motion = !widget.state.reduceMotion && !MediaQuery.disableAnimationsOf(context);
+        final chapterEntrance = motion && index != _chapter && _readerPreferences.chapterEntrance;
         unawaited(
           _prepareContent(index)
               .then<void>((content) async {
@@ -7364,7 +7408,8 @@ class _ReaderPageState extends State<ReaderPage>
                   index,
                   progression: position?.fraction,
                   text: text,
-                  animated: animateNativeJump && !widget.state.reduceMotion,
+                  animated: animateNativeJump && motion,
+                  chapterEntrance: chapterEntrance,
                 );
               })
               .catchError((Object _) {}),
@@ -7671,7 +7716,7 @@ class _ReaderPageState extends State<ReaderPage>
           }
         });
         final reduce =
-            !_readerPreferences.chapterEntrance ||
+            _readium != null || !_readerPreferences.chapterEntrance ||
             widget.state.reduceMotion ||
             MediaQuery.disableAnimationsOf(context);
         if (reduce) {
@@ -7679,10 +7724,6 @@ class _ReaderPageState extends State<ReaderPage>
         } else {
           _chapterRevealPending = true;
           _chapterReveal.value = 0;
-        }
-        if (_readium != null && _ready && _chapterRevealPending) {
-          _chapterRevealPending = false;
-          _chapterReveal.forward(from: 0);
         }
       }
       return (content: content, error: null);
@@ -8059,7 +8100,6 @@ class _ReaderPageState extends State<ReaderPage>
         showNovelFeedback(context, '已到书籍末页');
         unawaited(_completeReadingAtEnd(present: false));
       } else {
-        AppHaptics.play(context, HapticCue.pageTurn);
         unawaited(
           _readium!.pageBy(
             direction,
@@ -8403,9 +8443,11 @@ class _ReaderPageState extends State<ReaderPage>
     if (index < 0) return;
     _stopAutoScroll();
     if (_readium case final engine?) {
+      final motion = !widget.state.reduceMotion && !MediaQuery.disableAnimationsOf(context);
       unawaited(
         engine
-            .goTarget(target, animated: animated && !widget.state.reduceMotion)
+            .goTarget(target, animated: animated && motion,
+              chapterEntrance: motion && _readerPreferences.chapterEntrance)
             .then((applied) {
               if (!applied && mounted) {
                 _go(index, position: _bookTargetPosition(_sourceBook, target), animateNativeJump: animated);
