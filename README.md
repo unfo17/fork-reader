@@ -1,3 +1,7 @@
+> **页间阅读 / Android preview** · [Current Readium fork guide](README_READIUM.md)
+>
+> The documentation below describes the upstream Wenku8 Flutter project.
+
 # Light Novel Library · Wenku8 Flutter
 
 <p>
@@ -30,7 +34,6 @@ Voluntary support. All features remain free.
   <img src="https://img.shields.io/badge/iOS-self--sign-555555?style=flat-square&amp;logo=apple&amp;logoColor=white" alt="iOS · Self-signing required" />
   <img src="https://img.shields.io/badge/HarmonyOS-self--sign-3157D5?style=flat-square" alt="HarmonyOS · Self-signing required" />
   <img src="https://img.shields.io/badge/Android_build-2277-65756E?style=flat-square" alt="Android build 2277" />
-  <a href="assets/licenses/GPL-3.0.txt"><img src="https://img.shields.io/badge/License-GPL--3.0-blue?style=flat-square&amp;logo=gnu&amp;logoColor=white" alt="GPL 3.0" /></a>
 </p>
 
 Milky glass, editorial typography, and a three-dimensional bookshelf. Discover a book, organize your local library, then settle into offline reading or text-to-speech.
@@ -141,7 +144,7 @@ This repository shares selected implementation code for reference. It contains r
 
 Thanks to the open-source component and font authors whose work this project uses. Each component retains its own copyright and license.
 
-- **Public source code:** The repository's existing [LICENSE](LICENSE) and [GPL v3 notice](assets/licenses/GPL-3.0.txt).
+- **Public source code:** See the [upstream license record](docs/THIRD_PARTY.md).
 - **Downloadable fonts:** Their respective SIL OFL 1.1 licenses.
 - **Online voice integration:** [rany2/edge-tts](https://github.com/rany2/edge-tts), [LGPL v3](assets/licenses/edge-tts.txt).
 

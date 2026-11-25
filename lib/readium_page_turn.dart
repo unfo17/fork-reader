@@ -92,6 +92,10 @@ class ReadiumPageTurnController {
     _owner?._finishDrag(commit);
   }
 
+  void followingDragStarted() {
+    if (_release?.isCompleted == true) _owner?._followingDragStarted();
+  }
+
   Future<void> drag(int direction) async {
     try {
       requestTurn(direction);
@@ -184,6 +188,10 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   bool _destinationReady = false;
   bool _dragPrepared = false;
   Future<void>? _settling;
+  static const _followingSettleDuration = Duration(milliseconds: 90);
+  bool _followingDrag = false;
+  double _settleTarget = 0;
+  Duration _settleDuration = Duration.zero;
   ReadiumPageFrame? _cached;
   Timer? _warmTimer;
   bool _warming = false;
@@ -413,7 +421,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       }
       if (gesture != null) {
         _finishDrag(finish);
-        await _settling;
+        await _waitForSettle();
       } else {
         await _clock.animateTo(1, duration: animated ? widget.preferences.pageSpeed.durationFor(_effect) : Duration.zero, curve: Curves.easeInOutCubic).orCancel;
       }
@@ -438,7 +446,9 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     } on TickerCanceled {
       // Route/viewport changed during settling.
     } finally {
-      _dragPrepared = false; _settling = null;
+      _dragPrepared = false;
+      _settling = null;
+      _followingDrag = false;
       _handoffTarget = null;
       _previewHandedOff = false;
       if (mounted) {
@@ -570,16 +580,46 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _dragPrepared = false;
     _nextDragTick = null;
     final target = commit ? (_destinationReady ? 1.0 : .92) : 0.0;
+    final duration = widget.preferences.pageSpeed.durationFor(_effect);
+    _animateSettle(
+      target,
+      _followingDrag && target == 1 && duration > _followingSettleDuration
+          ? _followingSettleDuration
+          : duration,
+    );
+  }
+
+  void _followingDragStarted() {
+    if (widget.preview == null || _followingDrag) return;
+    _followingDrag = true;
+    final elapsed = _clock.lastElapsedDuration ?? Duration.zero;
+    if (_settling != null && _settleTarget == 1 && _clock.isAnimating &&
+        _settleDuration - elapsed > _followingSettleDuration) {
+      _animateSettle(1, _followingSettleDuration);
+    }
+  }
+
+  void _animateSettle(double target, Duration duration) {
+    _settleTarget = target;
+    _settleDuration = duration;
     _settling = _clock
         .animateTo(
           target,
-          duration: _clock.value == target ? Duration.zero : widget.preferences.pageSpeed.durationFor(_effect),
+          duration: _clock.value == target ? Duration.zero : duration,
           curve: Curves.easeOutSine,
         )
         .orCancel
         .catchError((Object error) {
           if (error is! TickerCanceled) throw error;
         });
+  }
+
+  Future<void> _waitForSettle() async {
+    Future<void>? animation;
+    do {
+      animation = _settling;
+      await animation;
+    } while (animation != _settling);
   }
 
   @override

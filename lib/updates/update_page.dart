@@ -344,7 +344,7 @@ class _AppUpdatePromptRoute extends PopupRoute<bool>
                                 ),
                                 const SizedBox(height: 6),
                                 AppText(
-                                  '轻小说文库 ${release.version.name}',
+                                  '$appDisplayName ${release.version.name}',
                                   style: TextStyle(
                                     color: Theme.of(
                                       context,
@@ -455,7 +455,7 @@ class AppUpdatePage extends StatelessWidget {
               onPressed: () => Navigator.pop(context),
             ),
             title: const ArchiveRouteTitle(
-              title: '关于轻小说文库',
+              title: '关于$appDisplayName',
               code: 'SYSTEM / ABOUT',
             ),
           ),
@@ -468,7 +468,7 @@ class AppUpdatePage extends StatelessWidget {
               padding.bottom + 32,
             ),
             children: [
-              const ArchiveSection(title: '轻小说文库', code: 'WENKU8 / FLUTTER'),
+              const ArchiveSection(title: appDisplayName, code: 'READIUM'),
               const SizedBox(height: 12),
               AppText(
                 '当前版本 $version · 构建 $build',
@@ -616,7 +616,7 @@ class AppUpdatePage extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     const AppText(
-                      '公开源码遵循仓库许可证；第三方组件、字体及其贡献者的版权与许可分别保留。',
+                      projectLicenseNotice,
                       style: TextStyle(height: 1.6),
                     ),
                     const SizedBox(height: 12),
@@ -626,14 +626,14 @@ class AppUpdatePage extends StatelessWidget {
                     ),
                     const SizedBox(height: 12),
                     const AppText(
-                      '可下载字体遵循 SIL OFL 1.1；在线语音协议适配参考 rany2/edge-tts，遵循 LGPL v3。第三方组件的版权与完整授权分别保留在许可页中。',
+                      '可下载字体遵循 SIL OFL 1.1；在线语音协议适配参考 rany2/edge-tts，遵循 LGPL v3。完整许可见下方列表。',
                       style: TextStyle(height: 1.6),
                     ),
                     GlassTextButton(
                       key: const ValueKey('app-open-source-licenses'),
                       onPressed: () => showLicensePage(
                         context: context,
-                        applicationName: '轻小说文库',
+                        applicationName: appDisplayName,
                         applicationVersion: currentAppVersion,
                         applicationLegalese:
                             'Copyright © 2026 Wenku8 Flutter contributors',

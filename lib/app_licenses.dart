@@ -7,8 +7,17 @@ void registerAppLicenses() {
   _registered = true;
   LicenseRegistry.addLicense(() async* {
     yield LicenseEntryWithLineBreaks(const [
-      'Wenku8 Flutter · 公开源码',
+      '页间阅读 / Wenku8 Flutter · 仓库 LICENSE（GPL v2 原文）',
+    ], await rootBundle.loadString('LICENSE'));
+    yield LicenseEntryWithLineBreaks(const [
+      'GNU GPL v3 原文 · 上游声明及 LGPL v3 引用',
     ], await rootBundle.loadString('assets/licenses/GPL-3.0.txt'));
+    yield LicenseEntryWithLineBreaks(const [
+      'Flutter Readium 0.3.3 · Nota',
+    ], await rootBundle.loadString('third_party/flutter_readium/LICENSE'));
+    yield LicenseEntryWithLineBreaks(const [
+      'Readium Kotlin toolkit 3.2.0 · Readium',
+    ], await rootBundle.loadString('assets/licenses/readium-kotlin-toolkit.txt'));
     yield LicenseEntryWithLineBreaks(const [
       'Source Han Serif CN / TW · Adobe',
     ], await rootBundle.loadString('assets/fonts/OFL-SourceHanSerif.txt'));

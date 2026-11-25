@@ -2,7 +2,11 @@
 
 ## 应用源码
 
-公开源码沿用仓库既有 [LICENSE](../LICENSE) 与 [GPL v3 声明](../assets/licenses/GPL-3.0.txt)。第三方组件的源码、版权、许可和构建资料按各自条件保留。
+项目基于 [Wenku8 Flutter](https://github.com/mikufoxxx/Wenku8_Flutter) 的 `ebcd7f1891b54a92fc045c372974d70ec829f10a`。该提交的根目录 [LICENSE](../LICENSE) 是 GPL v2 原文，同一提交的上游文档同时引用 [GPL v3 声明](../assets/licenses/GPL-3.0.txt)。保留两份文本，项目许可版本有待上游确认。第三方组件保留各自的许可和署名。
+
+## EPUB 阅读引擎
+
+Android 使用 [Readium Kotlin toolkit 3.2.0](https://github.com/readium/kotlin-toolkit/tree/3.2.0) 与 [Flutter Readium 0.3.3](https://github.com/Notalib/flutter_readium)。两者均采用 BSD 3-Clause。原文随 [Readium Kotlin toolkit 许可证](../assets/licenses/readium-kotlin-toolkit.txt)、[Flutter Readium 许可证](../third_party/flutter_readium/LICENSE) 和应用内开源许可页分发。Flutter 插件的修改及对应源码保存在 `third_party/flutter_readium/`。
 
 此工程用于界面、阅读器、本地书库与相关模型开发。构建和导出方式见 [构建指南](RELEASING.md)。
 
@@ -40,9 +44,9 @@ OpenJDK 兼容库通过 Gradle 依赖引入，源码与构建脚本见 [google/d
 
 旧编码 TXT 检测使用 [juniversalchardet 2.0.4](https://github.com/albfernandez/juniversalchardet/tree/v2.0.4)。保留 MPL 1.1 / GPL 2.0-or-later / LGPL 2.1-or-later 三选一许可，本次分发选择 MPL 1.1。运行库源码、构建配置与许可在 `third_party/juniversalchardet-2.0.4/`；[来源记录](../third_party/JUNIVERSALCHARDET.md)与[原许可](../assets/licenses/juniversalchardet.txt)随应用提供。
 
-局域网续读使用 `cryptography` 2.9.0（Apache-2.0），仅在用户开启并配对后交换阅读位置、书签和分类，不使用外部服务器。旧 EPUB 定位迁移使用 `diff_match_patch` 0.4.1（Apache-2.0），仅在本机计算定位映射。系统朗读通过 Android 公开 TextToSpeech 服务发现与文件合成接口连接已安装引擎。
+局域网续读当前预览版已停用，依赖 `cryptography` 2.9.0（Apache-2.0）保留原许可。旧 EPUB 定位迁移使用 `diff_match_patch` 0.4.1（Apache-2.0），仅在本机计算定位映射。系统朗读通过 Android 公开 TextToSpeech 服务发现与文件合成接口连接已安装引擎。
 
-依赖版本锁定于 `pubspec.lock`。Flutter、Cupertino Icons、音频与存储插件保留各自许可；Flutter 构建生成的许可集合可在 **设置 → 关于轻小说文库 → 开源许可与字体授权** 查看。该页面也包括可下载字体与协议适配声明。
+依赖版本锁定于 `pubspec.lock`。Flutter、Cupertino Icons、音频与存储插件保留各自许可；Flutter 构建生成的许可集合可在 **我的 → 关于页间阅读 → 开源许可与字体授权** 查看。该页面也包括可下载字体与协议适配声明。
 
 液态玻璃基于 [liquid_glass_easy 5.0.0](https://pub.dev/packages/liquid_glass_easy/versions/5.0.0)，作者 Ahmed Gamil，使用 MIT License。源码和原许可保留于 [`third_party/liquid_glass_easy`](../third_party/liquid_glass_easy)；本地 GPU 性能修改单独记录在 [`PATCHES.md`](../third_party/liquid_glass_easy/PATCHES.md)。应用保留原作者署名，版权与许可随源码及 Flutter 的开源许可集合分发。
 

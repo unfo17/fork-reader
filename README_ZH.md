@@ -1,3 +1,7 @@
+> **页间阅读 · Android 预览** · [本分支使用说明](README_READIUM.md)
+>
+> 下方为 Wenku8 Flutter 的上游项目文档。
+
 # 轻小说文库 · Wenku8 Flutter
 
 <p>
@@ -30,7 +34,6 @@
   <img src="https://img.shields.io/badge/iOS-self--sign-555555?style=flat-square&amp;logo=apple&amp;logoColor=white" alt="iOS · 自行签名" />
   <img src="https://img.shields.io/badge/HarmonyOS-self--sign-3157D5?style=flat-square" alt="HarmonyOS · 自行签名" />
   <img src="https://img.shields.io/badge/Android_build-2277-65756E?style=flat-square" alt="Android build 2277" />
-  <a href="assets/licenses/GPL-3.0.txt"><img src="https://img.shields.io/badge/License-GPL--3.0-blue?style=flat-square&amp;logo=gnu&amp;logoColor=white" alt="GPL 3.0" /></a>
 </p>
 
 奶白玻璃、档案式排版与立体书架。从发现一本书，到整理本地书库、离线阅读和听书，让每一次打开都回到故事本身。
@@ -141,7 +144,7 @@
 
 感谢本项目使用的开源组件、字体及其贡献者。各组件的版权和许可分别保留。
 
-- **公开源码**：沿用仓库既有 [LICENSE](LICENSE) 与 [GPL v3 声明](assets/licenses/GPL-3.0.txt)。
+- **公开源码**：参见 [上游许可记录](docs/THIRD_PARTY.md)。
 - **可下载字体**：遵循各自的 SIL OFL 1.1 许可。
 - **在线语音适配**：[rany2/edge-tts](https://github.com/rany2/edge-tts)，[LGPL v3](assets/licenses/edge-tts.txt)。
 

@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.util.AttributeSet
 import android.view.View
 import android.view.MotionEvent
+import android.view.VelocityTracker
 import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.widget.LinearLayout
@@ -142,9 +143,9 @@ class ReadiumReaderWidget(
 
         layout = AppPageGestureLayout(context, attrs,
             ownsGesture = { ReadiumReader.appOwnsPageGestures() },
-            onSwipe = { phase, dx, dy, y ->
+            onSwipe = { phase, dx, dy, y, velocityX ->
                 val density = context.resources.displayMetrics.density
-                emitPageSwipe(phase, dx / density, dy / density, y)
+                channel.onReaderDrag(phase, dx / density, dy / density, y, velocityX / density)
             })
         layout.id = generateViewId()
         layout.setBackgroundColor(Color.TRANSPARENT)
@@ -197,7 +198,6 @@ class ReadiumReaderWidget(
         }
     }
 
-    private fun emitPageSwipe(phase: String, dx: Float, dy: Float, y: Float) { channel.onReaderDrag(phase, dx, dy, y) }
 
     override fun onPageLoaded() {
         PluginLog.d(TAG, "::onPageLoaded")
@@ -533,13 +533,40 @@ private class AppPageGestureLayout(
     context: Context,
     attrs: AttributeSet?,
     private val ownsGesture: () -> Boolean,
-    private val onSwipe: (String, Float, Float, Float) -> Unit,
+    private val onSwipe: (String, Float, Float, Float, Float) -> Unit,
 ) : LinearLayout(context, attrs) {
-    private val slop = ViewConfiguration.get(context).scaledTouchSlop
+    private val configuration = ViewConfiguration.get(context)
+    private val slop = configuration.scaledTouchSlop
+    private var velocityTracker: VelocityTracker? = null
     private var downX = 0f
     private var downY = 0f
     private var dragging = false
     private var multiplePointers = false
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            recycleVelocityTracker()
+            if (ownsGesture()) velocityTracker = VelocityTracker.obtain()
+        }
+        velocityTracker?.addMovement(event)
+        try {
+            return super.dispatchTouchEvent(event)
+        } finally {
+            if (event.actionMasked == MotionEvent.ACTION_UP ||
+                event.actionMasked == MotionEvent.ACTION_CANCEL) recycleVelocityTracker()
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        recycleVelocityTracker()
+        super.onDetachedFromWindow()
+    }
+
+    private fun recycleVelocityTracker() {
+        velocityTracker?.recycle()
+        velocityTracker = null
+    }
+
     override fun requestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
         // The child may request exclusivity before it knows the drag direction.
         // Retain interception only while the app owns paginated page gestures.
@@ -564,7 +591,7 @@ private class AppPageGestureLayout(
                     // Own that same displacement before its native scroller starts.
                     kotlin.math.abs(dx) > slop) {
                     dragging = true
-                    onSwipe("Start", dx, dy, (downY / height.coerceAtLeast(1)).coerceIn(0f, 1f))
+                    onSwipe("Start", dx, dy, (downY / height.coerceAtLeast(1)).coerceIn(0f, 1f), 0f)
                     parent?.requestDisallowInterceptTouchEvent(true)
                     return true
                 }
@@ -578,25 +605,36 @@ private class AppPageGestureLayout(
         when (event.actionMasked) {
             MotionEvent.ACTION_POINTER_DOWN -> {
                 multiplePointers = true
-                onSwipe("Cancel", event.x - downX, event.y - downY, (event.y / height.coerceAtLeast(1)).coerceIn(0f, 1f))
+                emitSwipe("Cancel", event)
             }
             MotionEvent.ACTION_MOVE -> {
                 if (!multiplePointers && ownsGesture()) {
-                    onSwipe("Move", event.x - downX, event.y - downY,
-                        (event.y / height.coerceAtLeast(1)).coerceIn(0f, 1f))
+                    emitSwipe("Move", event)
                 }
             }
             MotionEvent.ACTION_UP -> {
                 dragging = false
                 parent?.requestDisallowInterceptTouchEvent(false)
-                if (!multiplePointers && ownsGesture()) onSwipe("End", event.x - downX, event.y - downY, (event.y / height.coerceAtLeast(1)).coerceIn(0f, 1f))
+                if (!multiplePointers) {
+                    if (ownsGesture()) {
+                        velocityTracker?.computeCurrentVelocity(1000, configuration.scaledMaximumFlingVelocity.toFloat())
+                        emitSwipe("End", event, velocityTracker?.xVelocity ?: 0f)
+                    } else {
+                        emitSwipe("Cancel", event)
+                    }
+                }
             }
             MotionEvent.ACTION_CANCEL -> {
-                onSwipe("Cancel", event.x - downX, event.y - downY, (event.y / height.coerceAtLeast(1)).coerceIn(0f, 1f))
+                if (!multiplePointers) emitSwipe("Cancel", event)
                 dragging = false
                 parent?.requestDisallowInterceptTouchEvent(false)
             }
         }
         return true
+    }
+
+    private fun emitSwipe(phase: String, event: MotionEvent, velocityX: Float = 0f) {
+        val y = (event.y / height.coerceAtLeast(1)).coerceIn(0f, 1f)
+        onSwipe(phase, event.x - downX, event.y - downY, y, velocityX)
     }
 }

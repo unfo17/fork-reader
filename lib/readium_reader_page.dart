@@ -18,23 +18,7 @@ import 'readium_page_turn.dart';
 class _PendingReaderDrag {
   _PendingReaderDrag(this.start);
   final Map<String, dynamic> start;
-  final clock = Stopwatch()..start();
   Map<String, dynamic>? latest;
-  double? velocity;
-  int _lastMove = 0;
-
-  void update(Map<String, dynamic> event) {
-    final dx = (event['dx'] as num).toDouble();
-    final lastDx = ((latest ?? start)['dx'] as num).toDouble();
-    final now = clock.elapsedMicroseconds;
-    if (dx != lastDx && now > _lastMove) {
-      velocity = (dx - lastDx) * 1000000 / (now - _lastMove);
-      _lastMove = now;
-    } else if (now - _lastMove > 100000) {
-      velocity = 0;
-    }
-    latest = event;
-  }
 }
 
 /// Engine adapter only. ReaderPage retains every Flutter control and panel.
@@ -159,13 +143,14 @@ class ReadiumReaderBridge extends ChangeNotifier {
       if (_pagePending) {
         _pendingDrag = _PendingReaderDrag(event);
         _pendingTap = null;
+        if (!_receivingDrag) turns.followingDragStarted();
       } else {
         _startPageDrag(event);
       }
       return;
     }
     if (_pendingDrag case final pending?) {
-      pending.update(event);
+      pending.latest = event;
     } else if (_receivingDrag) {
       _updatePageDrag(event);
     }
@@ -193,14 +178,17 @@ class ReadiumReaderBridge extends ChangeNotifier {
     }));
   }
 
-  void _updatePageDrag(Map<String, dynamic> event, {double? releaseVelocity}) {
+  void _updatePageDrag(Map<String, dynamic> event) {
     final phase = event['phase'];
     if (phase != 'Cancel') {
       turns.updateDrag((event['dx'] as num).toDouble(), touchY: (event['y'] as num?)?.toDouble());
     }
     if (phase == 'End' || phase == 'Cancel') {
       _receivingDrag = false;
-      turns.endDrag(cancel: phase == 'Cancel', releaseVelocity: releaseVelocity);
+      turns.endDrag(
+        cancel: phase == 'Cancel',
+        releaseVelocity: (event['velocityX'] as num?)?.toDouble(),
+      );
     }
   }
 
@@ -212,7 +200,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     if (!_disposed && _owner == this && ready) {
       if (drag != null && drag.latest?['phase'] != 'Cancel') {
         _startPageDrag(drag.start);
-        if (drag.latest case final event?) _updatePageDrag(event, releaseVelocity: drag.velocity);
+        if (drag.latest case final event?) _updatePageDrag(event);
         return;
       }
       if (tap != null) {

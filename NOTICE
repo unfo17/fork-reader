@@ -1,8 +1,14 @@
-Wenku8 Flutter
+页间阅读, derived from Wenku8 Flutter
 
-The repository's existing LICENSE and assets/licenses/GPL-3.0.txt apply to
-published source files. Third-party components retain their own copyrights
-and license conditions.
+The upstream root LICENSE contains GPL version 2. Its documentation also
+references a GPL version 3 declaration. Both texts are retained pending
+clarification from upstream. Third-party components retain their own
+copyrights and license conditions.
+
+Flutter Readium 0.3.3, Copyright (c) 2026 Royal Danish Library, BSD-3-Clause.
+Its source, license and local modifications are in third_party/flutter_readium/.
+Readium Kotlin toolkit 3.2.0, Copyright (c) 2017 Readium, BSD-3-Clause.
+Its original license is in assets/licenses/readium-kotlin-toolkit.txt.
 
 Implementation changes, September-October 2026:
 New Flutter presentation, reader, local library/cache, Android bridges and

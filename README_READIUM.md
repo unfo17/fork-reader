@@ -1,4 +1,4 @@
-# Wenku8 Readium fork
+# 页间阅读
 
 基于 `mikufoxxx/Wenku8_Flutter` 的 `master`，基线提交为
 `ebcd7f1891b54a92fc045c372974d70ec829f10a`（0.5.6+2277）。
@@ -63,3 +63,7 @@ Readium 的平台视图覆盖整个阅读页面，外部不再加正文留白。
 `ReadiumPageSurface` 在翻页期间保留前后两张 Readium 页面图像，并复用 `ReaderTurnScope`、`ReaderSheetMotion` 和 `ReaderSpineTurn` 的动画。段落接续的分段取自当前 Readium DOM 的可见块边界，不另行分页或渲染文字。翻页结束即释放图像。
 
 Android 点击与分页拖动通过 Readium `InputListener` 接入原控件，书内链接、脚注和选区优先由 Readium 处理。
+
+## 开源许可
+
+应用内「我的 → 关于页间阅读 → 开源许可与字体授权」提供 Readium、字体和其他组件的许可。项目的上游许可差异及组件来源见 [第三方许可](docs/THIRD_PARTY.md)。

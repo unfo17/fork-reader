@@ -1,8 +1,9 @@
 import 'package:flutter/painting.dart';
 
 import 'reading_visual_theme.dart';
+import 'updates/release_notices.dart' show appDisplayName;
 
-const readingExportBrandName = '轻小说文库';
+const readingExportBrandName = appDisplayName;
 
 /// Resolve artwork once for a surface's snapshot. An artwork date does not add
 /// a recorded date to the content; dateless excerpts can still follow the season.

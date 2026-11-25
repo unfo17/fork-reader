@@ -203,6 +203,7 @@ assets/licenses/opencc.txt
 assets/licenses/pdfbox-notice.txt
 assets/licenses/pdfbox.txt
 assets/licenses/poi.txt
+assets/licenses/readium-kotlin-toolkit.txt
 assets/opencc/HKVariants.txt
 assets/opencc/README.md
 assets/opencc/STCharacters.txt

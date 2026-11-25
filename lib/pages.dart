@@ -125,6 +125,7 @@ import 'wenku_features.dart';
 import 'legacy_import_page.dart';
 import 'legacy_transport.dart';
 import 'review_pages.dart';
+import 'updates/release_notices.dart' show appDisplayName;
 
 export 'app_ui.dart' show sectionHeader;
 
@@ -827,7 +828,7 @@ class HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
                     title: switch (_searchScope) {
                       1 => '书架',
                       2 => '本地',
-                      _ => '轻小说文库',
+                      _ => appDisplayName,
                     },
                     code: switch (_searchScope) {
                       1 => '02 / PERSONAL ARCHIVE',
@@ -998,7 +999,7 @@ class DiscoverPage extends StatelessWidget {
     children: [
       Expanded(
         child: const ArchiveMasthead(
-          title: '轻小说文库',
+          title: appDisplayName,
           code: 'WENKU8 / READING ARCHIVE',
           brand: true,
         ),

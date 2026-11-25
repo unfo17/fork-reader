@@ -31,7 +31,7 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-        manifestPlaceholders["wenkuAppLabel"] = "轻小说文库 · 源码预览"
+        manifestPlaceholders["wenkuAppLabel"] = "页间阅读"
         // AGP otherwise builds upstream desktop utilities too, including the
         // DRM tool whose encryption code is intentionally disabled in this app.
         externalNativeBuild.cmake.targets.addAll(listOf("mobi", "wenku_mobi"))
