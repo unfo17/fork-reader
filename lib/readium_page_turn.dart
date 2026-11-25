@@ -37,7 +37,7 @@ class _ReadiumMotionShape extends ChangeNotifier {
 }
 
 class _ReadiumOverlap {
-  static const partialReveal = .48;
+  static const partialReveal = .32;
 
   _ReadiumOverlap({
     required TickerProvider vsync,
@@ -326,8 +326,21 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       WidgetsBinding.instance.addPostFrameCallback((_) => previous.dispose());
     }
   }
-  int _radius(ReadiumPageFrame frame) => frame.image.width * frame.image.height * 4 * (2 * widget.lookAhead + 1) <= 64 * 1024 * 1024 ? widget.lookAhead : 1;
-  bool get _windowComplete => _cached != null && _neighbors.length + _edges.length >= 2 * _radius(_cached!);
+  List<int> _warmOffsets(ReadiumPageFrame frame) {
+    final ahead = _dragDirection, behind = -ahead;
+    if (widget.lookAhead < 2) return [ahead, behind];
+    final bytes = frame.image.width * frame.image.height * 4;
+    if (5 * bytes <= 64 * 1024 * 1024) {
+      return [ahead, behind, 2 * ahead, 2 * behind];
+    }
+    // Keep two forward pages at 1440p without retaining five full textures.
+    if (4 * bytes <= 80 * 1024 * 1024) return [ahead, 2 * ahead, behind];
+    return [ahead, behind];
+  }
+
+  bool get _windowComplete => _cached != null && _warmOffsets(_cached!).every(
+    (offset) => _neighbors.containsKey(offset) || _edges.contains(offset),
+  );
   void _prioritizeTurn(int direction) {
     if (!_preparationInterrupted) widget.onPrioritize?.call();
     _dragDirection = direction;
@@ -363,13 +376,14 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   }
 
   void _shiftWindow(int direction, ReadiumPageFrame from) {
-    final radius = _radius(from), shifted = <int, ReadiumPageFrame>{};
+    final offsets = _warmOffsets(from);
+    final shifted = <int, ReadiumPageFrame>{};
     for (final entry in _neighbors.entries) {
       final offset = entry.key - direction;
-      if (offset != 0 && offset.abs() <= radius) { shifted[offset] = entry.value; }
+      if (offsets.contains(offset)) { shifted[offset] = entry.value; }
       else { entry.value.dispose(); }
     }
-    final edges = _edges.map((offset) => offset - direction).where((offset) => offset != 0 && offset.abs() <= radius).toSet();
+    final edges = _edges.map((offset) => offset - direction).where(offsets.contains).toSet();
     _neighbors..clear()..addAll(shifted);
     _edges..clear()..addAll(edges);
     _neighbors[-direction]?.dispose();
@@ -385,7 +399,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   Future<void> _prepareNeighbors(ReadiumPageFrame origin, {int? requiredDirection}) async {
     if (widget.preview == null) return;
     if (requiredDirection != null && (_neighbors.containsKey(requiredDirection) || _edges.contains(requiredDirection))) return;
-    if (requiredDirection == null && _neighbors.length + _edges.length >= 2 * _radius(origin)) return;
+    if (requiredDirection == null && _windowComplete) return;
     if (_preparing != null) return _preparing;
     final key = widget.frameKey;
     final done = Completer<void>();
@@ -393,10 +407,17 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     if (mounted) setState(() => _previewCover = origin.retain());
     await WidgetsBinding.instance.endOfFrame;
     try {
-      final bias = _dragDirection;
       final offsets = requiredDirection == null
-          ? [bias, -bias, if (_radius(origin) > 1) bias * 2, if (_radius(origin) > 1) -bias * 2]
+          ? _warmOffsets(origin)
           : [requiredDirection];
+      if (requiredDirection == null) {
+        _neighbors.removeWhere((offset, frame) {
+          if (offsets.contains(offset)) return false;
+          frame.dispose();
+          return true;
+        });
+        _edges.retainWhere(offsets.contains);
+      }
       for (final direction in offsets) {
         if (!mounted || key != widget.frameKey || _routePaused || (requiredDirection == null && _preparationInterrupted)) break;
         if (direction.abs() > 1 && _edges.contains(direction.sign)) { _edges.add(direction); continue; }
@@ -646,8 +667,15 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       if (overlap.direction == direction) break;
       direction = overlap.direction;
     }
-    if (_trackingOverlap == overlap) {
-      _paintDrag();
+    if (_trackingOverlap == overlap && overlap.target != null) {
+      final progress = math.min(widget.controller._progress, .85);
+      if (progress > overlap.clock.value) {
+        unawaited(overlap.clock.animateTo(
+          progress, duration: const Duration(milliseconds: 55), curve: Curves.easeOut,
+        ).orCancel.catchError((Object error) {
+          if (error is! TickerCanceled) throw error;
+        }));
+      }
     } else if (overlap.released.isCompleted) {
       overlap.settle();
     }
@@ -685,6 +713,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         if (landed && target != null) {
           _cached?.dispose();
           _cached = target.retain();
+          _dragDirection = overlap.direction;
           _shiftWindow(overlap.direction, overlap.from);
           _holdPresentedPage(target);
         }
