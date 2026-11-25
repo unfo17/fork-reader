@@ -8449,14 +8449,16 @@ class _ReaderPageState extends State<ReaderPage>
     _followScroll.cancel();
     _listeningTarget = null;
     if (state == AppLifecycleState.resumed) {
+      final animateReturn = _animateReadingReturn;
+      _animateReadingReturn = false;
       if (mounted && _readium != null) {
-        if (_animateReadingReturn && _activityRouteCurrent &&
-            !widget.state.reduceMotion) _readium?.turns.animateReturn();
         setState(() {});
       }
-      _animateReadingReturn = false;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _listeningChanged();
+        if (!mounted) return;
+        if (animateReturn && _activityForeground && _activityRouteCurrent &&
+            !widget.state.reduceMotion) _readium?.turns.animateReturn();
+        _listeningChanged();
       });
     }
   }

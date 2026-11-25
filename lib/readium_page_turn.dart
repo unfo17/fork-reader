@@ -321,6 +321,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   _ReadiumPaperGrab? _paperGrab;
   ReadiumPageFrame? _cached;
   ReadiumPageFrame? _refilledFrom;
+  bool _refilling = false;
   Timer? _warmTimer;
   bool _warming = false;
   Completer<void>? _warmDone;
@@ -725,6 +726,9 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         index == 0 ? _cached ?? _from : _neighbors[index];
     final previous = at(offset - 1), next = at(offset + 1);
     if (_edges.contains(offset + direction)) return false;
+    if (_refilling && _preparingOffset != offset + direction) {
+      widget.onPrioritize?.call();
+    }
     _stopReturnAnimation();
     final overlap = _ReadiumOverlap(
       vsync: this,
@@ -877,8 +881,12 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       !_neighbors.containsKey(offset) && !_edges.contains(offset)).firstOrNull;
     if (nearest == null) return;
     _refilledFrom = origin;
+    _refilling = true;
     unawaited(_prepareNeighbors(origin, requiredDirection: nearest)
-      .whenComplete(_offerNextTurn));
+      .whenComplete(() {
+        _refilling = false;
+        _offerNextTurn();
+      }));
   }
 
   Future<void> _adoptReleasedOverlaps() async {
