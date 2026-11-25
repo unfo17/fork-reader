@@ -234,6 +234,8 @@ class ReadiumPageTurnController {
 
   void requestTurn(int direction) => _owner?._prioritizeTurn(direction);
 
+  void animateReturn() => _owner?._animateReturn();
+
   Future<void> freezeForRoute() async => _owner?._freezeForRoute();
   Future<void> thawAfterRoute() async => _owner?._thawAfterRoute();
 
@@ -267,6 +269,7 @@ class ReadiumPageSurface extends StatefulWidget {
     this.land,
     this.layoutKey,
     this.lookAhead = 1,
+    this.rightToLeft = false,
     this.onPrioritize,
     this.onTurnAvailable,
     this.replayTap,
@@ -280,6 +283,7 @@ class ReadiumPageSurface extends StatefulWidget {
   final String frameKey;
   final String? layoutKey;
   final int lookAhead;
+  final bool rightToLeft;
   final double refreshRateLimit;
   final VoidCallback? onPrioritize;
   final VoidCallback? onTurnAvailable;
@@ -295,6 +299,11 @@ class ReadiumPageSurface extends StatefulWidget {
 class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     with TickerProviderStateMixin {
   late final _clock = AnimationController(vsync: this);
+  late final _returnClock = AnimationController(
+    vsync: this, duration: const Duration(milliseconds: 240),
+  );
+  bool _returning = false;
+  ReadiumPageFrame? _returnFrame;
   ReadiumPageFrame? _from, _to;
   ReaderPageEffect _effect = ReaderPageEffect.none;
   double _direction = 1;
@@ -311,6 +320,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   bool _overlapLandingFailed = false;
   _ReadiumPaperGrab? _paperGrab;
   ReadiumPageFrame? _cached;
+  ReadiumPageFrame? _refilledFrom;
   Timer? _warmTimer;
   bool _warming = false;
   Completer<void>? _warmDone;
@@ -318,6 +328,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   final _neighbors = <int, ReadiumPageFrame>{};
   final _edges = <int>{};
   Future<void>? _preparing;
+  int? _preparingOffset;
   ReadiumPageFrame? _previewCover;
   int _dragDirection = 1;
   bool _adoptingPage = false;
@@ -329,6 +340,10 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   int? _scrubCallback;
   Duration? _nextDragTick;
   bool _shapeChanged = false;
+
+  double _visualDirection(int direction) =>
+      (widget.rightToLeft || widget.preferences.mode == ReaderMode.vertical
+          ? -direction : direction).toDouble();
 
   Widget _pageImage(ReadiumPageFrame frame) => RawImage(
     image: frame.image,
@@ -353,27 +368,55 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   }
   List<int> _warmOffsets(ReadiumPageFrame frame) {
     final ahead = _dragDirection, behind = -ahead;
-    if (widget.lookAhead < 2) return [ahead, behind];
     final bytes = frame.image.width * frame.image.height * 4;
-    if (5 * bytes <= 64 * 1024 * 1024) {
-      return [ahead, behind, 2 * ahead, 2 * behind];
-    }
-    // Keep two forward pages at 1440p without retaining five full textures.
-    if (4 * bytes <= 80 * 1024 * 1024) return [ahead, 2 * ahead, behind];
-    return [ahead, behind];
+    final slots = ((96 * 1024 * 1024 ~/ bytes) - 1)
+        .clamp(2, math.max(2, 2 * widget.lookAhead));
+    return [for (var slot = 0; slot < slots; slot++)
+      (slot ~/ 2 + 1) * (slot.isEven ? ahead : behind)];
   }
 
   bool get _windowComplete => _cached != null && _warmOffsets(_cached!).every(
     (offset) => _neighbors.containsKey(offset) || _edges.contains(offset),
   );
   void _prioritizeTurn(int direction) {
-    if (!_preparationInterrupted) widget.onPrioritize?.call();
+    _stopReturnAnimation();
+    if (!_preparationInterrupted && _preparingOffset != direction) {
+      widget.onPrioritize?.call();
+    }
     _dragDirection = direction;
     _preparationInterrupted = true;
     _warmTimer?.cancel();
   }
 
+  void _animateReturn() {
+    if (!mounted || _routePaused || MediaQuery.disableAnimationsOf(context)) return;
+    _stopReturnAnimation();
+    setState(() {
+      _returning = true;
+      _returnFrame = _busy ? null : (_presented ?? _cached)?.retain();
+    });
+    unawaited(_returnClock.forward(from: 0).orCancel.then((_) {
+      if (mounted) _stopReturnAnimation();
+    }).catchError((Object error) {
+      if (error is! TickerCanceled) throw error;
+    }));
+  }
+
+  void _stopReturnAnimation() {
+    if (!_returning) return;
+    _returnClock.stop();
+    final frame = _returnFrame;
+    setState(() {
+      _returning = false;
+      _returnFrame = null;
+    });
+    if (frame != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => frame.dispose());
+    }
+  }
+
   Future<void> _freezeForRoute() async {
+    _stopReturnAnimation();
     widget.onPrioritize?.call();
     _routePaused = true;
     _preparationInterrupted = true;
@@ -423,10 +466,20 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
 
   Future<void> _prepareNeighbors(ReadiumPageFrame origin, {int? requiredDirection}) async {
     if (widget.preview == null) return;
+    final key = widget.frameKey;
+    if (requiredDirection != null) {
+      // A request that arrives during speculative work must still get its
+      // own page if that worker was preparing the opposite side.
+      while (_preparing != null) {
+        await _preparing;
+        if (!mounted || key != widget.frameKey) return;
+        if (_neighbors.containsKey(requiredDirection) ||
+            _edges.contains(requiredDirection)) return;
+      }
+    }
     if (requiredDirection != null && (_neighbors.containsKey(requiredDirection) || _edges.contains(requiredDirection))) return;
     if (requiredDirection == null && _windowComplete) return;
     if (_preparing != null) return _preparing;
-    final key = widget.frameKey;
     final done = Completer<void>();
     _preparing = done.future;
     if (mounted) setState(() => _previewCover = origin.retain());
@@ -447,6 +500,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         if (!mounted || key != widget.frameKey || _routePaused || (requiredDirection == null && _preparationInterrupted)) break;
         if (direction.abs() > 1 && _edges.contains(direction.sign)) { _edges.add(direction); continue; }
         if (_neighbors.containsKey(direction) || _edges.contains(direction)) continue;
+        _preparingOffset = direction;
         ReadiumPageFrame? frame;
         try { frame = await widget.preview!(direction, origin); } catch (_) { continue; }
         if (!mounted || key != widget.frameKey) { frame?.dispose(); break; }
@@ -459,6 +513,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       _previewCover = null;
       cover?.dispose();
       _preparing = null;
+      _preparingOffset = null;
       done.complete();
     }
   }
@@ -491,7 +546,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     setState(() {
       _to = _neighbors[direction];
       _handoffTarget = _to;
-      _direction = direction * (widget.preferences.mode == ReaderMode.vertical ? -1 : 1);
+      _direction = _visualDirection(direction);
       _clock.value = 0;
     });
     if (_neighbors[direction] == null && !_edges.contains(direction) && _from != null) {
@@ -542,7 +597,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         _from = from; _to = _neighbors[initialDirection];
         _handoffTarget = _to;
         _effect = widget.preferences.pageEffect;
-        _direction = initialDirection * (widget.preferences.mode == ReaderMode.vertical ? -1 : 1);
+        _direction = _visualDirection(initialDirection);
         _destinationReady = true;
         _liveDestination = false;
         _clock.value = gesture == null || _to == null ? 0 : math.min(widget.controller._progress, .85);
@@ -572,6 +627,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
           _primaryAdopted = true;
           _handoffTarget = null;
           _startNativeOverlaps();
+          _refillAdoptedPage();
           return true;
         } catch (_) {
           return false;
@@ -608,7 +664,10 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
               _holdPresentedPage(target);
               _from = _to = null;
             });
-            await _retireSettledOverlaps();
+            do {
+              await _retireSettledOverlaps();
+              await _preparing;
+            } while (mounted && _overlaps.isNotEmpty);
           }
         }
       }
@@ -618,6 +677,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       _dragPrepared = false;
       _settling = null;
       _primaryCommit = _primaryAdopted = false;
+      _refilledFrom = null;
       _releaseAbandonedGrab();
       _clearOverlaps();
       _handoffTarget = null;
@@ -653,7 +713,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     if (!mounted || !_primaryCommit || _routePaused || _overlapLandingFailed ||
         _overlaps.length >= 4) return false;
     final tail = _overlaps.lastOrNull;
-    final origin = tail == null ? _to : tail.target;
+    final origin = tail == null ? (_to ?? (_primaryAdopted ? _cached : null)) : tail.target;
     if (origin == null || (tail != null && !tail.committed)) return false;
     // The offsets are relative to the last native page that has been adopted.
     // The cache moves only when Readium confirms the corresponding locator.
@@ -664,6 +724,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         index == 0 ? _cached ?? _from : _neighbors[index];
     final previous = at(offset - 1), next = at(offset + 1);
     if (_edges.contains(offset + direction)) return false;
+    _stopReturnAnimation();
     final overlap = _ReadiumOverlap(
       vsync: this,
       origin: origin,
@@ -709,6 +770,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       overlap.settling = grab.released.future;
     }
     clock.stop();
+    _stopReturnAnimation();
     return true;
   }
 
@@ -801,7 +863,21 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _nativeOverlaps = _adoptReleasedOverlaps().whenComplete(() {
       _nativeOverlaps = null;
       _startNativeOverlaps();
+      _refillAdoptedPage();
     });
+  }
+
+  void _refillAdoptedPage() {
+    if (!mounted || !_busy || !_primaryAdopted || _routePaused ||
+        _nativeOverlaps != null || _preparing != null || _overlapLandingFailed) return;
+    final origin = _cached;
+    if (origin == null || identical(_refilledFrom, origin)) return;
+    final nearest = _warmOffsets(origin).where((offset) =>
+      !_neighbors.containsKey(offset) && !_edges.contains(offset)).firstOrNull;
+    if (nearest == null) return;
+    _refilledFrom = origin;
+    unawaited(_prepareNeighbors(origin, requiredDirection: nearest)
+      .whenComplete(_offerNextTurn));
   }
 
   Future<void> _adoptReleasedOverlaps() async {
@@ -820,6 +896,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         if (!mounted || overlap.landed.isCompleted) return;
       }
       final target = overlap.committed ? overlap.target : null;
+      await _preparing;
+      if (!mounted || overlap.landed.isCompleted) return;
       final landed = target == null || await widget.land!(target).catchError((Object _) => false);
       if (!mounted || overlap.landed.isCompleted) return;
       if (landed && target != null) {
@@ -885,7 +963,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
 
   void _warmLater() {
     _warmTimer?.cancel();
-    _warmTimer = Timer(Duration(milliseconds: _cached == null ? 48 : 180), () async {
+    _warmTimer = Timer(Duration(milliseconds: _cached == null ? 48 : 32), () async {
       if (!mounted || _busy || _warming || _routePaused || _preparationInterrupted) return;
       if ((_cached != null && (widget.preview == null || _windowComplete)) ||
           !widget.preferences.mode.paginated || widget.preferences.pageEffect == ReaderPageEffect.none) {
@@ -1035,6 +1113,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   @override
   void didUpdateWidget(covariant ReadiumPageSurface oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.layoutKey != widget.layoutKey) _stopReturnAnimation();
     if (oldWidget.frameKey != widget.frameKey) {
       _warmRetries = 0;
       if (_adoptingPage && oldWidget.layoutKey == widget.layoutKey) {
@@ -1061,6 +1140,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     final viewport = (MediaQuery.sizeOf(context), MediaQuery.devicePixelRatioOf(context));
     if (_viewport != viewport) {
       _viewport = viewport;
+      _stopReturnAnimation();
       _releasePresentedPage();
       widget.controller.endDrag(cancel: true);
       _clearNeighbors();
@@ -1112,7 +1192,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       }
       if (!mounted) return;
       final prefs = widget.preferences;
-      final direction = transitionDirection * (prefs.mode == ReaderMode.vertical ? -1 : 1);
+      final direction = _visualDirection(transitionDirection);
       final effect = prefs.pageEffect == ReaderPageEffect.none ||
               (target == null && (prefs.pageEffect != ReaderPageEffect.paper || direction < 0))
           ? ReaderPageEffect.fade
@@ -1178,7 +1258,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         _liveDestination = false;
         _destinationReady = false;
         _effect = prefs.pageEffect;
-        _direction = direction * (prefs.mode == ReaderMode.vertical ? -1 : 1);
+        _direction = _visualDirection(direction);
         _clock.value = 0;
         _primaryTouchY = widget.controller._touchY;
         _primaryStartY = widget.controller._startY;
@@ -1323,7 +1403,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     for (final turn in _overlaps.reversed) {
       below = _ReadiumCompositeTurn(
         from: turn.from, to: turn.target, clock: turn.clock, effect: _effect,
-        direction: (vertical ? -turn.direction : turn.direction).toDouble(),
+        direction: _visualDirection(turn.direction),
         vertical: vertical, shape: turn.shape,
         touchY: () => turn.touchY, startY: () => turn.startY, below: below,
       );
@@ -1371,9 +1451,9 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
                     children: _effect == ReaderPageEffect.paper
                         ? [
                             if (_direction < 0 && _to != null)
-                              RawImage(image: frame.image, fit: BoxFit.fill, filterQuality: FilterQuality.none)
+                              _pageImage(frame)
                             else if (_to case final target?)
-                              RawImage(image: target.image, fit: BoxFit.fill),
+                              _pageImage(target),
                             CustomPaint(
                               painter: _ReadiumCurl(
                                 _direction < 0 && _to != null ? _to! : frame,
@@ -1402,6 +1482,24 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
             ),
           ),
         ),
+      if (_returning)
+        Positioned.fill(key: const ValueKey('readium-return-page'), child: IgnorePointer(child: ExcludeSemantics(
+          child: ClipRect(child: AnimatedBuilder(
+            animation: _returnClock,
+            child: _returnFrame == null ? null : _pageImage(_returnFrame!),
+            builder: (context, child) {
+              final remaining = 1 - Curves.easeOutCubic.transform(_returnClock.value);
+              return Stack(fit: StackFit.expand, children: [
+                if (child != null)
+                  ColoredBox(
+                    color: _returnFrame!.paper,
+                    child: Transform.translate(offset: Offset(0, 9 * remaining), child: child),
+                  ),
+                ColoredBox(color: Colors.black.withValues(alpha: .16 * remaining)),
+              ]);
+            },
+          )),
+        ))),
     ],
   );
 
@@ -1412,6 +1510,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _warmTimer?.cancel();
     if (_scrubCallback case final callback?) SchedulerBinding.instance.cancelFrameCallbackWithId(callback);
     _presented?.dispose();
+    _returnFrame?.dispose();
     _cached?.dispose();
     _routeCover?.dispose(); _routeCover = null;
     _clearNeighbors();
@@ -1424,6 +1523,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _overlaps.clear();
     _trackingOverlap = null;
     _clock.dispose();
+    _returnClock.dispose();
     super.dispose();
   }
 }
@@ -1443,22 +1543,25 @@ class _ReadiumCompositeTurn extends CustomPainter {
     required this.effect, required this.direction, required bool vertical,
     required Listenable shape, required double Function() touchY,
     required double Function() startY, required this.below,
-  }) : super(repaint: Listenable.merge([clock, shape, below])) {
+  }) : paperClock = direction < 0 ? ReverseAnimation(clock) : clock,
+       super(repaint: Listenable.merge([clock, shape, below])) {
     if (effect == ReaderPageEffect.staggered) {
       _outgoing = _ReadiumParagraphTurn(from, clock, direction, false, vertical);
       if (to != null) _incoming = _ReadiumParagraphTurn(to!, clock, direction, true, vertical);
     }
     if (effect == ReaderPageEffect.paper) {
-      final reverse = direction < 0 && to != null;
-      _curl = _ReadiumCurl(reverse ? to! : from,
-        reverse ? ReverseAnimation(clock) : clock,
-        to == null ? direction : 1, touchY, startY, shape);
+      // The reverse turn unfolds an incoming sheet. Page readiness changes its
+      // texture, so the same fold geometry applies throughout the handoff.
+      final reverse = direction < 0;
+      _curl = _ReadiumCurl(reverse ? to ?? from : from,
+        paperClock, 1, touchY, startY, shape, textured: !reverse || to != null);
     }
   }
 
   final ReadiumPageFrame from;
   final ReadiumPageFrame? to;
   final Animation<double> clock;
+  final Animation<double> paperClock;
   final ReaderPageEffect effect;
   final double direction;
   final _ReadiumCompositeTurn? below;
@@ -1488,7 +1591,7 @@ class _ReadiumCompositeTurn extends CustomPainter {
     } else {
       switch (effect) {
         case ReaderPageEffect.paper:
-          if (direction < 0 && to != null) {
+          if (direction < 0) {
             _drawReadiumPage(canvas, size, from);
             _curl!.paintSheet(canvas, size, paintFlat: below == null ? null : _destination);
           } else {
@@ -1626,12 +1729,15 @@ class _ReadiumParagraphTurn extends CustomPainter {
 /// Textured fold around a tilted cylindrical axis. One image shader and three
 /// mesh draws replace per-strip image draws; the flat page stays pixel-stable.
 class _ReadiumCurl extends CustomPainter {
-  _ReadiumCurl(this.from, this.clock, this.direction, this.touchY, this.startY, Listenable shape)
+  _ReadiumCurl(this.from, this.clock, this.direction, this.touchY, this.startY, Listenable shape, {
+    this.textured = true,
+  })
     : super(repaint: Listenable.merge([clock, shape]));
   final ReadiumPageFrame from;
   final Animation<double> clock;
   final double direction;
   final double Function() touchY, startY;
+  final bool textured;
   static const segments = 24, capacity = 192;
   final _positions = Float32List(capacity * 2), _texture = Float32List(capacity * 2);
   final _frontColors = Int32List(capacity), _backColors = Int32List(capacity), _ghostColors = Int32List(capacity);
@@ -1643,10 +1749,9 @@ class _ReadiumCurl extends CustomPainter {
   void paintSheet(Canvas c, Size size, {void Function(Canvas, Size)? paintFlat}) {
     final t = clock.value.clamp(0.0, 1.0);
     if (t >= 1) return;
-    final source = Rect.fromLTWH(0, 0, from.image.width.toDouble(), from.image.height.toDouble());
     if (t <= 0) {
       if (paintFlat == null) {
-        _drawReadiumPage(c, size, from);
+        _paintPageFace(c, size);
       } else {
         paintFlat(c, size);
       }
@@ -1717,7 +1822,7 @@ class _ReadiumCurl extends CustomPainter {
     c.save();c.clipPath(flat);
     if(backwards){c.translate(w,0);c.scale(-1,1);}
     if (paintFlat == null) {
-      c.drawImageRect(from.image,source,Offset.zero & size,Paint()..filterQuality=FilterQuality.none);
+      _paintPageFace(c, size);
     } else {
       paintFlat(c, size);
     }
@@ -1735,11 +1840,21 @@ class _ReadiumCurl extends CustomPainter {
         textureCoordinates:textured?_texture:null,colors:colors,indices:Uint16List.sublistView(indices,0,count));
       c.drawVertices(mesh,BlendMode.modulate,Paint()..color=Colors.white..shader=(textured?from.shader:null)..filterQuality=FilterQuality.low);
     }
-    mesh(_frontIndices,fronts,_frontColors,true);
+    mesh(_frontIndices,fronts,textured ? _frontColors : _backColors,textured);
     mesh(_backIndices,backs,_backColors,false);
-    mesh(_backIndices,backs,_ghostColors,true);
+    if (textured) mesh(_backIndices,backs,_ghostColors,true);
     c.restore();
   }
+
+  void _paintPageFace(Canvas canvas, Size size) {
+    if (textured) {
+      _drawReadiumPage(canvas, size, from);
+    } else {
+      canvas.drawRect(Offset.zero & size, Paint()..color = from.paper);
+    }
+  }
+
   @override
-  bool shouldRepaint(covariant _ReadiumCurl old)=>old.from!=from||old.direction!=direction;
+  bool shouldRepaint(covariant _ReadiumCurl old) =>
+      old.from != from || old.direction != direction || old.textured != textured || old.clock != clock;
 }

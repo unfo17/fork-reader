@@ -164,11 +164,12 @@ class ReadiumReaderBridge extends ChangeNotifier {
     final dx = (event['dx'] as num).toDouble();
     final box = _viewKey.currentContext?.findRenderObject();
     final width = box is RenderBox && box.hasSize ? box.size.width : 400.0;
-    final rtl = _preferences.verticalText == true ||
-        publication?.metadata.readingProgression == rd.ReadingProgression.rtl;
-    final direction = (dx < 0 ? 1 : -1) * (rtl ? -1 : 1);
+    final direction = (dx < 0 ? 1 : -1) * (_rightToLeft ? -1 : 1);
     return (direction: direction, dx: dx, width: width, y: (event['y'] as num?)?.toDouble() ?? .5);
   }
+
+  bool get _rightToLeft => _preferences.verticalText == true ||
+      publication?.metadata.readingProgression == rd.ReadingProgression.rtl;
 
   bool _startOverlappingDrag(Map<String, dynamic> event) {
     final start = _dragStart(event);
@@ -701,7 +702,12 @@ class ReadiumReaderBridge extends ChangeNotifier {
           await _waitForPageReady(previewVersion: version, stable: true);
         }
         for (var attempt = 0; attempt < 3 && frame == null; attempt++) {
-          frame = await _capturePage();
+          final captured = await _capturePage();
+          if (captured?.location == origin.location) {
+            captured?.dispose();
+          } else {
+            frame = captured;
+          }
           if (frame == null) await Future<void>.delayed(const Duration(milliseconds: 16));
         }
         if (frame == null) throw StateError('相邻页画面未能就绪');
@@ -1287,7 +1293,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
           canTurn: _canTurnPage,
           preview: Platform.isAndroid && _appearance.mode.paginated && _appearance.pageEffect != ReaderPageEffect.none ? _previewPage : null,
           land: (frame) => _landFrame(frame),
-          lookAhead: 2,
+          lookAhead: 3,
+          rightToLeft: _rightToLeft,
           refreshRateLimit: _refreshRateLimit,
           onPrioritize: _interruptPreview,
           onTurnAvailable: _continueQueuedDrag,

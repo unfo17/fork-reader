@@ -6174,6 +6174,7 @@ class _ReaderPageState extends State<ReaderPage>
   bool _activityAttached = false;
   bool _activityRouteCurrent = false;
   bool _activityForeground = true;
+  bool _animateReadingReturn = false;
   bool _activityStartQueued = false;
 
   void _activityOverlay(String overlay, bool open) {
@@ -8434,6 +8435,9 @@ class _ReaderPageState extends State<ReaderPage>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _activityForeground = state == AppLifecycleState.resumed;
+    if (state == AppLifecycleState.hidden || state == AppLifecycleState.paused) {
+      _animateReadingReturn = true;
+    }
     _syncReadingActivity();
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
@@ -8445,7 +8449,12 @@ class _ReaderPageState extends State<ReaderPage>
     _followScroll.cancel();
     _listeningTarget = null;
     if (state == AppLifecycleState.resumed) {
-      if (mounted && _readium != null) setState(() {});
+      if (mounted && _readium != null) {
+        if (_animateReadingReturn && _activityRouteCurrent &&
+            !widget.state.reduceMotion) _readium?.turns.animateReturn();
+        setState(() {});
+      }
+      _animateReadingReturn = false;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _listeningChanged();
       });

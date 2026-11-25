@@ -380,12 +380,17 @@ object ReadiumReader :
         } else {
             if (direction > 0) visualGoForward(animated) else visualGoBackward(animated)
         }
+        fun visiblyMoved(): Boolean {
+            val visual = appVisualPageKey()
+            return if (previousVisual != null && visual != null) visual != previousVisual
+                else navigator.currentLocator?.value != previous
+        }
         val changed = kotlinx.coroutines.withTimeoutOrNull(if (appPageTurnCrossedResource) 3000L else 1200L) {
-            while (navigator.currentLocator?.value == previous && appVisualPageKey() == previousVisual) kotlinx.coroutines.delay(16)
+            while (!visiblyMoved()) kotlinx.coroutines.delay(16)
             true
         } == true
         if (appVisibleWebView()?.url != previousUrl) appPageTurnCrossedResource = true
-        if (changed || navigator.currentLocator?.value != previous || appVisualPageKey() != previousVisual) return true
+        if (changed || visiblyMoved()) return true
         val (settledIndex, settledEdge) = appPageEdge(direction)
         if (settledEdge && settledIndex >= 0) {
             val adjacent = settledIndex + if (direction > 0) 1 else -1
