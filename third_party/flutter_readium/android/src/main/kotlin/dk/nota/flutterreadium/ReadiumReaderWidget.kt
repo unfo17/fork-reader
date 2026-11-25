@@ -550,6 +550,23 @@ private class AppPageGestureLayout(
         }
         velocityTracker?.addMovement(event)
         try {
+            if (event.actionMasked == MotionEvent.ACTION_UP &&
+                velocityTracker != null && !dragging && !multiplePointers &&
+                ownsGesture() && kotlin.math.abs(event.x - downX) > slop) {
+                // A short swipe can cross the slop between its last delivered
+                // move and the lift when the UI thread is busy drawing.
+                val cancel = MotionEvent.obtain(event)
+                try {
+                    cancel.action = MotionEvent.ACTION_CANCEL
+                    super.dispatchTouchEvent(cancel)
+                } finally {
+                    cancel.recycle()
+                }
+                val startY = (downY / height.coerceAtLeast(1)).coerceIn(0f, 1f)
+                onSwipe("Start", event.x - downX, event.y - downY, startY, 0f, 0L)
+                emitSwipe("End", event, releaseVelocity())
+                return true
+            }
             return super.dispatchTouchEvent(event)
         } finally {
             if (event.actionMasked == MotionEvent.ACTION_UP ||
@@ -617,8 +634,7 @@ private class AppPageGestureLayout(
                 parent?.requestDisallowInterceptTouchEvent(false)
                 if (!multiplePointers) {
                     if (ownsGesture()) {
-                        velocityTracker?.computeCurrentVelocity(1000, configuration.scaledMaximumFlingVelocity.toFloat())
-                        emitSwipe("End", event, velocityTracker?.xVelocity ?: 0f)
+                        emitSwipe("End", event, releaseVelocity())
                     } else {
                         emitSwipe("Cancel", event)
                     }
@@ -636,5 +652,11 @@ private class AppPageGestureLayout(
     private fun emitSwipe(phase: String, event: MotionEvent, velocityX: Float = 0f) {
         val y = (event.y / height.coerceAtLeast(1)).coerceIn(0f, 1f)
         onSwipe(phase, event.x - downX, event.y - downY, y, velocityX, event.eventTime - event.downTime)
+    }
+
+    private fun releaseVelocity(): Float {
+        val tracker = velocityTracker ?: return 0f
+        tracker.computeCurrentVelocity(1000, configuration.scaledMaximumFlingVelocity.toFloat())
+        return tracker.xVelocity
     }
 }

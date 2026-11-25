@@ -582,6 +582,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         if (_settling == null) _finishDrag(finish);
       } else {
         _primaryCommit = finish && target != null;
+        _offerNextTurn();
         _settling = _animatePage(_clock, 1,
           animated ? widget.preferences.pageSpeed.durationFor(_effect) : Duration.zero,
           Curves.easeInOutCubic);
