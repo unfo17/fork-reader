@@ -117,14 +117,15 @@ class ReadingDesktopPainter extends CustomPainter {
         text('阅读记录', size.height - 31, 12);
       case ReadingWidgetDesign.memory:
         final completion = data.latestCompletion;
-        text(completion?.title ?? (completion == null ? '暂无纪念' : '阅读纪念'), 54, 22, lines: 2);
+        final title = data.showBookDetails ? completion?.title : null;
+        text(title ?? (completion == null ? '暂无纪念' : '阅读纪念'), 54, 22, lines: 2);
         if (completion != null) {
           text(widgetDate(completion.completedAt), size.height - 34, 12);
         }
       case ReadingWidgetDesign.quote:
         if (paintQuote) {
           text(quoteText ?? '在阅读中留下喜欢的句子', 56, 16, lines: 3);
-          if (quoteSource.isNotEmpty) text(quoteSource, size.height - 28, 11);
+          if (data.showBookDetails && quoteSource.isNotEmpty) text(quoteSource, size.height - 28, 11);
         }
       case ReadingWidgetDesign.classic:
       case ReadingWidgetDesign.focus:
@@ -135,7 +136,8 @@ class ReadingDesktopPainter extends CustomPainter {
           canvas.drawRect(Rect.fromLTWH(inset, 101, width, 4), brush..color = accent.withValues(alpha: .2));
           canvas.drawRect(Rect.fromLTWH(inset, 101, width * fraction, 4), brush..color = accent);
         }
-        text(data.currentBook?.title ?? '连续 ${data.qualifiedStreakDays ?? 0} 天', size.height - 33, 12);
+        final title = data.showBookDetails ? data.currentBook?.title : null;
+        text(title ?? '连续 ${data.qualifiedStreakDays ?? 0} 天', size.height - 33, 12);
     }
   }
 
