@@ -6001,8 +6001,10 @@ class _ReaderPageState extends State<ReaderPage>
     final bridge = _readium!;
     _nativeAnnotations();
     final prefs = _readerPreferences;
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    bridge.motionPreferences(prefs, dark);
+    final theme = Theme.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final scheme = readerFollowsSystemPalette(widget.state, prefs) ? theme.colorScheme : null;
+    bridge.motionPreferences(prefs, dark, systemPalette: scheme);
     final hidden = widget.state.hiddenReaderLanguagesFor(widget.novel.id);
     final only = widget.state.onlyReaderLanguageFor(widget.novel.id);
     final safe = MediaQuery.viewPaddingOf(context);
@@ -6018,7 +6020,7 @@ class _ReaderPageState extends State<ReaderPage>
           ReaderScrollLocation.extentOf(context),
     );
     final key =
-        '$pageInsets|${prefs.layoutKey}|${prefs.paper.name}|${prefs.nightTextBrightness}|${prefs.backgroundImage}|${prefs.backgroundOpacity}|${prefs.backgroundFit}|${prefs.hideSystemStatus}|${prefs.showStatusInfo}|$_fontSize|$_lineHeight|$_readerFontId|$dark|$hidden|$only';
+        '$pageInsets|${prefs.layoutKey}|${prefs.paper.name}|${prefs.nightTextBrightness}|${prefs.backgroundImage}|${prefs.backgroundOpacity}|${prefs.backgroundFit}|${prefs.hideSystemStatus}|${prefs.showStatusInfo}|$_fontSize|$_lineHeight|$_readerFontId|$dark|${scheme?.surface.toARGB32()}|${scheme?.onSurface.toARGB32()}|$hidden|$only';
     if (_activityForeground && key != _nativePreferencesKey) {
       _nativePreferencesKey = key;
       // Supply initial defaults synchronously, before creating the native view.
@@ -6028,6 +6030,7 @@ class _ReaderPageState extends State<ReaderPage>
           fontSize: _fontSize,
           lineHeight: _lineHeight,
           dark: dark,
+          systemPalette: scheme,
           fontFamily: null,
           pageInsets: pageInsets,
           defaultsOnly: true,
@@ -6045,6 +6048,7 @@ class _ReaderPageState extends State<ReaderPage>
             fontSize: _fontSize,
             lineHeight: _lineHeight,
             dark: dark,
+            systemPalette: scheme,
             fontFamily: _readerFontFamily,
             pageInsets: pageInsets,
             fontFile: font,
@@ -6060,6 +6064,7 @@ class _ReaderPageState extends State<ReaderPage>
             fontSize: _fontSize,
             lineHeight: _lineHeight,
             dark: dark,
+            systemPalette: scheme,
             fontFamily: null,
             pageInsets: pageInsets,
             hiddenLanguages: hidden,
@@ -10709,7 +10714,7 @@ class _ReaderPageState extends State<ReaderPage>
                       ),
                     ),
                     ink: preferences.controlForeground(dark),
-                    paper: preferences.background(dark),
+                    paper: _readium?.pagePaper ?? Theme.of(context).colorScheme.surface,
                   ),
           ),
         ),
@@ -10743,7 +10748,9 @@ class _ReaderPageState extends State<ReaderPage>
               child: ReaderArticleBoundary(
                 key: const ValueKey('reader-article-boundary'),
                 child: ColoredBox(
-                  color: _readium?.pagePaper ?? Theme.of(context).colorScheme.surface,
+                  color: readerFollowsSystemPalette(widget.state, _readerPreferences)
+                      ? Theme.of(context).colorScheme.surface
+                      : _readium?.pagePaper ?? Theme.of(context).colorScheme.surface,
                   child: CallbackShortcuts(
                     bindings: {
                       const SingleActivator(LogicalKeyboardKey.pageDown): () =>
@@ -11386,12 +11393,12 @@ class _ReaderPageState extends State<ReaderPage>
 
             return AnnotatedRegion<SystemUiOverlayStyle>(
               value: novelSystemUiStyle(
-                ThemeData.estimateBrightnessForColor(prefs.background(dark)),
+                Theme.of(context).brightness,
               ),
               child: ReaderBackground(
                 store: widget.state.backgrounds,
                 preferences: prefs,
-                paper: prefs.background(dark),
+                paper: Theme.of(context).colorScheme.surface,
                 reduceMotion: widget.state.reduceMotion,
                 child: Stack(
                   fit: StackFit.expand,
@@ -11417,6 +11424,7 @@ class _ReaderPageState extends State<ReaderPage>
                               content: content,
                               controller: _paged,
                               preferences: prefs,
+                              paper: Theme.of(context).colorScheme.surface,
                               style: paragraphStyle,
                               title: chapter.title,
                               bookTitle: _sourceBook.title,
@@ -11452,7 +11460,7 @@ class _ReaderPageState extends State<ReaderPage>
                               backgroundBuilder: (child) => ReaderBackground(
                                 store: widget.state.backgrounds,
                                 preferences: prefs,
-                                paper: prefs.background(dark),
+                                paper: Theme.of(context).colorScheme.surface,
                                 reduceMotion: widget.state.reduceMotion,
                                 child: child,
                               ),

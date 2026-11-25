@@ -3,11 +3,13 @@ package org.mewx.wenku8_flutter
 import dk.nota.flutterreadium.ReadiumReader
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodChannel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Narrow app-owned bridge to the pinned Readium navigator, not another WebView. */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -31,7 +33,13 @@ class ReadiumControlsPlugin : FlutterPlugin {
                                 ReadiumReader.epubEvaluateJavascript("window.getSelection().removeAllRanges();")
                                 result.success(null)
                             }
-                            "ready" -> result.success(ReadiumReader.appWaitForPageReady(call.argument<String>("style"), call.argument<String>("anchor"), call.argument<Int>("previewVersion"), call.argument<Boolean>("stable") == true))
+                            "ready" -> result.success(ReadiumReader.appWaitForPageReady(
+                                call.argument<String>("style"),
+                                call.argument<String>("anchor"),
+                                call.argument<Int>("previewVersion"),
+                                call.argument<Boolean>("stable") == true,
+                                call.argument<Boolean>("waitForPaint") != false,
+                            ))
                             "tap" -> { ReadiumReader.appReplayTap(call.argument<Double>("x") ?: 0.5, call.argument<Double>("y") ?: 0.5); result.success(null) }
                             "previewVersion" -> result.success(ReadiumReader.appPreviewVersion)
                             "interruptPreview" -> { ReadiumReader.appInterruptPreview(); result.success(null) }
@@ -47,7 +55,17 @@ class ReadiumControlsPlugin : FlutterPlugin {
                                 call.argument<Number>("color")?.let { ReadiumReader.appSetPaper(it.toInt()) }
                                 result.success(null)
                             }
-                            "capture" -> result.success(ReadiumReader.appCapturePage(call.argument<Boolean>("bands") == true, call.argument<Boolean>("vertical") == true, call.argument<Boolean>("allowLateCapture") == true))
+                            "capture" -> {
+                                val frame = ReadiumReader.appCapturePage(
+                                    call.argument<Boolean>("bands") == true,
+                                    call.argument<Boolean>("vertical") == true,
+                                    call.argument<Boolean>("allowLateCapture") == true,
+                                    call.argument<Number>("paper")?.toInt(),
+                                )
+                                // Encoding a full native-resolution RGBA reply is expensive.
+                                // MethodChannel.Result may reply from a worker thread.
+                                withContext(Dispatchers.Default) { result.success(frame) }
+                            }
                             "decorations" -> {
                                 val marks = call.argument<List<Map<String, Any>>>("marks") ?: emptyList()
                                 ReadiumReader.applyAppDecorations(marks, call.argument<String>("group") ?: "wenku")
@@ -60,6 +78,8 @@ class ReadiumControlsPlugin : FlutterPlugin {
                             "evaluate" -> result.success(ReadiumReader.epubEvaluateJavascript(call.argument<String>("script") ?: ""))
                             else -> result.notImplemented()
                         }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
                     } catch (error: Exception) { result.error("readium_control", error.message, null) }
                     finally {
                         if (android.util.Log.isLoggable("ReadiumControlTiming", android.util.Log.DEBUG))

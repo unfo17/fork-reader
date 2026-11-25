@@ -7,9 +7,9 @@ class ReleaseSection {
 }
 
 const _swipes =
-    '合并段落接续的绘制，拖动时按屏幕刷新节奏更新动画。';
-const _resume = '从后台返回阅读页时，正文从底部开始逐行归位。';
-const _curl = '仿真翻页等目标页就绪后才露出下一页，等待时松手会结束当次手势。';
+    '降低段落接续翻页时的主线程开销，减少预载的重复检查。';
+const _resume = '从后台返回阅读页时，正文各段从屏幕底部依次升入。';
+const _systemPalette = '阅读背景选择「跟随外观」时，同步应用的系统配色。';
 const _androidInstall = '已安装本仓库固定签名版的 Android 用户可以直接覆盖更新，书籍和阅读记录会保留。';
 
 const publicReleaseNotes =
@@ -18,7 +18,7 @@ const publicReleaseNotes =
 
 - $_swipes
 - $_resume
-- $_curl
+- $_systemPalette
 
 $_androidInstall
 ''';
@@ -27,7 +27,7 @@ const currentReleaseSummary = [
   currentReleaseSourcePolicy,
   _swipes,
   _resume,
-  _curl,
+  _systemPalette,
 ];
 const currentReleaseSections = [
   ReleaseSection('欢迎使用$appDisplayName', [
@@ -39,7 +39,7 @@ const currentReleaseSections = [
   ReleaseSection('本次更新', [
     _swipes,
     _resume,
-    _curl,
+    _systemPalette,
     _androidInstall,
   ]),
 ];

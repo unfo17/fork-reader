@@ -295,6 +295,7 @@ class ReaderPagedView extends StatefulWidget {
     this.status,
     this.titleForAnchor,
     this.backgroundBuilder,
+    this.paper,
     this.chapterKey,
     this.chapterTurnDirection = 0,
     this.previousChapter,
@@ -328,6 +329,7 @@ class ReaderPagedView extends StatefulWidget {
   final Widget? status;
   final String Function(ReaderTextAnchor)? titleForAnchor;
   final Widget Function(Widget child)? backgroundBuilder;
+  final Color? paper;
   final VoidCallback onReady, onChanged, onUserScroll;
   final ValueChanged<int> onBoundary;
   final ReadingPosition? position;
@@ -342,6 +344,9 @@ class ReaderPagedView extends StatefulWidget {
 
 class _ReaderPagedViewState extends State<ReaderPagedView>
     with TickerProviderStateMixin {
+  Color get _paper => widget.paper ??
+      widget.preferences.background(Theme.of(context).brightness == Brightness.dark);
+
   late final _turn =
       AnimationController(
         vsync: this,
@@ -1284,9 +1289,7 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
             ? (layout.pages[1].left - layout.pages[0].right) / 2
             : 0,
         fromRight: direction > 0,
-        paper: widget.preferences.background(
-          Theme.of(context).brightness == Brightness.dark,
-        ),
+        paper: _paper,
         child: page,
       );
     }
@@ -1662,9 +1665,7 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
       ? child
       : widget.backgroundBuilder?.call(child) ??
             ColoredBox(
-              color: widget.preferences.background(
-                Theme.of(context).brightness == Brightness.dark,
-              ),
+              color: _paper,
               child: child,
             );
 
@@ -1688,9 +1689,7 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
         incoming: incoming,
         front: incoming == _chapterTurnForward,
         active: true,
-        paper: widget.preferences.background(
-          Theme.of(context).brightness == Brightness.dark,
-        ),
+        paper: _paper,
         child: child,
       );
     }
@@ -1911,9 +1910,7 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
                           incoming ==
                           ((_turnSpread ?? 0) > (_swipeOrigin ?? 0)),
                       active: turning,
-                      paper: widget.preferences.background(
-                        Theme.of(context).brightness == Brightness.dark,
-                      ),
+                      paper: _paper,
                       child: body,
                     )
                   : body;
@@ -2019,9 +2016,7 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
                   key: const ValueKey('reader-book-incoming'),
                   animation: _arrival,
                   child: ColoredBox(
-                    color: widget.preferences.background(
-                      Theme.of(context).brightness == Brightness.dark,
-                    ),
+                    color: _paper,
                     child: chapterFrame,
                   ),
                 ),

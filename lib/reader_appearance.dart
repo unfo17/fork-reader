@@ -12,15 +12,17 @@ ThemeData readerTheme(
   ThemeData app,
   ReaderPreferences preferences, {
   String? fontFamily,
+  bool followSystemPalette = false,
 }) {
   final appDark = app.brightness == Brightness.dark;
-  final paper = preferences.background(appDark);
+  final systemPaper = followSystemPalette && preferences.paper == ReaderPaper.system;
+  final paper = systemPaper ? app.colorScheme.surface : preferences.background(appDark);
   final brightness = ThemeData.estimateBrightnessForColor(paper);
   final dark = brightness == Brightness.dark;
   final base = novelTheme(brightness, fontFamily: fontFamily);
   // Dim only the article's ink. Sliders, buttons and text selection retain
   // their readable control contrast while a user previews night text levels.
-  final ink = preferences.controlForeground(appDark);
+  final ink = systemPaper ? app.colorScheme.onSurface : preferences.controlForeground(appDark);
   Color raised(double amount) => Color.lerp(paper, ink, amount)!;
   final scheme = base.colorScheme.copyWith(
     surface: paper,
@@ -74,6 +76,11 @@ ThemeData readerTheme(
   );
 }
 
+bool readerFollowsSystemPalette(LibraryState state, ReaderPreferences preferences) =>
+    preferences.paper == ReaderPaper.system &&
+    state.appPalette.source == AppPaletteSource.system &&
+    state.systemTonalColors != null;
+
 /// The same live palette wraps the article, chrome and entire popup surface.
 /// Typography-only notifications reuse ThemeData and do not repaint chrome.
 class ReaderAppearance extends StatefulWidget {
@@ -111,17 +118,26 @@ class _ReaderAppearanceState extends State<ReaderAppearance> {
   ThemeData? _base, _theme;
   ReaderPaper? _paper;
   String? _family;
+  (Color, Color)? _systemPalette;
   ThemeData _resolve() {
     final preferences = widget.state.readerPreferencesFor(widget.bookId);
     final paper = preferences.paper;
     final family = widget.state.readerFontFamilyFor(widget.bookId);
+    final scheme = widget.appTheme.colorScheme;
+    final systemPalette = readerFollowsSystemPalette(widget.state, preferences)
+        ? (scheme.surface, scheme.onSurface)
+        : null;
     if (_base?.brightness != widget.appTheme.brightness ||
         _paper != paper ||
-        _family != family) {
+        _family != family ||
+        _systemPalette != systemPalette) {
       _base = widget.appTheme;
       _paper = paper;
       _family = family;
-      _theme = readerTheme(_base!, preferences, fontFamily: family);
+      _systemPalette = systemPalette;
+      _theme = readerTheme(
+        _base!, preferences, fontFamily: family, followSystemPalette: systemPalette != null,
+      );
     }
     return _theme!;
   }

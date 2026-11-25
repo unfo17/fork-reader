@@ -33,39 +33,37 @@ class ReaderTurnScope extends InheritedWidget {
   /// Keep leafSize local to the ink for paragraph/column ordering.
   final double? travelWidth;
 
-  double relayProgress(double rank) {
+  Interval _relayInterval(double rank) {
     final start = (slot + .02 + .18 * rank.clamp(0.0, 1.0)) / slots;
     return Interval(
       start,
       (start + .80 / slots).clamp(0.0, 1.0),
       curve: relayCurve,
-    ).transform(animation.value.clamp(0.0, 1.0));
+    );
+  }
+
+  Interval relayIntervalFor(int index, int count, {Rect? bounds}) {
+    final order = count < 2 ? 0.0 : index / (count - 1);
+    if (vertical) {
+      // Outgoing columns lead incoming ones, including on a backward swipe.
+      final column = bounds == null
+          ? (direction < 0 ? order : 1 - order)
+          : direction < 0
+          ? 1 - (outgoing ? bounds.right : bounds.left) / leafSize.width
+          : (outgoing ? bounds.left : bounds.right) / leafSize.width;
+      return _relayInterval((outgoing ? 0 : .5) + .5 * column.clamp(0.0, 1.0));
+    }
+    // Use spatial bounds to keep unequal paragraphs from colliding.
+    return _relayInterval(bounds == null
+        ? order
+        : (outgoing ? bounds.top : bounds.bottom) / leafSize.height);
   }
 
   double progressFor(int index, int count, {Rect? bounds}) {
     if (!enabled) return 1;
     if (relay) {
-      final order = count < 2 ? 0.0 : index / (count - 1);
-      final double rank;
-      if (vertical) {
-        // Columns travel horizontally too. Treat both leaves as one continuous
-        // strip: outgoing columns lead, incoming columns follow. The wave runs
-        // right-to-left going forward and reverses with a backward swipe, so
-        // moving columns never catch stationary neighbours or the other leaf.
-        final column = bounds == null
-            ? (direction < 0 ? order : 1 - order)
-            : direction < 0
-            ? 1 - (outgoing ? bounds.right : bounds.left) / leafSize.width
-            : (outgoing ? bounds.left : bounds.right) / leafSize.width;
-        rank = (outgoing ? 0 : .5) + .5 * column.clamp(0.0, 1.0);
-      } else {
-        // At every shared row the old paragraph leads the new one. Use spatial
-        // bounds, not paragraph counts, to keep unequal paragraphs separate.
-        rank = bounds == null
-            ? order
-            : (outgoing ? bounds.top : bounds.bottom) / leafSize.height;
-      }
-      return relayProgress(rank);
+      return relayIntervalFor(index, count, bounds: bounds)
+          .transform(animation.value.clamp(0.0, 1.0));
     }
     if (outgoing) {
       return const Interval(

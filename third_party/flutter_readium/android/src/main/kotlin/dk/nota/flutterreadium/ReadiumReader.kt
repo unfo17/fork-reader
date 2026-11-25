@@ -269,11 +269,21 @@ object ReadiumReader :
         private set
     fun appInterruptPreview() { appPreviewVersion++ }
 
-    suspend fun appWaitForPageReady(style: String?, anchor: String?, previewVersion: Int? = null, stable: Boolean = false): Boolean {
+    suspend fun appWaitForPageReady(
+        style: String?, anchor: String?, previewVersion: Int? = null,
+        stable: Boolean = false, waitForPaint: Boolean = true,
+    ): Boolean {
         val fixed = appIsFixedLayout()
         val expected = if (fixed || style == null) "null" else JSONObject.quote(style)
-        val targetGeometry = if (fixed || anchor == null) null else JSONObject(anchor).optJSONObject("geometry")
-        suspend fun awaitReady(images: Boolean, requireStable: Boolean): Boolean = kotlinx.coroutines.withTimeoutOrNull(3000L) {
+        val saved = if (fixed || anchor == null) null else JSONObject(anchor)
+        val targetGeometry = saved?.optJSONObject("geometry")
+        val targetX = saved?.optDouble("x", 0.0) ?: 0.0
+        val targetY = saved?.optDouble("y", 0.0) ?: 0.0
+        val progression = saved?.optJSONObject("locator")?.optJSONObject("locations")
+            ?.optDouble("progression", 0.0) ?: 0.0
+        var needsPosition = saved != null
+        val requireStable = stable || anchor != null
+        val ready = kotlinx.coroutines.withTimeoutOrNull(3000L) {
             var last: String? = null
             while (previewVersion == null || previewVersion == appPreviewVersion) {
                 val sample = appEvaluateVisible("""
@@ -282,39 +292,50 @@ object ReadiumReader :
                         var expected=$expected;
                         if(!document.body||document.readyState==='loading'||
                             (document.fonts&&document.fonts.status!=='loaded')||
-                            (expected!==null&&window.__wenkuAppliedStyle!==expected)||
-                            ($images&&window.__wenkuPageReady&&!window.__wenkuPageReady()))return null;
-                        document.body.offsetHeight;
-                        var g=geometry(), target=$targetGeometry;
-                        if($images && target && ['w','h','sw','sh','dpr'].every(function(key){return Math.abs(target[key]-g[key])<1;}) &&
-                            (Math.abs(target.x-g.x)>.75||Math.abs(target.y-g.y)>.75)){
-                            window.scrollTo({left:target.x,top:target.y,behavior:'instant'});
-                            return null;
+                            (expected!==null&&window.__wenkuAppliedStyle!==expected))return null;
+                        var g=geometry(),target=$targetGeometry;
+                        var same=!target||['w','h','sw','sh','dpr'].every(function(key){
+                            return Math.abs(target[key]-g[key])<1;
+                        });
+                        if($needsPosition&&!same){
+                            readium.scrollToPosition($progression);
+                            return 'positioned';
                         }
+                        if(($needsPosition||target)&&same&&
+                            (Math.abs(g.x-$targetX)>.75||Math.abs(g.y-$targetY)>.75)){
+                            window.scrollTo({left:$targetX,top:$targetY,behavior:'instant'});
+                            return 'positioned';
+                        }
+                        if(window.__wenkuPageReady&&!window.__wenkuPageReady())return null;
                         g.paper=getComputedStyle(document.documentElement).backgroundColor;
                         return JSON.stringify(g);
                     })();
                 """.trimIndent())
-                if (sample != null && sample != "null" && (!requireStable || sample == last)) {
-                    if (images && !fixed) {
-                        val paper = JSONObject(org.json.JSONTokener(sample).nextValue().toString()).optString("paper")
-                        val values = Regex("[0-9.]+").findAll(paper).map { it.value.toDouble() }.toList()
-                        if (values.size >= 3 && (values.size == 3 || values[3] > 0.0)) {
-                            appSetPaper(android.graphics.Color.rgb(values[0].toInt(), values[1].toInt(), values[2].toInt()))
+                if (sample == "\"positioned\"") {
+                    needsPosition = false
+                    last = null
+                } else if (sample != null && sample != "null") {
+                    needsPosition = false
+                    if (!requireStable || sample == last) {
+                        if (!fixed) {
+                            val paper = JSONObject(org.json.JSONTokener(sample).nextValue().toString()).optString("paper")
+                            val values = Regex("[0-9.]+").findAll(paper).map { it.value.toDouble() }.toList()
+                            if (values.size >= 3 && (values.size == 3 || values[3] > 0.0)) {
+                                appSetPaper(android.graphics.Color.rgb(values[0].toInt(), values[1].toInt(), values[2].toInt()))
+                            }
                         }
+                        return@withTimeoutOrNull true
                     }
-                    return@withTimeoutOrNull true
+                    last = sample
+                } else {
+                    last = null
                 }
-                last = sample
                 kotlinx.coroutines.delay(16)
             }
             false
         } == true
-        if (anchor != null) {
-            if (!awaitReady(false, false)) return false
-            appPositionPage(anchor)
-        }
-        if (!awaitReady(true, stable || anchor != null)) return false
+        if (!ready) return false
+        if (!waitForPaint) return true
         val view = appVisibleWebView() ?: return false
         // The WebView may be fully covered by our retained Flutter page. A
         // compositor acknowledgement is optional there; DOM/font/image readiness
@@ -433,7 +454,10 @@ object ReadiumReader :
     // Snapshot identity must not resolve DOM selectors or traverse the TOC.
     fun appPageKeyJson(): String? = epubNavigator?.currentLocator?.value?.toJSON()?.toString()
 
-    suspend fun appCapturePage(includeBands: Boolean = false, vertical: Boolean = false, allowLateCapture: Boolean = false): Map<String, Any>? {
+    suspend fun appCapturePage(
+        includeBands: Boolean = false, vertical: Boolean = false,
+        allowLateCapture: Boolean = false, fixedLayoutPaper: Int? = null,
+    ): Map<String, Any>? {
         // Use the selected resource for DOM geometry, but draw its parent tree:
         // ViewGroup.drawChild supplies the WebView's native scroll translation.
         // Calling webView.draw directly loses that translation after TOC jumps.
@@ -463,13 +487,17 @@ object ReadiumReader :
                             if(b>a)spans.push([a,b]);
                         }
                         if($includeBands){
-                            var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT),node,range=document.createRange(),groups=new Set();
+                            var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT),node,range=document.createRange(),groups=new Set(),parents=new Set();
                             while(node=walker.nextNode()){
-                                if(!node.textContent.trim()||!node.parentElement||node.parentElement.closest('script,style,[data-readium]'))continue;
-                                var visible=Array.from(node.parentElement.getClientRects()).some(function(r){return r.right>0&&r.left<w&&r.bottom>0&&r.top<h;});
+                                var parent=node.parentElement;
+                                if(!parent||parents.has(parent)||!node.textContent.trim())continue;
+                                parents.add(parent);
+                                if(parent.closest('script,style,[data-readium]'))continue;
+                                var group=parent.closest('p,li,pre,h1,h2,h3,h4,h5,h6')||parent.closest('div,blockquote,body')||parent;
+                                if(groups.has(group))continue;
+                                var visible=Array.from(parent.getClientRects()).some(function(r){return r.right>0&&r.left<w&&r.bottom>0&&r.top<h;});
                                 if(!visible)continue;
-                                var group=node.parentElement.closest('p,li,pre,h1,h2,h3,h4,h5,h6')||node.parentElement.closest('div,blockquote,body')||node.parentElement;
-                                if(groups.has(group))continue;groups.add(group);
+                                groups.add(group);
                                 var part=[];
                                 function flush(){if(part.length){spans.push([Math.min.apply(null,part.map(function(r){return r[0];})),Math.max.apply(null,part.map(function(r){return r[1];}))]);part=[];}}
                                 function leaf(n){
@@ -499,7 +527,7 @@ object ReadiumReader :
         val geometry = info.getJSONObject("geometry")
         val visibleLocator = appLocatorAtGeometry(locator, view, geometry)
         val color = info.getJSONArray("color")
-        val paper = android.graphics.Color.rgb(color.getInt(0), color.getInt(1), color.getInt(2))
+        val paper = fixedLayoutPaper ?: android.graphics.Color.rgb(color.getInt(0), color.getInt(1), color.getInt(2))
         // Keep one physical pixel per texel. Downsampling here blurs every
         // glyph before the curl or paragraph animation has even transformed it.
         val bitmap = android.graphics.Bitmap.createBitmap(root.width, root.height, android.graphics.Bitmap.Config.ARGB_8888)
@@ -556,9 +584,11 @@ object ReadiumReader :
                 }
                 cuts.add(1.0)
                 val bands = cuts.zipWithNext { a,b -> if (vertical) listOf(a,0.0,b,1.0) else listOf(0.0,a,1.0,b) }
-                val returnRows = appHorizontalRows(rgba, width, height)
+                val returnBottoms = if (includeBands && !vertical && cuts.size > 2) cuts.drop(1)
+                    else appHorizontalCuts(rgba, width, height)
                 mapOf("width" to width, "height" to height, "pixels" to rgba,
-                    "bands" to bands, "returnRows" to returnRows, "color" to (0..2).map { color.getInt(it) },
+                    "bands" to bands, "returnBottoms" to returnBottoms,
+                    "color" to listOf(android.graphics.Color.red(paper), android.graphics.Color.green(paper), android.graphics.Color.blue(paper)),
                     "locator" to visibleLocator, "identity" to identity,
                     "anchor" to JSONObject().put("locator", JSONObject(visibleLocator)).put("geometry", geometry)
                         .put("x", geometry.getDouble("x")).put("y", geometry.getDouble("y")).toString())
@@ -567,9 +597,9 @@ object ReadiumReader :
     }
 
     // Separate horizontal rows in the rendered bitmap for the foreground
-    // animation. Sample to find gaps, then measure travel at full width so
-    // moving the strip inside its original bounds never crops the line's ink.
-    private fun appHorizontalRows(rgba: ByteArray, width: Int, height: Int): List<List<Double>> {
+    // animation when paragraph geometry was not captured. Validate the
+    // sampled gaps across the full width before cutting the bitmap.
+    private fun appHorizontalCuts(rgba: ByteArray, width: Int, height: Int): List<Double> {
         val stride = (width / 96).coerceAtLeast(1)
         fun quiet(row: Int, sampleSpacing: Int): Boolean {
             val first = row * width * 4
@@ -584,13 +614,7 @@ object ReadiumReader :
             }
             return true
         }
-        val rows = mutableListOf<List<Double>>()
-        fun addRow(bottom: Int, gap: Int) {
-            val limit = maxOf(gap, bottom - height / 30)
-            var ink = bottom - 1
-            while (ink >= limit && quiet(ink, 1)) ink--
-            rows.add(listOf(bottom.toDouble() / height, (bottom - 1 - ink).toDouble() / height))
-        }
+        val bottoms = mutableListOf<Double>()
         var hadInk = false
         var gap = -1
         for (row in 0 until height) {
@@ -599,14 +623,14 @@ object ReadiumReader :
             } else {
                 if (gap >= 0 && row - gap >= 3) {
                     val cut = (gap + row) / 2
-                    if (quiet(cut - 1, 1) && quiet(cut, 1)) addRow(cut, gap)
+                    if (quiet(cut - 1, 1) && quiet(cut, 1)) bottoms.add(cut.toDouble() / height)
                 }
                 hadInk = true
                 gap = -1
             }
         }
-        addRow(height, gap.coerceAtLeast(0))
-        return rows
+        bottoms.add(1.0)
+        return bottoms
     }
 
     private var appRef: WeakReference<Application>? = null

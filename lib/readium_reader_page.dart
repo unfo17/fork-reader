@@ -266,11 +266,14 @@ class ReadiumReaderBridge extends ChangeNotifier {
   final turns = ReadiumPageTurnController();
   ReaderPreferences _appearance = const ReaderPreferences();
   bool _dark = false;
+  Color? _systemPaper;
   Color? _pagePaper;
-  Color get pagePaper => _pagePaper ?? _appearance.background(_dark);
-  void motionPreferences(ReaderPreferences preferences, bool dark) {
+  Color get pagePaper => _systemPaper ?? _pagePaper ?? _appearance.background(_dark);
+  void motionPreferences(ReaderPreferences preferences, bool dark, {ColorScheme? systemPalette}) {
     _appearance = preferences;
     _dark = dark;
+    if (_systemPaper != systemPalette?.surface) _pagePaper = null;
+    _systemPaper = systemPalette?.surface;
   }
 
   late final ValueNotifier<bool> controls;
@@ -703,7 +706,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
           final result = await native.invokeMapMethod<String, dynamic>('page', {'direction': direction.sign, 'animated': false});
           if (result?['moved'] != true) throw StateError('相邻页未能就绪');
           if (epoch != _previewEpoch) throw StateError('预加载已让位于阅读操作');
-          await _waitForPageReady(previewVersion: version, stable: true);
+          if (offset == direction.abs() - 1 || result?['resourceChanged'] == true) {
+            await _waitForPageReady(previewVersion: version, stable: true, waitForPaint: false);
+          }
         }
         for (var attempt = 0; attempt < 3 && frame == null; attempt++) {
           final captured = await _capturePage();
@@ -729,10 +734,13 @@ class ReadiumReaderBridge extends ChangeNotifier {
     return frame;
   }
 
-  Future<void> _waitForPageReady({String? anchor, int? previewVersion, bool stable = false}) async {
+  Future<void> _waitForPageReady({
+    String? anchor, int? previewVersion, bool stable = false, bool waitForPaint = true,
+  }) async {
     final ready = await native.invokeMethod<bool>('ready', {
       'style': _fixedLayout == true ? null : _appliedStyleSignature,
       'stable': stable,
+      'waitForPaint': waitForPaint,
       if (anchor != null) 'anchor': anchor,
       if (previewVersion != null) 'previewVersion': previewVersion,
     });
@@ -775,6 +783,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
       'bands': _appearance.pageEffect == ReaderPageEffect.staggered,
       'vertical': _preferences.verticalText == true,
       'allowLateCapture': allowNavigating,
+      if (_systemPaper case final paper? when _fixedLayout == true)
+        'paper': paper.toARGB32(),
     });
     if (pixels == null) return null;
     final bytes = pixels['pixels'] as Uint8List;
@@ -818,10 +828,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       bands,
       Color.fromARGB(255, color[0].round(), color[1].round(), color[2].round()),
       anchor: pixels['anchor'] as String?,
-      returnRows: (pixels['returnRows'] as List?)?.map((values) {
-        final row = (values as List).cast<num>();
-        return (bottom: row[0].toDouble(), clearance: row[1].toDouble());
-      }).toList(growable: false) ?? const [],
+      returnBottoms: (pixels['returnBottoms'] as List?)?.cast<double>() ?? const [],
     );
   }
 
@@ -989,6 +996,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     required double fontSize,
     required double lineHeight,
     required bool dark,
+    ColorScheme? systemPalette,
     required String? fontFamily,
     required EdgeInsets pageInsets,
     bool defaultsOnly = false,
@@ -998,8 +1006,12 @@ class ReadiumReaderBridge extends ChangeNotifier {
     String? onlyLanguage,
   }) {
     final ticket = ++_preferencesTicket;
-    _appearance = prefs;
-    _dark = dark;
+    motionPreferences(prefs, dark, systemPalette: systemPalette);
+    final paperColor = systemPalette?.surface ?? prefs.background(dark);
+    final darkPaper = prefs.darkPaper(dark);
+    final ink = systemPalette?.onSurface ?? prefs.controlForeground(dark);
+    final textColor = darkPaper ? Color.lerp(paperColor, ink, prefs.nightTextBrightness) : ink;
+    final useReadiumColors = darkPaper || (!Platform.isAndroid && systemPalette != null);
     final anchor = _layoutAnchor ??= locator;
     final nextPreferences = rd.EPUBPreferences(
       publisherStyles: true,
@@ -1020,10 +1032,10 @@ class ReadiumReaderBridge extends ChangeNotifier {
           : null,
       letterSpacing: prefs.letterSpacing / fontSize,
       textAlign: prefs.justify ? TextAlign.justify : null,
-      textColor: prefs.darkPaper(dark) ? prefs.foreground(dark) : null,
+      textColor: useReadiumColors ? textColor : null,
       // Readium pairs text/background overrides for a readable night palette.
       // Daytime paper is applied only to the page, preserving publisher boxes.
-      backgroundColor: prefs.darkPaper(dark) ? prefs.background(dark) : null,
+      backgroundColor: useReadiumColors ? paperColor : null,
     );
     // Set before the platform view is constructed, including its scroll mode.
     _preferences = nextPreferences;
@@ -1038,8 +1050,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
         _fixedLayout ??=
             await native.invokeMethod<bool>('fixedLayout') ?? false;
         _appliedStyleSignature = '${identityHashCode(this)}:$ticket';
-        final paper = prefs
-            .background(dark)
+        final paper = paperColor
             .toARGB32()
             .toRadixString(16)
             .padLeft(8, '0')
@@ -1077,7 +1088,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
         }
         if (backgroundFile != null) {
           final data = await _dataUrl(backgroundFile, 'image/png');
-          final c = prefs.background(dark);
+          final c = paperColor;
           final shade =
               'rgba(${(c.r * 255).round()},${(c.g * 255).round()},${(c.b * 255).round()},${1 - prefs.backgroundOpacity})';
           final fit = prefs.backgroundFit == BoxFit.contain
@@ -1163,7 +1174,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
                   if(/readium_assets|readium-css/i.test(sheet.href||'')||/readium|wenku/i.test(sheet.ownerNode&&sheet.ownerNode.id||''))continue;
                   try{if(paintsRoot(sheet.cssRules))authoredRoot=true;}catch(e){}
                 }
-                var color=${overrideBackground ? jsonEncode('#$paper') : "opaque?bg.backgroundColor:(authoredRoot?html.backgroundColor:'#$paper')"};
+                var color=${overrideBackground || systemPalette != null ? jsonEncode('#$paper') : "opaque?bg.backgroundColor:(authoredRoot?html.backgroundColor:'#$paper')"};
                 var image=${overrideBackground ? "'none'" : "bg.backgroundImage!=='none'?bg.backgroundImage:html.backgroundImage"};
                 s=document.createElement('style');s.id='wenku-reader-preferences';
                 s.textContent=${jsonEncode(css.toString())} + (image!=='none'&&!${overrideBackground}?'html{background-size:'+bg.backgroundSize+';background-repeat:'+bg.backgroundRepeat+';background-position:'+bg.backgroundPosition+';background-attachment:fixed;}':'');document.head.appendChild(s);
@@ -1237,9 +1248,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
       if (stable >= (sample?.contains('|image') == true ? 1 : 3)) {
         final rgb = RegExp(r'rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)').firstMatch(sample!);
         if (rgb != null) {
-          final paper = rgb[4] != null && double.parse(rgb[4]!) == 0
+          final paper = _systemPaper ?? (rgb[4] != null && double.parse(rgb[4]!) == 0
               ? _appearance.background(_dark)
-              : Color.fromARGB(255, int.parse(rgb[1]!), int.parse(rgb[2]!), int.parse(rgb[3]!));
+              : Color.fromARGB(255, int.parse(rgb[1]!), int.parse(rgb[2]!), int.parse(rgb[3]!)));
           await native.invokeMethod<void>('paper', {'color': paper.toARGB32()});
           if (!_disposed && _pagePaper != paper) {
             _pagePaper = paper;

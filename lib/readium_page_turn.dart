@@ -11,12 +11,12 @@ import 'reader_turn_motion.dart';
 /// A retained image of Readium's rendered page, never re-typeset Flutter text.
 class ReadiumPageFrame {
   ReadiumPageFrame(this.image, this.location, this.bands, this.paper, {
-    this.anchor, this.returnRows = const [],
+    this.anchor, this.returnBottoms = const [],
   });
   final ui.Image image;
   final String location;
   final List<Rect> bands;
-  final List<({double bottom, double clearance})> returnRows;
+  final List<double> returnBottoms;
   final Color paper;
   final String? anchor;
   int _references = 1;
@@ -300,9 +300,7 @@ class ReadiumPageSurface extends StatefulWidget {
 class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     with TickerProviderStateMixin {
   late final _clock = AnimationController(vsync: this);
-  late final _returnClock = AnimationController(
-    vsync: this, duration: const Duration(milliseconds: 360),
-  );
+  late final _returnClock = AnimationController(vsync: this);
   int _returnEpoch = 0;
   ReadiumPageFrame? _returnFrame;
   ReadiumPageFrame? _from, _to;
@@ -410,6 +408,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       frame.dispose();
       return;
     }
+    _returnClock.duration = widget.preferences.pageSpeed.durationFor(ReaderPageEffect.staggered);
     setState(() => _returnFrame = frame);
     unawaited(_returnClock.forward(from: 0).orCancel.then((_) {
       if (mounted && _returnEpoch == epoch) _stopReturnAnimation();
@@ -1543,7 +1542,9 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         ),
       if (_returnFrame case final frame?)
         Positioned.fill(key: const ValueKey('readium-return-page'), child: IgnorePointer(child: ExcludeSemantics(
-          child: RepaintBoundary(child: CustomPaint(painter: _ReadiumReturnRows(frame, _returnClock))),
+          child: RepaintBoundary(child: CustomPaint(
+            painter: _ReadiumParagraphTurn(frame, _returnClock, 1, true, false, enterFromBottom: true),
+          )),
         ))),
     ],
   );
@@ -1578,43 +1579,6 @@ void _drawReadiumPage(Canvas canvas, Size size, ReadiumPageFrame frame) {
   canvas.drawImageRect(image,
     Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
     Offset.zero & size, Paint()..filterQuality = FilterQuality.none);
-}
-
-class _ReadiumReturnRows extends CustomPainter {
-  _ReadiumReturnRows(this.frame, this.clock) : super(repaint: clock);
-
-  final ReadiumPageFrame frame;
-  final Animation<double> clock;
-  final Paint _ink = Paint()..filterQuality = FilterQuality.none;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final bounds = Offset.zero & size;
-    canvas.drawRect(bounds, Paint()..color = frame.paper);
-    final bands = frame.returnRows.isEmpty
-        ? const [(bottom: 1.0, clearance: 0.02)]
-        : frame.returnRows;
-    final width = frame.image.width.toDouble(), height = frame.image.height.toDouble();
-    final rows = bands.length;
-    final scale = size.height / height;
-    var top = 0.0;
-    for (var index = 0; index < rows; index++) {
-      final (bottom: bottom, clearance: clearance) = bands[index];
-      final band = Rect.fromLTRB(0, top * size.height, size.width, bottom * size.height);
-      final start = rows == 1 ? 0.0 : .5 * (rows - 1 - index) / (rows - 1);
-      final progress = ((clock.value - start) * 2).clamp(0.0, 1.0);
-      final travel = math.min(12.0, math.min(band.height * .25, clearance * size.height));
-      final dy = ((1 - Curves.easeOutCubic.transform(progress)) * travel / scale).round() * scale;
-      final source = Rect.fromLTRB(0, top * height, width, bottom * height - dy / scale);
-      final destination = Rect.fromLTRB(0, band.top + dy, size.width, band.bottom);
-      if (!destination.isEmpty) canvas.drawImageRect(frame.image, source, destination, _ink);
-      top = bottom;
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _ReadiumReturnRows old) =>
-      old.frame != frame || old.clock != clock;
 }
 
 /// A turn paints the next turn in its destination's place. Earlier sheets
@@ -1746,79 +1710,120 @@ class _ReadiumParagraphTurn extends CustomPainter {
     this.clock,
     this.direction,
     this.incoming,
-    this.vertical,
-  ) : super(repaint: clock);
+    this.vertical, {
+    this.enterFromBottom = false,
+  }) : super(repaint: clock);
+
   final ReadiumPageFrame frame;
   final Animation<double> clock;
   final double direction;
-  final bool incoming, vertical;
+  final bool incoming, vertical, enterFromBottom;
   Size? _size;
-  late ReaderTurnScope _motion;
-  late List<({Rect source, Rect bounds})> _parts;
+  late List<({Rect source, Interval timing})> _parts;
+  late double _scaleX, _scaleY;
   late Float32List _transforms, _sources;
+  final _mask = Path();
   final _ink = Paint()..filterQuality = FilterQuality.none;
+  final _paper = Paint();
 
   void _layout(Size size) {
-    if (_size != size) {
-      _size = size;
-      _motion = ReaderTurnScope(
-        animation: clock,
-        direction: direction,
-        outgoing: !incoming,
-        relay: true,
-        relayCurve: const Cubic(.22, .1, .28, 1),
-        vertical: vertical,
-        leafSize: size,
-        child: const SizedBox(),
-      );
-      final bands = frame.bands.isEmpty ? [const Rect.fromLTRB(0, 0, 1, 1)] : frame.bands;
-      _parts = [for (final band in bands) (
-        source: Rect.fromLTRB(band.left * frame.image.width, band.top * frame.image.height,
-          band.right * frame.image.width, band.bottom * frame.image.height),
-        bounds: Rect.fromLTRB(band.left * size.width, band.top * size.height,
-          band.right * size.width, band.bottom * size.height),
-      )];
-      _transforms = Float32List(_parts.length * 4);
-      _sources = Float32List(_parts.length * 4);
-    }
+    if (_size == size) return;
+    _size = size;
+    _scaleX = size.width / frame.image.width;
+    _scaleY = size.height / frame.image.height;
+    final motion = ReaderTurnScope(
+      animation: clock,
+      direction: direction,
+      outgoing: !incoming,
+      relay: true,
+      relayCurve: const Cubic(.22, .1, .28, 1),
+      vertical: vertical,
+      leafSize: size,
+      child: const SizedBox(),
+    );
+    final bands = enterFromBottom && frame.returnBottoms.isNotEmpty
+        ? [
+            for (var i = 0; i < frame.returnBottoms.length; i++)
+              Rect.fromLTRB(0, i == 0 ? 0 : frame.returnBottoms[i - 1], 1, frame.returnBottoms[i]),
+          ]
+        : frame.bands.isEmpty || enterFromBottom
+        ? [const Rect.fromLTRB(0, 0, 1, 1)]
+        : frame.bands;
+    _parts = [
+      for (var index = 0; index < bands.length; index++)
+        (
+          source: Rect.fromLTRB(
+            (bands[index].left * frame.image.width).roundToDouble(),
+            (bands[index].top * frame.image.height).roundToDouble(),
+            (bands[index].right * frame.image.width).roundToDouble(),
+            (bands[index].bottom * frame.image.height).roundToDouble(),
+          ),
+          timing: motion.relayIntervalFor(index, bands.length, bounds: Rect.fromLTRB(
+            bands[index].left * size.width, bands[index].top * size.height,
+            bands[index].right * size.width, bands[index].bottom * size.height,
+          )),
+        ),
+    ];
+    _transforms = Float32List(_parts.length * 4);
+    _sources = Float32List(_parts.length * 4);
+  }
+
+  double _travel(Interval timing, double progress) {
+    final fraction = timing.transform(progress);
+    final distance = (incoming ? 1 - fraction : -fraction) * direction;
+    return (distance * (enterFromBottom ? frame.image.height : frame.image.width)).roundToDouble();
   }
 
   Path visibleBands(Size size) {
     _layout(size);
-    final path = Path();
+    _mask.reset();
+    final progress = clock.value;
     final viewport = Offset.zero & size;
-    for (var i = 0; i < _parts.length; i++) {
-      final part = _parts[i];
-      final offset = _motion.displacementFor(i, _parts.length, bounds: part.bounds);
-      final destination = part.bounds.shift(offset).intersect(viewport);
-      if (!destination.isEmpty) path.addRect(destination);
+    for (final part in _parts) {
+      final source = part.source;
+      final dx = _travel(part.timing, progress);
+      final destination = Rect.fromLTRB(
+        (source.left + dx) * _scaleX, source.top * _scaleY,
+        (source.right + dx) * _scaleX, source.bottom * _scaleY,
+      ).intersect(viewport);
+      if (!destination.isEmpty) _mask.addRect(destination);
     }
-    return path;
+    return _mask;
   }
 
   @override
   void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+    final progress = clock.value;
+    if (enterFromBottom) {
+      if (progress >= 1) {
+        _drawReadiumPage(canvas, size, frame);
+        return;
+      }
+      canvas.drawRect(Offset.zero & size, _paper..color = frame.paper);
+    }
     _layout(size);
-    final scaleX = size.width / frame.image.width;
-    final scaleY = size.height / frame.image.height;
     var used = 0;
-    for (var i = 0; i < _parts.length; i++) {
-      final part = _parts[i];
-      final offset = _motion.displacementFor(i, _parts.length, bounds: part.bounds);
-      final x = part.source.left + (offset.dx / scaleX).round();
-      if (x >= frame.image.width || x + part.source.width <= 0) continue;
-      _sources[used] = part.source.left;
-      _sources[used + 1] = part.source.top;
-      _sources[used + 2] = part.source.right;
-      _sources[used + 3] = part.source.bottom;
+    for (final part in _parts) {
+      final source = part.source;
+      final travel = _travel(part.timing, progress);
+      final x = source.left + (enterFromBottom ? 0 : travel);
+      final y = source.top + (enterFromBottom ? travel : 0);
+      if (x >= frame.image.width || x + source.width <= 0 ||
+          y >= frame.image.height || y + source.height <= 0) continue;
+      _sources[used] = source.left;
+      _sources[used + 1] = source.top;
+      _sources[used + 2] = source.right;
+      _sources[used + 3] = source.bottom;
       _transforms[used] = 1;
       _transforms[used + 2] = x;
-      _transforms[used + 3] = part.source.top;
+      _transforms[used + 3] = y;
       used += 4;
     }
     if (used == 0) return;
     canvas.save();
-    canvas.scale(scaleX, scaleY);
+    if (enterFromBottom) canvas.clipRect(Offset.zero & size, doAntiAlias: false);
+    canvas.scale(_scaleX, _scaleY);
     canvas.drawRawAtlas(frame.image, Float32List.sublistView(_transforms, 0, used),
         Float32List.sublistView(_sources, 0, used), null, null, null, _ink);
     canvas.restore();
@@ -1830,7 +1835,8 @@ class _ReadiumParagraphTurn extends CustomPainter {
       old.frame != frame ||
       old.incoming != incoming ||
       old.direction != direction ||
-      old.vertical != vertical;
+      old.vertical != vertical ||
+      old.enterFromBottom != enterFromBottom;
 }
 
 /// Textured fold around a tilted cylindrical axis. One image shader and three
