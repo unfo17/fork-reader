@@ -488,6 +488,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     _styleReady = false;
     _navigatorReady = false;
     _layoutAnchor = null;
+    _hasSavedLocator = false;
     _appliedDecorationKeys.clear();
     _firstLocation = Completer<void>();
     initialLocator = null;
@@ -566,6 +567,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
           );
           if (saved != null && chapterFor(saved) == chapter) {
             initialLocator = saved;
+            _layoutAnchor = saved;
             _hasSavedLocator = true;
           }
         } catch (_) {}
@@ -1114,7 +1116,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     final ink = systemPalette?.onSurface ?? prefs.controlForeground(dark);
     final textColor = darkPaper ? Color.lerp(paperColor, ink, prefs.nightTextBrightness) : ink;
     final useReadiumColors = darkPaper || (!Platform.isAndroid && systemPalette != null);
-    final anchor = _layoutAnchor ??= locator;
+    final requestedAnchor = defaultsOnly ? null : (_layoutAnchor ??= locator);
     final nextPreferences = rd.EPUBPreferences(
       publisherStyles: true,
       fontSize: fontSize / 18,
@@ -1145,6 +1147,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
     if (defaultsOnly) return Future<void>.value();
     return command(() async {
       if (ticket != _preferencesTicket) return;
+      // The publication may finish opening while this preference update waits
+      // in the command queue. Prefer its saved position to any pre-style page.
+      final anchor = _layoutAnchor ?? requestedAnchor;
       _styleReady = false;
       notifyListeners();
       await api.setEPUBPreferences(nextPreferences);
@@ -1314,13 +1319,18 @@ class ReadiumReaderBridge extends ChangeNotifier {
             !_disposed &&
             _owner == this &&
             identical(_layoutAnchor, anchor)) {
-          await _navigate(anchor);
+          final locations = anchor.locations;
+          await _navigate(anchor, seek: identical(anchor, initialLocator) &&
+              locations?.progression != null &&
+              locations?.cssSelector == null &&
+              (anchor.text?.highlight ?? '').isEmpty);
           _layoutAnchor = null;
         }
       }
     }, waitForView: false).whenComplete(() {
       if (!_disposed && ticket == _preferencesTicket) {
         _styleReady = true;
+        persist();
         notifyListeners();
       }
     });
@@ -1382,6 +1392,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     _scrollAtEnd = result == 'true';
   });
   void persist() {
+    if (initialLocator != null && identical(_layoutAnchor, initialLocator)) return;
     final at = locator;
     final prefs = _prefs;
     if (at == null || prefs == null) return;
