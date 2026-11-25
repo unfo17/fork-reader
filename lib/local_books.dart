@@ -3044,6 +3044,18 @@ class LocalBookStore extends ChangeNotifier
     return null;
   }
 
+  Object? readiumSourceIdentity(int id) {
+    final source = _sources[id];
+    if (source == null || !isReadiumEpub(id)) return null;
+    final linked = source['linkedOriginal'] as Map?;
+    return (id, source['digest'], linked?['reference'], linked?['modified'], linked?['size']);
+  }
+
+  Future<void> validateReadiumOriginal(int id) =>
+      _withOriginalInput(id, (input) async {
+        if (input.length <= 0) throw const FormatException('无法再读取这份 EPUB 原文件');
+      });
+
   /// A managed EPUB already belongs to this sandbox. Give Readium a stable,
   /// typed filename without streaming another copy on every reader entry.
   Future<File?> managedEpubForReadium(int id) async {

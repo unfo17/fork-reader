@@ -78,6 +78,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
   static ReadiumReaderBridge? _owner;
   static Future<void> _lifecycle = Future.value();
   static Timer? _idlePublicationClose;
+  static ({LocalBookStore books, Object identity, Directory? staging})? _parked;
+  Object? _sourceIdentity;
   var _firstLocation = Completer<void>();
   bool _suspended = false;
   bool _openedOnce = false;
@@ -497,18 +499,46 @@ class ReadiumReaderBridge extends ChangeNotifier {
   Future<void> _open() async {
     try {
       _prefs = await SharedPreferences.getInstance();
-      final managed = await books.managedEpubForReadium(book.id);
-      if (managed == null) {
-        _staging ??= await (await getTemporaryDirectory()).createTemp('readium-render-');
-      }
-      final file = managed ?? File('${_staging!.path}/publication.epub');
-      if (managed == null && !await file.exists()) {
-        await books.copyEpubForReadium(book.id, file);
-      }
       if (_disposed) return;
       final acquire = _lifecycle.catchError((Object _) {}).then((_) async {
         if (_disposed) return;
         _idlePublicationClose?.cancel();
+        _sourceIdentity = books.readiumSourceIdentity(book.id);
+        final parked = _parked;
+        if (parked != null) {
+          if (identical(parked.books, books) && parked.identity == _sourceIdentity) {
+            try {
+              // Open an inexpensive read lease again so a revoked grant or
+              // changed original cannot silently reopen the staged revision.
+              await books.validateReadiumOriginal(book.id);
+              if (_disposed) {
+                await _closeParked();
+                return;
+              }
+              final staged = parked.staging;
+              if (staged == null || await File('${staged.path}/publication.epub').exists()) {
+                _staging = staged;
+                _parked = null;
+              }
+            } catch (_) {
+              await _closeParked();
+              rethrow;
+            }
+          }
+          if (_parked != null) await _closeParked();
+        }
+        final managed = _staging == null ? await books.managedEpubForReadium(book.id) : null;
+        if (managed == null) {
+          _staging ??= await (await getTemporaryDirectory()).createTemp('readium-render-');
+        }
+        final file = managed ?? File('${_staging!.path}/publication.epub');
+        if (managed == null && !await file.exists()) {
+          await books.copyEpubForReadium(book.id, file);
+        }
+        if (_disposed) {
+          if (parked != null && _owner == null) await api.closePublication();
+          return;
+        }
         final previous = _owner;
         if (previous != null) {
           await previous._events?.cancel();
@@ -551,6 +581,18 @@ class ReadiumReaderBridge extends ChangeNotifier {
     } catch (e) {
       error = 'EPUB 打开失败：$e';
       if (!_disposed) notifyListeners();
+    }
+  }
+
+  Future<void> _closeParked() async {
+    final staging = _parked?.staging;
+    _parked = null;
+    try {
+      await api.closePublication();
+    } finally {
+      if (staging != null && await staging.exists()) {
+        await staging.delete(recursive: true);
+      }
     }
   }
 
@@ -1452,13 +1494,16 @@ class ReadiumReaderBridge extends ChangeNotifier {
           await _commands;
           if (_owner == this) {
             _owner = null;
-            if (Platform.isAndroid && _staging == null && publication != null) {
+            final identity = _sourceIdentity;
+            if (Platform.isAndroid && identity != null && publication != null) {
               try {
                 await native.invokeMethod<void>('parkPublication');
+                _parked = (books: books, identity: identity, staging: _staging);
+                _staging = null;
                 _idlePublicationClose?.cancel();
                 _idlePublicationClose = Timer(const Duration(seconds: 45), () {
                   final close = _lifecycle.catchError((Object _) {}).then((_) async {
-                    if (_owner == null) await api.closePublication();
+                    if (_owner == null && _parked != null) await _closeParked();
                   });
                   _lifecycle = close.catchError((Object _) {});
                 });
