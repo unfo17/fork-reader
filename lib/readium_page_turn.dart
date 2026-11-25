@@ -466,6 +466,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
 
   Future<void> _prepareNeighbors(ReadiumPageFrame origin, {int? requiredDirection}) async {
     if (widget.preview == null) return;
+    if (requiredDirection != null &&
+        (_neighbors.containsKey(requiredDirection) || _edges.contains(requiredDirection))) return;
     final key = widget.frameKey;
     if (requiredDirection != null) {
       // A request that arrives during speculative work must still get its
@@ -477,7 +479,6 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
             _edges.contains(requiredDirection)) return;
       }
     }
-    if (requiredDirection != null && (_neighbors.containsKey(requiredDirection) || _edges.contains(requiredDirection))) return;
     if (requiredDirection == null && _windowComplete) return;
     if (_preparing != null) return _preparing;
     final done = Completer<void>();
