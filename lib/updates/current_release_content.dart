@@ -7,7 +7,7 @@ class ReleaseSection {
 }
 
 const _swipes =
-    '上一页还在翻动时，下一次滑动就能带动已露出的下一页。两张纸各自跟手，松手后按各自的节奏完成或回弹。';
+    '段落接续收尾时可以继续拖动已露出的页面。相邻页尚未缓存时，已露出的段落也会先跟手移动。';
 const _androidInstall = '已安装本仓库固定签名版的 Android 用户可以直接覆盖更新，书籍和阅读记录会保留。';
 
 const publicReleaseNotes =

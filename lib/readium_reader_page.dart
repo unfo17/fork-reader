@@ -171,6 +171,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     if (!turns.beginOverlappingDrag(start.direction, start.dx, start.width, start.y)) return false;
     _pendingDrag = null;
     _pendingTap = null;
+    _dragInFlight = true;
     _receivingDrag = true;
     onUserNavigation();
     return true;
@@ -186,12 +187,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     _dragLocation = null;
     onUserNavigation();
     turns.beginDrag(start.dx, start.width, start.y);
-    unawaited(command(() => turns.drag(direction), waitForPreparation: false).whenComplete(() {
-      _dragInFlight = _receivingDrag = false;
-      final at = _dragLocation;
-      if (at != null && !_disposed && _owner == this) _located(at);
-      _completePageRequest();
-    }));
+    unawaited(command(() => turns.drag(direction), waitForPreparation: false).whenComplete(_completePageRequest));
   }
 
   void _updatePageDrag(Map<String, dynamic> event) {
@@ -210,6 +206,10 @@ class ReadiumReaderBridge extends ChangeNotifier {
   }
 
   void _completePageRequest() {
+    _dragInFlight = _receivingDrag = false;
+    final at = _dragLocation;
+    _dragLocation = null;
+    if (at != null && !_disposed && _owner == this) _located(at);
     _pagePending = false;
     final drag = _pendingDrag, tap = _pendingTap;
     _pendingDrag = null;
@@ -597,7 +597,12 @@ class ReadiumReaderBridge extends ChangeNotifier {
   Future<void> pageBy(int direction, {bool animated = true}) async {
     if (_disposed || _navigating) return;
     if (_pagePending) {
-      if (_pendingDrag == null) _pendingTap = (direction: direction, animated: animated);
+      if (_pendingDrag == null && !_receivingDrag &&
+          turns.turnExposedPage(direction, animated: animated)) {
+        onUserNavigation();
+      } else if (_pendingDrag == null) {
+        _pendingTap = (direction: direction, animated: animated);
+      }
       return;
     }
     turns.requestTurn(direction);
