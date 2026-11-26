@@ -347,6 +347,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   ReaderPageEffect _entryEffect = ReaderPageEffect.staggered;
   bool _entryFromBottom = true;
   late bool _coverInitialEntry = widget.coverInitialEntry;
+  // A later seek or style update must not restore the old resume preview.
+  late bool _openingPageReady = widget.openingPageReady;
   ReadiumPageFrame? _from, _to;
   ReaderPageEffect _effect = ReaderPageEffect.none;
   double _direction = 1;
@@ -1342,6 +1344,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   @override
   void didUpdateWidget(covariant ReadiumPageSurface oldWidget) {
     super.didUpdateWidget(oldWidget);
+    _openingPageReady |= widget.openingPageReady;
     if (oldWidget.layoutKey != widget.layoutKey) {
       _stopReturnAnimation();
       _releaseOverlayCover();
@@ -1790,7 +1793,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
           child: RepaintBoundary(child: ClipRect(child: _entry(frame))),
         ))),
       if (widget.openingPage case final frame? when
-          _coverInitialEntry || !widget.openingPageReady)
+          _coverInitialEntry || !_openingPageReady)
         Positioned.fill(
           child: IgnorePointer(child: ExcludeSemantics(child: _pageImage(frame))),
         )
