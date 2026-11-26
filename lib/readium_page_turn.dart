@@ -1032,10 +1032,6 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       if (drag) _trackingOverlap = overlap;
     });
     if (cancelled != null) _retireOverlap(cancelled);
-    // Once the reader moves on to the following sheet, the earlier sheet can
-    // be adopted by Readium whilst its independent animation finishes.
-    final continued = tail?.continued ?? _primaryContinued;
-    if (continued != null && !continued.isCompleted) continued.complete();
     _prepareExposedPage(overlap);
     if (!drag) overlap.finish(true);
     _startNativeOverlaps();
@@ -1127,8 +1123,18 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   void _prepareExposedPage(_ReadiumOverlap overlap) {
     if (overlap.target != null || overlap.preparing != null ||
         (overlap.released.isCompleted && !overlap.committed) ||
-        !_primaryAdopted || overlap.landed.isCompleted ||
-        !identical(_cached, overlap.from)) return;
+        overlap.landed.isCompleted) return;
+    if (!_primaryAdopted || !identical(_cached, overlap.from)) {
+      // Bring Readium to the source of the missing destination. Ready
+      // destinations return above and leave the platform thread alone.
+      final primary = _primaryContinued;
+      if (primary != null && !primary.isCompleted) primary.complete();
+      for (final preceding in _overlaps) {
+        if (identical(preceding, overlap)) break;
+        if (!preceding.continued.isCompleted) preceding.continued.complete();
+      }
+      return;
+    }
     overlap.preparing = _fillExposedPage(overlap).whenComplete(() {
       overlap.preparing = null;
     });
@@ -1429,7 +1435,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   }
 
   // A single turn can finish visually before Readium lands. A subsequent
-  // swipe can advance Readium earlier while both retained sheets keep moving.
+  // swipe with a missing texture can advance Readium while both sheets move.
   bool get _deferNativeLanding =>
       _effect == ReaderPageEffect.paper ||
       _effect == ReaderPageEffect.staggered;
