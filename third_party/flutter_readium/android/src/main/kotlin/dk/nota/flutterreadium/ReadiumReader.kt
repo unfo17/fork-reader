@@ -525,14 +525,27 @@ object ReadiumReader :
                                 var owner=image.closest('p,figcaption,figure')||image;
                                 for(var rect of image.getClientRects())add(owner,rect);
                             }
-                            var spans=Array.from(groups.values()).sort(function(a,b){return a[0]-b[0];});
+                            var spans=Array.from(groups,function(entry){
+                                var owner=entry[0], ink=entry[1];
+                                if(owner.tagName!=='P')return ink;
+                                // The CSS block box is the paragraph boundary.
+                                // Font ascent/descent can extend past that box,
+                                // especially with a tight line height.
+                                var start=extent,end=0;
+                                for(var rect of owner.getClientRects()){
+                                    if(!onscreen(rect))continue;
+                                    start=Math.min(start,v?rect.left:rect.top);
+                                    end=Math.max(end,v?rect.right:rect.bottom);
+                                }
+                                return end>start?[Math.max(0,start),Math.min(extent,end)]:ink;
+                            }).sort(function(a,b){return a[0]-b[0];});
                             var previousEnd=-1;
                             for(var span of spans){
                                 // CSS text boxes can touch or slightly overlap even
                                 // when two distinct paragraphs have clear pixel rows.
                                 if(previousEnd>=0&&previousEnd-span[0]<=4){
-                                    var start=Math.min(previousEnd,span[0])-1.5;
-                                    var end=Math.max(previousEnd,span[0])+1.5;
+                                    var start=Math.min(previousEnd,span[0])-3;
+                                    var end=Math.max(previousEnd,span[0])+3;
                                     gaps.push([Math.max(0,start)/extent,Math.min(extent,end)/extent]);
                                 }
                                 previousEnd=Math.max(previousEnd,span[1]);
