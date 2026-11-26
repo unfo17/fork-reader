@@ -12,7 +12,6 @@ import 'package:flutter/services.dart';
 import 'app_ui.dart';
 import 'readium_reader_page.dart';
 import 'app_window_insets.dart';
-import 'performance_preferences.dart';
 import 'app_search_field.dart';
 import 'setting_menu.dart';
 import 'cover_images.dart';
@@ -6896,6 +6895,7 @@ class _ReaderPageState extends State<ReaderPage>
         },
       )..addListener(_nativeChanged);
       _readium!.controls.addListener(_syncNativeChrome);
+      _chrome.addStatusListener(_nativeChromeMotionChanged);
       unawaited(_bookFontReady);
     }
   }
@@ -6965,6 +6965,7 @@ class _ReaderPageState extends State<ReaderPage>
     _nativeImages?.clearMemory();
     _readium?.removeListener(_nativeChanged);
     _readium?.controls.removeListener(_syncNativeChrome);
+    _chrome.removeStatusListener(_nativeChromeMotionChanged);
     _readium?.dispose();
 
     widget.state.illustrationChanges.removeListener(_illustrationLayoutChanged);
@@ -7647,7 +7648,6 @@ class _ReaderPageState extends State<ReaderPage>
             ? null
             : _readerDockKey.currentContext,
         reduceMotion: widget.state.reduceMotion,
-        lightweight: _readium != null && LocalPlatform.android,
         surfaceWrapper: _readerSurface,
         builder: (context) => ReaderCatalogue(
           novel: _sourceBook,
@@ -8027,13 +8027,14 @@ class _ReaderPageState extends State<ReaderPage>
   }
 
   void _showChrome(bool visible) {
+    final changed = _chromeTarget != visible;
+    _chromeTarget = visible;
     if (_readium != null && _readium!.controls.value != visible)
       _readium!.controls.value = visible;
     if (visible) {
       _dismissChromeHint?.call();
       _dismissChromeHint = null;
     }
-    final changed = _chromeTarget != visible;
     if (changed) {
       unawaited(
         widget.state.setReaderChromeVisible(visible).catchError((Object _) {
@@ -8041,7 +8042,6 @@ class _ReaderPageState extends State<ReaderPage>
         }),
       );
     }
-    _chromeTarget = visible;
     _animateChrome(visible);
   }
 
@@ -8053,6 +8053,10 @@ class _ReaderPageState extends State<ReaderPage>
     } else {
       _chrome.reverse();
     }
+  }
+
+  void _nativeChromeMotionChanged(AnimationStatus status) {
+    _readium?.turns.setChromeAnimating(status.isAnimating);
   }
 
   void _scheduleChromeHint() {
@@ -8466,7 +8470,6 @@ class _ReaderPageState extends State<ReaderPage>
         context,
         note,
         reduceMotion: widget.state.reduceMotion,
-        lightweight: _readium != null && LocalPlatform.android,
         surfaceWrapper: _readerSurface,
       );
     } finally {
@@ -10069,12 +10072,7 @@ class _ReaderPageState extends State<ReaderPage>
         bookId: widget.novel.id,
         appTheme: appTheme,
         child: Builder(
-          builder: (context) {
-            final page = _readerScaffold(context, chapter, appDark);
-            return _readium != null && LocalPlatform.android
-                ? PerformanceScope.withoutBackdrop(context, page)
-                : page;
-          },
+          builder: (context) => _readerScaffold(context, chapter, appDark),
         ),
       ),
     );
@@ -11587,7 +11585,6 @@ class _ReaderPageState extends State<ReaderPage>
             : _readerDockKey.currentContext,
         reduceMotion: widget.state.reduceMotion,
         previewing: preview,
-        lightweight: _readium != null && LocalPlatform.android,
         maxWidth: 720,
         maxHeight: math.min(760, MediaQuery.sizeOf(context).height * .86),
         surfaceWrapper: _readerSurface,
@@ -11627,7 +11624,6 @@ class _ReaderPageState extends State<ReaderPage>
           initialBookmarks: bookmarks,
           initialTab: initialTab,
           scope: scope,
-          lightweight: _readium != null && LocalPlatform.android,
           canHandoff: _canHandoff(context),
           listeningBuilder: _listening == null
               ? null
@@ -11797,7 +11793,6 @@ class _ReaderPageState extends State<ReaderPage>
             ? null
             : _readerDockKey.currentContext,
         reduceMotion: widget.state.reduceMotion,
-        lightweight: _readium != null && LocalPlatform.android,
         surfaceWrapper: _readerSurface,
         builder: (sheet) => ReaderSearchPanel(
           content: content,

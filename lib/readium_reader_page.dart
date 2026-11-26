@@ -1057,6 +1057,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       anchor: pixels['anchor'] as String?,
       returnBottoms: (pixels['returnBottoms'] as List?)?.cast<double>() ?? const [],
       sampled: pixels['sampled'] == true,
+      hasIllustration: pixels['hasIllustration'] == true,
     );
   }
 

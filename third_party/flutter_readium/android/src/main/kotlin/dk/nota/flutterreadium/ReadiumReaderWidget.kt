@@ -165,7 +165,6 @@ class ReadiumReaderWidget(
             )
         }
         layout.setBackgroundColor(Color.TRANSPARENT)
-        layout.setPadding(0, 0, 0, 0)
 
         ReadiumReader.currentReaderWidget = this
 
@@ -564,6 +563,8 @@ private class AppPageGestureLayout(
     private var contentBottom = 0
     private var minimumStatus = 0
     private var hasReaderInsets = false
+    private var systemTop = 0
+    private var systemBottom = 0
 
     fun setReaderInsets(top: Double, bottom: Double, status: Double) {
         val density = resources.displayMetrics.density
@@ -582,13 +583,19 @@ private class AppPageGestureLayout(
 
     private fun applyReaderInsets(window: WindowInsetsCompat?) {
         // The IME, fullscreen switches and transient system bars must not
-        // resize the same book page. Rotation still supplies its real insets.
-        val system = window?.getInsetsIgnoringVisibility(
+        // resize the same book page. Use the host window, independent of how
+        // Flutter is compositing the platform view under the reader chrome.
+        val decor = ReadiumReader.fragmentActivity?.window?.decorView
+        val root = decor?.let(ViewCompat::getRootWindowInsets) ?: window
+        root?.getInsetsIgnoringVisibility(
             WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.navigationBars() or
                 WindowInsetsCompat.Type.displayCutout(),
-        )
-        val top = maxOf(system?.top ?: 0, minimumStatus) + contentTop
-        val bottom = (system?.bottom ?: 0) + contentBottom
+        )?.let {
+            systemTop = it.top
+            systemBottom = it.bottom
+        }
+        val top = maxOf(systemTop, minimumStatus) + contentTop
+        val bottom = systemBottom + contentBottom
         if (paddingTop != top || paddingBottom != bottom)
             setPadding(paddingLeft, top, paddingRight, bottom)
     }

@@ -85,22 +85,6 @@ class PerformanceScope extends InheritedWidget {
   /// the existing MediaQuery contract for isolated widgets and other hosts.
   final bool? explicitReduceMotion;
 
-  static Widget withoutBackdrop(BuildContext context, Widget child) {
-    final previous = of(context);
-    return PerformanceScope(
-      preferences: PerformancePreferences(enabled: true, effects: {
-        for (final effect in const [
-          PerformanceEffect.motion,
-          PerformanceEffect.animatedIcons,
-          PerformanceEffect.shelf3d,
-        ])
-          if (previous.allows(effect)) effect,
-      }),
-      explicitReduceMotion: reduceMotionOf(context),
-      child: child,
-    );
-  }
-
   static bool reduceMotionOf(BuildContext context) =>
       context
           .dependOnInheritedWidgetOfExactType<PerformanceScope>()

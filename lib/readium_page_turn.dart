@@ -12,6 +12,7 @@ import 'reader_turn_motion.dart';
 class ReadiumPageFrame {
   ReadiumPageFrame(this.image, this.location, this.bands, this.paper, {
     this.anchor, this.returnBottoms = const [], this.sampled = false,
+    this.hasIllustration = false,
   });
   final ui.Image image;
   final String location;
@@ -20,6 +21,7 @@ class ReadiumPageFrame {
   final Color paper;
   final String? anchor;
   final bool sampled;
+  final bool hasIllustration;
   FilterQuality get filterQuality => sampled ? FilterQuality.low : FilterQuality.none;
   int _references = 1;
   ReadiumPageFrame retain() { _references++; return this; }
@@ -49,6 +51,7 @@ class _ReadiumOverlap {
     required ReadiumPageFrame? next,
     required this.direction,
     required this.duration,
+    required this.onCommit,
   }) : clock = AnimationController(vsync: vsync),
        from = origin.retain(),
        previous = previous?.retain(),
@@ -58,11 +61,13 @@ class _ReadiumOverlap {
   final ReadiumPageFrame from;
   ReadiumPageFrame? previous, next;
   final Duration duration;
+  final VoidCallback? onCommit;
   final shape = _ReadiumMotionShape();
   final released = Completer<void>();
   final landed = Completer<bool>();
   Future<void>? settling;
   Future<void>? preparing;
+  bool _commitAcknowledged = false;
   int direction;
   double touchY = .5, startY = .5;
   bool committed = false;
@@ -85,6 +90,7 @@ class _ReadiumOverlap {
   void settle() {
     if (settling != null) return;
     committed = committed && target != null;
+    acknowledgeCommit();
     final end = committed ? 1.0 : 0.0;
     settling = clock.animateTo(
       end,
@@ -93,6 +99,12 @@ class _ReadiumOverlap {
     ).orCancel.catchError((Object error) {
       if (error is! TickerCanceled) throw error;
     });
+  }
+
+  void acknowledgeCommit() {
+    if (!committed || target == null || _commitAcknowledged) return;
+    _commitAcknowledged = true;
+    onCommit?.call();
   }
 
   void abandon() {
@@ -245,6 +257,7 @@ class ReadiumPageTurnController {
   Future<void> freezeForRoute() async => _owner?._freezeForRoute();
   Future<void> thawAfterRoute() async => _owner?._thawAfterRoute();
   void setOverlayOpen(bool open) => _owner?._setOverlayOpen(open);
+  void setChromeAnimating(bool animating) => _owner?._setChromeAnimating(animating);
 
   Future<void> get whenPrepared => _owner?._preparing ?? Future<void>.value();
 
@@ -351,10 +364,12 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   ReadiumPageFrame? _previewCover;
   int _dragDirection = 1;
   bool _adoptingPage = false;
+  bool _primaryCommitAcknowledged = false;
   ReadiumPageFrame? _handoffTarget;
   bool _previewHandedOff = false;
   bool _preparationInterrupted = false, _routePaused = false;
   bool _overlayOpen = false;
+  bool _chromeAnimating = false;
   ReadiumPageFrame? _routeCover;
   ReadiumPageFrame? _overlayCover;
   ReadiumPageFrame? _presented;
@@ -378,14 +393,29 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       }
     } else {
       _releaseOverlayCover();
-      final warming = _warming ? _warmDone?.future : _preparing;
-      if (warming == null) {
-        _warmLater();
-      } else {
-        unawaited(warming.whenComplete(() {
-          if (mounted && !_overlayOpen) _warmLater();
-        }));
-      }
+      _resumeWarmWhenReady();
+    }
+  }
+
+  void _setChromeAnimating(bool animating) {
+    if (animating == _chromeAnimating) return;
+    _chromeAnimating = animating;
+    if (animating) {
+      _warmTimer?.cancel();
+      if (!_busy && _preparing != null) widget.onPrioritize?.call();
+    } else {
+      _resumeWarmWhenReady();
+    }
+  }
+
+  void _resumeWarmWhenReady() {
+    final warming = _warming ? _warmDone?.future : _preparing;
+    if (warming == null) {
+      _warmLater();
+    } else {
+      unawaited(warming.whenComplete(() {
+        if (mounted && !_overlayOpen && !_chromeAnimating) _warmLater();
+      }));
     }
   }
 
@@ -602,7 +632,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       ] : offsets.map((offset) => [offset]);
       for (final run in runs) {
         if (!mounted || key != widget.frameKey || _routePaused ||
-            (requiredDirection == null && (_preparationInterrupted || _overlayOpen))) break;
+            (requiredDirection == null &&
+                (_preparationInterrupted || _overlayOpen || _chromeAnimating))) break;
         final missing = <int>[];
         for (final offset in run) {
           if (offset.abs() > 1 && _edges.contains(offset.sign)) _edges.add(offset);
@@ -693,6 +724,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     if (_busy || !mounted) return;
     _busy = true;
     _primaryCommit = _primaryAdopted = false;
+    _primaryCommitAcknowledged = false;
     _overlapLandingFailed = false;
     _previewHandedOff = false;
     _handoffTarget = null;
@@ -772,7 +804,6 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
           await _preparing;
           if (!mounted) return false;
           if (!await widget.land!(target) || !mounted) return false;
-          widget.onPageTurn?.call();
           _cached?.dispose();
           _cached = target.retain();
           _shiftWindow(_dragDirection, origin);
@@ -785,11 +816,14 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
           return false;
         }
       }
-      final landing = finish && target != null && !paper ? adopt(target) : null;
+      final landing = finish && target != null && !_deferNativeLanding(origin, target)
+          ? adopt(target)
+          : null;
       if (gesture != null) {
         if (_settling == null) _finishDrag(finish);
       } else {
         _primaryCommit = finish && target != null;
+        _acknowledgePrimaryCommit();
         _offerNextTurn();
         _settling = _animatePage(_clock, 1,
           animated ? widget.preferences.pageSpeed.durationFor(_effect) : Duration.zero,
@@ -888,6 +922,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       next: next,
       direction: direction,
       duration: animated ? widget.preferences.pageSpeed.durationFor(_effect) : Duration.zero,
+      onCommit: widget.onPageTurn,
     );
     setState(() {
       _overlaps.add(overlap);
@@ -943,8 +978,10 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         : progress > .5;
     if (grab.overlap case final overlap?) {
       overlap.committed = commit;
+      overlap.acknowledgeCommit();
     } else {
       _primaryCommit = commit;
+      _acknowledgePrimaryCommit();
       _handoffTarget = commit ? _to : null;
     }
     final target = commit ? 1.0 : 0.0;
@@ -1053,19 +1090,21 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       await overlap.preparing;
       if (!mounted || overlap.landed.isCompleted) return;
       overlap.settle();
-      if (_effect == ReaderPageEffect.paper) {
+      final target = overlap.committed ? overlap.target : null;
+      if (target != null && _deferNativeLanding(overlap.from, target)) {
         await _waitForCurrentSettle(() => overlap.settling);
         if (!mounted || overlap.landed.isCompleted) return;
       }
-      final target = overlap.committed ? overlap.target : null;
+      // A paper turn may have been taken back during the settling animation.
+      final destination = overlap.committed ? overlap.target : null;
       await _preparing;
       if (!mounted || overlap.landed.isCompleted) return;
-      final landed = target == null || await widget.land!(target).catchError((Object _) => false);
+      final landed = destination == null ||
+          await widget.land!(destination).catchError((Object _) => false);
       if (!mounted || overlap.landed.isCompleted) return;
-      if (landed && target != null) {
-        widget.onPageTurn?.call();
+      if (landed && destination != null) {
         _cached?.dispose();
-        _cached = target.retain();
+        _cached = destination.retain();
         _dragDirection = overlap.direction;
         _shiftWindow(overlap.direction, overlap.from);
       }
@@ -1127,7 +1166,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   void _warmLater() {
     _warmTimer?.cancel();
     _warmTimer = Timer(Duration(milliseconds: _cached == null ? 48 : 32), () async {
-      if (!mounted || _busy || _warming || _routePaused || _overlayOpen || _entering ||
+      if (!mounted || _busy || _warming || _routePaused || _overlayOpen ||
+          _chromeAnimating || _entering ||
           _preparationInterrupted) return;
       if ((_cached != null && (widget.preview == null || _windowComplete)) ||
           !widget.preferences.mode.paginated || widget.preferences.pageEffect == ReaderPageEffect.none) {
@@ -1258,10 +1298,24 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _nextDragTick = null;
     final target = commit ? (_destinationReady ? 1.0 : .92) : 0.0;
     _primaryCommit = widget.preview != null && target == 1;
+    _acknowledgePrimaryCommit();
     _offerNextTurn();
     _settling = _animatePage(_clock, target,
       widget.preferences.pageSpeed.durationFor(_effect), Curves.easeOutSine);
   }
+
+  void _acknowledgePrimaryCommit() {
+    if (!_primaryCommit || _primaryCommitAcknowledged) return;
+    _primaryCommitAcknowledged = true;
+    widget.onPageTurn?.call();
+  }
+
+  // Reopening an illustrated resource can compete with the Flutter animator.
+  // The prepared textures still accept another swipe while Readium waits.
+  bool _deferNativeLanding(ReadiumPageFrame origin, ReadiumPageFrame target) =>
+      _effect == ReaderPageEffect.paper ||
+      (_effect == ReaderPageEffect.staggered &&
+          (origin.hasIllustration || target.hasIllustration));
 
   @override
   void initState() {

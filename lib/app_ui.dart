@@ -1942,7 +1942,6 @@ Future<T?> showJellySheet<T>({
   required BuildContext context,
   required WidgetBuilder builder,
   bool reduceMotion = false,
-  bool lightweight = false,
   bool guardDragDismiss = false,
   ValueListenable<bool>? previewing,
   double? heightFactor,
@@ -1955,7 +1954,6 @@ Future<T?> showJellySheet<T>({
   context: context,
   builder: builder,
   reduceMotion: reduceMotion,
-  lightweight: lightweight,
   kind: GlassOverlayKind.sheet,
   guardDragDismiss: guardDragDismiss,
   previewing: previewing,
@@ -2102,7 +2100,6 @@ Future<T?> _showGlassOverlay<T>({
   required WidgetBuilder builder,
   required bool reduceMotion,
   required GlassOverlayKind kind,
-  bool lightweight = false,
   bool guardDragDismiss = false,
   Rect? anchor,
   BuildContext? sourceContext,
@@ -2116,7 +2113,7 @@ Future<T?> _showGlassOverlay<T>({
   if (_activeGlassOverlays[context] == true) return null;
   final navigator = Navigator.of(context);
   final sourceBox = sourceContext?.findRenderObject();
-  final source = sourceContext == null || lightweight
+  final source = sourceContext == null
       ? null
       : _captureGlassSource(sourceContext, navigator);
   final owner = sourceContext?.findAncestorStateOfType<_GlassMenuAnchorState>();
@@ -2128,7 +2125,6 @@ Future<T?> _showGlassOverlay<T>({
         ? sourceBox
         : null,
     source: source,
-    lightweight: lightweight,
     reduceMotion: reduceMotion || MediaQuery.disableAnimationsOf(context),
     appearance: GlassAppearance.of(context),
     themes: InheritedTheme.capture(from: context, to: navigator.context),
@@ -2348,7 +2344,6 @@ class _GlassOverlayRoute<T> extends PopupRoute<T>
     this.surfaceWrapper,
     this.preferBelow = false,
     this.guardDragDismiss = false,
-    this.lightweight = false,
   });
   final WidgetBuilder builder;
   final GlassOverlayKind kind;
@@ -2365,7 +2360,6 @@ class _GlassOverlayRoute<T> extends PopupRoute<T>
   final Widget Function(Widget)? surfaceWrapper;
   final bool preferBelow;
   final bool guardDragDismiss;
-  final bool lightweight;
 
   @override
   void install() {
@@ -2412,10 +2406,15 @@ class _GlassOverlayRoute<T> extends PopupRoute<T>
         : anchor;
     final dockSheet =
         kind == GlassOverlayKind.sheet && origin != null && source != null;
-    final contents = kind == GlassOverlayKind.sheet
+    final material = GlassOverlayTransition(
+      animation: animation,
+      kind: dockSheet ? GlassOverlayKind.menu : kind,
+      reduceMotion: reduceMotion,
+      anchor: origin,
+      coordinateSpace: overlay,
+      child: kind == GlassOverlayKind.sheet
           ? _GlassSheet(
               reduceMotion: reduceMotion,
-              lightweight: lightweight,
               guardDragDismiss: guardDragDismiss,
               previewing: previewing,
               animation: animation,
@@ -2423,7 +2422,7 @@ class _GlassOverlayRoute<T> extends PopupRoute<T>
               source: dockSheet ? source : null,
               child: ArchiveMotionScope(
                 animation: animation,
-                enabled: !reduceMotion && !lightweight,
+                enabled: !reduceMotion,
                 child: Builder(builder: builder),
               ),
             )
@@ -2441,23 +2440,8 @@ class _GlassOverlayRoute<T> extends PopupRoute<T>
                   child: Builder(builder: builder),
                 ),
               ),
-            );
-    final material = lightweight
-        ? SlideTransition(
-            position: animation.drive(
-              Tween(begin: const Offset(0, .07), end: Offset.zero)
-                  .chain(CurveTween(curve: Curves.easeOutCubic)),
             ),
-            child: contents,
-          )
-        : GlassOverlayTransition(
-            animation: animation,
-            kind: dockSheet ? GlassOverlayKind.menu : kind,
-            reduceMotion: reduceMotion,
-            anchor: origin,
-            coordinateSpace: overlay,
-            child: contents,
-          );
+    );
     final surface = surfaceWrapper?.call(material) ?? material;
     return themes.wrap(
       GlassAppearance(
@@ -2601,7 +2585,6 @@ class _GlassSheet extends StatefulWidget {
     this.animation,
     this.anchor,
     this.source,
-    this.lightweight = false,
   });
   final Widget child;
   final bool reduceMotion;
@@ -2610,7 +2593,6 @@ class _GlassSheet extends StatefulWidget {
   final Animation<double>? animation;
   final Rect? anchor;
   final GlassMenuSource? source;
-  final bool lightweight;
   @override
   State<_GlassSheet> createState() => _GlassSheetState();
 }
@@ -2676,18 +2658,6 @@ class _GlassSheetState extends State<_GlassSheet>
             valueListenable:
                 widget.previewing ?? const AlwaysStoppedAnimation(false),
             builder: (context, previewing, child) {
-              if (widget.lightweight) {
-                return ClipRRect(
-                  key: _surfaceKey,
-                  borderRadius: BorderRadius.circular(28),
-                  child: ColoredBox(
-                    color: previewing
-                        ? Colors.transparent
-                        : Theme.of(context).colorScheme.surfaceContainerHigh,
-                    child: PerformanceScope.withoutBackdrop(context, child!),
-                  ),
-                );
-              }
               return GlassOverlaySurface(
                 key: _surfaceKey,
                 transparent: previewing,

@@ -497,6 +497,10 @@ object ReadiumReader :
                         var imageOnly=!!document.querySelector('img,svg image') &&
                             !(document.body.innerText||'').trim() &&
                             !document.querySelector('svg text,canvas,video');
+                        var hasIllustration=imageOnly||Array.from(document.querySelectorAll('img,svg image')).some(function(image){
+                            var rect=image.getBoundingClientRect();
+                            return rect.right>0&&rect.left<w&&rect.bottom>0&&rect.top<h&&rect.width>0&&rect.height>0;
+                        });
                         var gaps=[];
                         if($includeBands&&!imageOnly){
                             var groups=new Map(), visible=new Map(), range=document.createRange();
@@ -555,7 +559,8 @@ object ReadiumReader :
                             }
                         }
                         var color=getComputedStyle(document.documentElement).backgroundColor.match(/[\d.]+/g)||[255,255,255];
-                        return JSON.stringify({gaps:gaps,color:color.slice(0,3).map(Number),geometry:geometry(),imageOnly:imageOnly});
+                        return JSON.stringify({gaps:gaps,color:color.slice(0,3).map(Number),geometry:geometry(),
+                            imageOnly:imageOnly,hasIllustration:hasIllustration});
                     })();
                 """.trimIndent()) { value -> if (c.isActive) c.resumeWith(Result.success(value)) }
             }
@@ -657,6 +662,7 @@ object ReadiumReader :
                 }
                 mapOf("width" to width, "height" to height, "pixels" to rgba,
                     "sampled" to (scale < 1.0),
+                    "hasIllustration" to info.optBoolean("hasIllustration"),
                     "bands" to bands, "returnBottoms" to returnBottoms,
                     "color" to listOf(android.graphics.Color.red(paper), android.graphics.Color.green(paper), android.graphics.Color.blue(paper)),
                     "locator" to visibleLocator, "identity" to identity,
