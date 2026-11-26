@@ -6,16 +6,14 @@ class ReleaseSection {
   final List<String> items;
 }
 
-const _catalogue = '目录箭头对齐，章节编号顶格，标题按层级缩进。';
-const _opening = '提前准备 EPUB，缩短进入阅读的等待。';
-const _swipes = '仿真翻页在交接时保留短时间内的有效滑动。';
+const _opening = '近期续读可直接显示已渲染的阅读页，Android 阅读界面移除进入转圈提示。';
+const _swipes = '连续翻页操作已露出的页面，松手时还没准备好的页面不会在稍后补翻。';
 const _androidInstall = '已安装本仓库固定签名版的 Android 用户可以直接覆盖更新，书籍和阅读记录会保留。';
 
 const publicReleaseNotes =
     '''
 ### $appDisplayName · Android 预览
 
-- $_catalogue
 - $_opening
 - $_swipes
 
@@ -24,7 +22,6 @@ $_androidInstall
 const currentReleaseNotes = publicReleaseNotes;
 const currentReleaseSummary = [
   currentReleaseSourcePolicy,
-  _catalogue,
   _opening,
   _swipes,
 ];
@@ -36,7 +33,6 @@ const currentReleaseSections = [
     projectDataNotice,
   ]),
   ReleaseSection('本次更新', [
-    _catalogue,
     _opening,
     _swipes,
     _androidInstall,

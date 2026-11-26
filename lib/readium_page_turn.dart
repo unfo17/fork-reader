@@ -196,12 +196,12 @@ class ReadiumPageTurnController {
     }
     // Very short gestures may have too few movement samples for a useful
     // release velocity. Use their native touch duration and displacement.
-    final commit = !cancel && commitsDrag(_progress, _velocity, durationMillis);
+    final commit = !cancel && _commitsDrag(_progress, _velocity, durationMillis);
     release.complete(commit);
     _owner?._finishDrag(commit);
   }
 
-  static bool commitsDrag(double progress, double velocity, int? durationMillis) {
+  static bool _commitsDrag(double progress, double velocity, int? durationMillis) {
     final shortSwipe = durationMillis != null &&
         durationMillis > 0 &&
         durationMillis <= 140 &&
@@ -299,6 +299,9 @@ class ReadiumPageSurface extends StatefulWidget {
     this.onTurnAvailable,
     this.onPageTurn,
     this.coverInitialEntry = false,
+    this.showEntryProgress = true,
+    this.openingPage,
+    this.openingPageReady = true,
     this.replayTap,
     this.onRetainedDrag,
     this.refreshRateLimit = 0,
@@ -317,6 +320,9 @@ class ReadiumPageSurface extends StatefulWidget {
   final VoidCallback? onTurnAvailable;
   final VoidCallback? onPageTurn;
   final bool coverInitialEntry;
+  final bool showEntryProgress;
+  final ReadiumPageFrame? openingPage;
+  final bool openingPageReady;
   final Future<void> Function(Offset fraction)? replayTap;
   final ValueChanged<Map<String, dynamic>>? onRetainedDrag;
   final Future<bool> Function(int direction)? canTurn;
@@ -489,6 +495,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       }
     }
     if (!mounted || _busy || _routePaused || effect == ReaderPageEffect.none ||
+        (initial && widget.openingPage != null) ||
         MediaQuery.disableAnimationsOf(context)) {
       clearEntryCover();
       return;
@@ -741,7 +748,6 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _previewHandedOff = false;
     _handoffTarget = null;
     _dragDirection = direction;
-    final paper = widget.preferences.pageEffect == ReaderPageEffect.paper;
     ReadiumPageFrame? from;
     final held = <ReadiumPageFrame>[];
     var committed = false;
@@ -754,10 +760,16 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       }
       if (from == null || !mounted) return;
       final requested = gesture == null ? direction : (widget.controller._sign * widget.controller._directionMultiplier).round();
-      await _prepareNeighbors(from, requiredDirection: requested);
+      if (!_neighbors.containsKey(requested) && !_edges.contains(requested)) {
+        await _prepareNeighbors(from, requiredDirection: requested);
+      }
       if (!mounted) return;
-      final releasedBeforeFrame = gesture?.isCompleted == true;
-      if (releasedBeforeFrame && !await gesture!.future) return;
+      if (gesture?.isCompleted == true) {
+        if (await gesture!.future && _edges.contains(requested)) {
+          await widget.canTurn?.call(requested);
+        }
+        return;
+      }
       // Keep both neighbours alive through frame-key changes during landing.
       for (final frame in _neighbors.values) { held.add(frame.retain()); }
       final initialDirection = gesture == null ? direction : (widget.controller._sign * widget.controller._directionMultiplier).round();
@@ -773,7 +785,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         _direction = _visualDirection(initialDirection);
         _destinationReady = true;
         _liveDestination = false;
-        _clock.value = gesture == null || _to == null || releasedBeforeFrame
+        _clock.value = gesture == null || _to == null
             ? 0 : math.min(widget.controller._progress, .85);
         _primaryTouchY = widget.controller._touchY;
         _primaryStartY = widget.controller._startY;
@@ -786,15 +798,15 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         unawaited(_prepareReversedNeighbor(initialDirection, from));
       }
       await WidgetsBinding.instance.endOfFrame;
-      var finish = gesture == null || await gesture.future;
-      if (paper && gesture != null && _settling != null) finish = _primaryCommit;
-      if (!paper && !_neighbors.containsKey(_dragDirection) && !_edges.contains(_dragDirection)) {
-        await _preparing;
-      }
+      if (gesture != null) await gesture.future;
+      var finish = gesture == null || _primaryCommit;
       final target = _neighbors[_dragDirection];
       if (target != null && !held.contains(target)) held.add(target.retain());
       if (_to != target && mounted) setState(() => _to = target);
-      if (target == null) { finish = false; await widget.canTurn?.call(_dragDirection); }
+      if (target == null) {
+        finish = false;
+        if (_edges.contains(_dragDirection)) await widget.canTurn?.call(_dragDirection);
+      }
       final origin = from;
       Future<bool> adopt(ReadiumPageFrame target) async {
         _adoptingPage = true;
@@ -818,7 +830,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
           ? adopt(target)
           : null;
       if (gesture != null) {
-        if (_settling == null) _finishDrag(finish, sampleFinger: !releasedBeforeFrame);
+        if (_settling == null) _finishDrag(false);
       } else {
         _primaryCommit = finish && target != null;
         _acknowledgePrimaryCommit();
@@ -828,7 +840,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
           Curves.easeInOutCubic);
       }
       await _waitForCurrentSettle(() => _settling);
-      if (paper) finish = _primaryCommit && target != null;
+      if (_effect == ReaderPageEffect.paper) finish = _primaryCommit && target != null;
       if (!finish) {
         _handoffTarget = null;
         await _preparing;
@@ -908,7 +920,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         index == 0 ? _cached ?? _from : _neighbors[index];
     final previous = at(offset - 1), next = at(offset + 1);
     if (_edges.contains(offset + direction)) return false;
-    if (!drag && _effect == ReaderPageEffect.paper && (direction > 0 ? next : previous) == null) return false;
+    if (!drag && (direction > 0 ? next : previous) == null) return false;
     if (_refilling && _preparingOffset != offset + direction) {
       widget.onPrioritize?.call();
     }
@@ -1028,7 +1040,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     var direction = overlap.direction;
     while (mounted && !overlap.landed.isCompleted && overlap.target == null) {
       await _prepareNeighbors(overlap.from, requiredDirection: direction);
-      if (!mounted || overlap.landed.isCompleted) return;
+      if (!mounted || overlap.landed.isCompleted ||
+          (overlap.released.isCompleted && !overlap.committed)) return;
       if (_neighbors[direction] case final frame?) {
         setState(() => overlap.attachTarget(direction, frame));
       }
@@ -1277,25 +1290,19 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         : math.min(widget.controller._progress, maxProgress);
   }
 
-  void _finishDrag(bool commit, {bool sampleFinger = true}) {
+  void _finishDrag(bool commit) {
     if (_trackingOverlap case final overlap?) {
       _paintDrag();
       _trackingOverlap = null;
       _nextDragTick = null;
-      // Once a visible page has accepted the drag, remember at most that one
-      // destination while its frame arrives. A further drag still needs a
-      // visible page to become its origin.
-      overlap.finish(commit);
+      overlap.finish(commit && overlap.target != null);
       _offerNextTurn();
       return;
     }
     if (!commit) _handoffTarget = null;
-    if (widget.preview != null && _to == null) {
-      if (_effect != ReaderPageEffect.paper && !_edges.contains(_dragDirection)) return;
-      commit = false;
-    }
+    if (widget.preview != null && _to == null) commit = false;
     if (!_dragPrepared || _settling != null || !mounted) return;
-    if (sampleFinger) _paintDrag();
+    _paintDrag();
     _dragPrepared = false;
     _nextDragTick = null;
     final target = commit ? (_destinationReady ? 1.0 : .92) : 0.0;
@@ -1775,13 +1782,19 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         Positioned.fill(key: const ValueKey('readium-return-page'), child: IgnorePointer(child: ExcludeSemantics(
           child: RepaintBoundary(child: ClipRect(child: _entry(frame))),
         ))),
-      if (_coverInitialEntry)
+      if (widget.openingPage case final frame? when
+          _coverInitialEntry || !widget.openingPageReady)
+        Positioned.fill(
+          child: IgnorePointer(child: ExcludeSemantics(child: _pageImage(frame))),
+        )
+      else if (_coverInitialEntry)
         Positioned.fill(
           child: IgnorePointer(
             child: ColoredBox(
               key: const ValueKey('readium-entry-cover'),
               color: widget.paper,
-              child: const Center(child: CircularProgressIndicator()),
+              child: widget.showEntryProgress
+                  ? const Center(child: CircularProgressIndicator()) : null,
             ),
           ),
         ),

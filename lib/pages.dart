@@ -6154,13 +6154,22 @@ class _ReaderPageState extends State<ReaderPage>
         }),
       );
     }
+    // A retained page covers native startup only with identical pagination
+    // geometry and without annotations that are reapplied after layout.
+    final resumeLayout = prefs.mode.paginated &&
+            !widget.state.bookmarksFor(widget.novel.id).any(
+              (mark) => mark.annotation.style != ReaderMarkStyle.none,
+            )
+        ? (key, MediaQuery.sizeOf(context), MediaQuery.devicePixelRatioOf(context), safe)
+        : null;
+    final view = bridge.view(resumeLayout: resumeLayout);
     return ReaderTouchSurface(
       canRecord: () => _activityEligible && !_selection.value,
       child: nativeSafeArea
-          ? bridge.view()
+          ? view
           : Padding(
               padding: EdgeInsets.only(top: pageInsets.top, bottom: pageInsets.bottom),
-              child: bridge.view(),
+              child: view,
             ),
     );
   }

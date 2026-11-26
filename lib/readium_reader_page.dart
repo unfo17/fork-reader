@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -16,18 +15,20 @@ import 'local_books.dart';
 import 'reader_preferences.dart';
 import 'readium_page_turn.dart';
 
-class _PendingReaderDrag {
-  _PendingReaderDrag(this.start);
+class _HeldReaderDrag {
+  _HeldReaderDrag(this.start);
   final Map<String, dynamic> start;
   Map<String, dynamic>? latest;
-  Duration? expires;
 }
+
+typedef _ResumePage = ({Object layout, rd.Locator locator, ReadiumPageFrame frame});
 
 typedef _ParkedPublication = ({
   LocalBookStore books,
   Object identity,
   Directory? staging,
   rd.Publication publication,
+  _ResumePage? page,
 });
 
 /// Engine adapter only. ReaderPage retains every Flutter control and panel.
@@ -87,6 +88,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
   static Future<void> _lifecycle = Future.value();
   static Timer? _idlePublicationClose;
   static _ParkedPublication? _parked;
+  Object? _resumeLayout;
+  _ResumePage? _resumePage, _openingPage;
   Object? _sourceIdentity;
   var _firstLocation = Completer<void>();
   bool _suspended = false;
@@ -150,47 +153,26 @@ class ReadiumReaderBridge extends ChangeNotifier {
   }
   bool _dragInFlight = false, _receivingDrag = false;
   rd.Locator? _dragLocation;
-  final _inputTime = Stopwatch()..start();
-  final _pendingDrags = Queue<_PendingReaderDrag>();
-  _PendingReaderDrag? _queuedPointer;
-  ({int direction, bool animated})? _pendingTap;
+  _HeldReaderDrag? _heldDrag;
 
   void _pageDrag(Map<String, dynamic> event) {
     if (_disposed || _owner != this) return;
-    if (event['phase'] == 'Start') {
+    final phase = event['phase'];
+    if (phase == 'Start') {
       if (!ready) return;
-      if (_pagePending) {
-        _discardInvalidDrags();
-        if (_pendingDrags.isEmpty && !_receivingDrag && _startOverlappingDrag(event)) return;
-        final drag = _queuedPointer = _PendingReaderDrag(event);
-        final paper = _appearance.pageEffect == ReaderPageEffect.paper;
-        if (_pendingDrags.length < (paper ? 2 : 6)) _pendingDrags.addLast(drag);
-        _pendingTap = null;
-      } else {
+      if (!_pagePending) {
         _startPageDrag(event);
+      } else if (_receivingDrag || !_startOverlappingDrag(event)) {
+        _heldDrag = _HeldReaderDrag(event);
       }
       return;
     }
-    if (_queuedPointer case final pending?) {
-      pending.latest = event;
-      if (event['phase'] == 'End' || event['phase'] == 'Cancel') {
-        _queuedPointer = null;
-        if (_appearance.pageEffect == ReaderPageEffect.paper) {
-          final start = _dragStart(pending.start);
-          final dx = (event['dx'] as num).toDouble();
-          final velocity = (event['velocityX'] as num?)?.toDouble() ?? 0;
-          final duration = (event['durationMillis'] as num?)?.toInt();
-          if (event['phase'] == 'Cancel' || !ReadiumPageTurnController.commitsDrag(
-            dx.abs() / start.width, velocity * dx.sign, duration,
-          )) {
-            _pendingDrags.remove(pending);
-          } else {
-            // Keep a brief continuation across the handoff between two sheets.
-            // A stalled WebView must not play the user's old swipes in a burst.
-            pending.expires = _inputTime.elapsed + const Duration(milliseconds: 750);
-            _continueQueuedDrag();
-          }
-        }
+    if (_heldDrag case final drag?) {
+      if (phase == 'End' || phase == 'Cancel') {
+        _heldDrag = null;
+      } else {
+        drag.latest = event;
+        _continueHeldDrag();
       }
     } else if (_receivingDrag) {
       _updatePageDrag(event);
@@ -211,33 +193,21 @@ class ReadiumReaderBridge extends ChangeNotifier {
   bool _startOverlappingDrag(Map<String, dynamic> event) {
     final start = _dragStart(event);
     if (!turns.beginOverlappingDrag(start.direction, start.dx, start.width, start.y)) return false;
-    _pendingTap = null;
     _dragInFlight = true;
     _receivingDrag = true;
     onUserNavigation();
     return true;
   }
 
-  void _continueQueuedDrag() {
-    if (_disposed || _owner != this || !ready || !_pagePending || _receivingDrag) return;
-    _discardInvalidDrags();
-    if (_pendingDrags.firstOrNull case final drag?) {
+  void _continueHeldDrag() {
+    final drag = _heldDrag;
+    if (drag == null || _disposed || _owner != this || !ready || _receivingDrag) return;
+    if (_pagePending) {
       if (!_startOverlappingDrag(drag.start)) return;
-      _pendingDrags.removeFirst();
-      _replayDrag(drag);
+    } else {
+      _startPageDrag(drag.start);
     }
-  }
-
-  void _discardInvalidDrags() {
-    final now = _inputTime.elapsed;
-    _pendingDrags.removeWhere((drag) =>
-      drag.latest?['phase'] == 'Cancel' ||
-      (drag.expires != null && drag.expires! <= now),
-    );
-  }
-
-  void _replayDrag(_PendingReaderDrag drag) {
-    if (identical(_queuedPointer, drag)) _queuedPointer = null;
+    _heldDrag = null;
     if (drag.latest case final event?) _updatePageDrag(event);
   }
 
@@ -275,22 +245,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
     _dragLocation = null;
     if (at != null && !_disposed && _owner == this) _located(at);
     _pagePending = false;
-    final tap = _pendingTap;
-    _pendingTap = null;
-    if (!_disposed && _owner == this && ready) {
-      _discardInvalidDrags();
-      if (_pendingDrags.isNotEmpty) {
-        final drag = _pendingDrags.removeFirst();
-        _startPageDrag(drag.start);
-        _replayDrag(drag);
-        return;
-      }
-      if (tap != null) {
-        unawaited(pageBy(tap.direction, animated: tap.animated));
-        return;
-      }
-    }
-    _pendingDrags.clear();
+    _continueHeldDrag();
+    if (_pagePending) return;
+    _heldDrag = null;
     _pageIdle?.complete();
     _pageIdle = null;
   }
@@ -542,7 +499,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       try {
         final publication = await api.openPublication(source.file.uri.toString());
         _parkPublication((books: books, identity: identity,
-          staging: source.staging, publication: publication));
+          staging: source.staging, publication: publication, page: null));
       } catch (_) {
         await _deleteStaging(source.staging);
         rethrow;
@@ -609,6 +566,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
                 _idlePublicationClose?.cancel();
                 _staging = staged;
                 _parked = null;
+                _openingPage = parked.page;
                 _owner = this;
                 api.setDefaultPreferences(_preferences);
                 publication = parked.publication;
@@ -680,12 +638,13 @@ class ReadiumReaderBridge extends ChangeNotifier {
 
   static Future<void> _closeParked(rd.FlutterReadium api) async {
     _idlePublicationClose?.cancel();
-    final staging = _parked?.staging;
+    final parked = _parked;
     _parked = null;
+    parked?.page?.frame.dispose();
     try {
       await api.closePublication();
     } finally {
-      await _deleteStaging(staging);
+      await _deleteStaging(parked?.staging);
     }
   }
 
@@ -851,11 +810,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
   Future<void> pageBy(int direction, {bool animated = true}) async {
     if (_disposed || _navigating) return;
     if (_pagePending) {
-      if (_pendingDrags.isEmpty && !_receivingDrag &&
+      if (_heldDrag == null && !_receivingDrag &&
           turns.turnExposedPage(direction, animated: animated)) {
         onUserNavigation();
-      } else if (_pendingDrags.isEmpty) {
-        _pendingTap = (direction: direction, animated: animated);
       }
       return;
     }
@@ -1026,6 +983,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       final anchor = jsonDecode(frame.anchor!) as Map<String, dynamic>;
       final at = rd.Locator.fromJson(anchor['locator'] as Map<String, dynamic>);
       if (at != null) {
+        _rememberResumePage(frame, at);
         if (_dragInFlight) { _dragLocation = at; } else { _located(at); }
       }
     }
@@ -1079,7 +1037,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       );
     }).toList();
     final color = (pixels['color'] as List).cast<num>();
-    return ReadiumPageFrame(
+    final frame = ReadiumPageFrame(
       image,
       pixels['identity'] as String? ??
           '${at?['href']}|${loc?['currentPage']}|${loc?['progression']}',
@@ -1089,6 +1047,19 @@ class ReadiumReaderBridge extends ChangeNotifier {
       returnBottoms: (pixels['returnBottoms'] as List?)?.cast<double>() ?? const [],
       sampled: pixels['sampled'] == true,
     );
+    if (at != null && !_previewing && !_navigating && !_landing) {
+      final captured = rd.Locator.fromJson(at);
+      if (captured != null) _rememberResumePage(frame, captured);
+    }
+    return frame;
+  }
+
+  void _rememberResumePage(ReadiumPageFrame frame, rd.Locator at) {
+    final layout = _resumeLayout;
+    if (layout == null || frame.anchor == null || !_appearance.mode.paginated) return;
+    final previous = _resumePage;
+    _resumePage = (layout: layout, locator: at, frame: frame.retain());
+    previous?.frame.dispose();
   }
 
   rd.Locator? locationFor(
@@ -1574,102 +1545,129 @@ class ReadiumReaderBridge extends ChangeNotifier {
   bool get useSnapshots => Platform.isAndroid && _appearance.mode.paginated &&
       _appearance.pageEffect != ReaderPageEffect.none;
 
-  Widget view() => _suspended
-      ? const SizedBox.expand()
-      : publication == null
-      ? Center(
-          child: error == null
-              ? const CircularProgressIndicator()
-              : Text(error!),
-        )
-      : ReadiumPageSurface(
-          controller: turns,
-          frameKey:
-              "${locator?.href}|$fraction|$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|${_appearance.pageEffect}",
-          layoutKey: '$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|${_appearance.pageEffect}',
-          preferences: _appearance,
-          paper: pagePaper,
-          capture: _capturePage,
-          step: _stepPage,
-          onPageTurn: onPageTurn,
-          coverInitialEntry: coverInitialEntry,
-          canTurn: _canTurnPage,
-          preview: useSnapshots ? _previewPage : null,
-          previewRun: useSnapshots ? _previewRun : null,
-          land: (frame) => _landFrame(frame),
-          lookAhead: 3,
-          rightToLeft: _rightToLeft,
-          refreshRateLimit: _refreshRateLimit,
-          onPrioritize: _interruptPreview,
-          onTurnAvailable: _continueQueuedDrag,
-          replayTap: (point) => native.invokeMethod<void>('tap', {'x': point.dx, 'y': point.dy}),
-          onRetainedDrag: useSnapshots ? _pageDrag : null,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              IgnorePointer(
-                ignoring: !_styleReady,
-                child: Opacity(
-                  opacity: _styleReady ? 1 : 0,
-                  child: rd.ReadiumReaderWidget(
-                    key: _viewKey,
-                    publication: publication!,
-                    initialLocator: initialLocator,
-                    appContentPadding: _pageInsets,
-                    appMinimumStatusInset: _minimumStatusInset,
-                    shouldShowControls: controls,
-                    // Android forwards only unhandled Readium taps through InputListener.
-                    // Links, footnotes, annotations and selection handles retain their taps.
-                    onReaderTap: onTap,
-                    onReaderDrag: _pageDrag,
-                    onFootnote: (markup) {
-                      final note = html.parseFragment(markup).text;
-                      if (note != null && note.trim().isNotEmpty)
-                        onAction('note', note.trim());
-                    },
-                    onUserNavigation: () {
-                      _layoutAnchor = null;
-                      _seekTicket++;
-                      onUserNavigation();
-                    },
-                    selectionActions: const [
-                      rd.SelectionAction(id: 'copy', title: '复制'),
-                      rd.SelectionAction(id: 'bookmark', title: '书签'),
-                      rd.SelectionAction(id: 'dictionary', title: '词典'),
-                      rd.SelectionAction(id: 'illustrations', title: '插图'),
-                    ],
-                    allowedDefaultActions: const {},
-                    onImageTapped: (image) => onAction('image', image.href),
-                    onTextSelected: (e) =>
-                        unawaited(_selected(e).catchError((Object _) {})),
-                    onSelectionAction: (e) {
-                      selectedLocator = e.locator;
-                      onAction(e.actionId, e.selectedText ?? '');
-                    },
-                    onDecorationInteraction: (e) {
-                      if (e.group == 'wenku-annotations')
-                        onAnnotation(e.decorationId);
-                    },
-                    goBackwardSemanticLabel: '上一页',
-                    goForwardSemanticLabel: '下一页',
-                    toggleShowControlsSemanticLabel: '切换阅读控件',
-                  ),
-                ),
-              ),
-              if (!_styleReady)
-                const Center(child: CircularProgressIndicator()),
-            ],
+  Widget view({required Object? resumeLayout}) {
+    _resumeLayout = resumeLayout;
+    if (_suspended) return const SizedBox.expand();
+    if (publication == null) {
+      return Center(
+        child: error != null ? Text(error!) :
+            Platform.isAndroid ? null : const CircularProgressIndicator(),
+      );
+    }
+    final saved = initialLocator;
+    final opening = _openingPage;
+    final savedProgress = saved?.locations?.progression;
+    final capturedProgress = opening?.locator.locations?.progression;
+    // A live locator can include a first-element selector that a snapshot
+    // omits. In an identical viewport, the resource and page offset identify
+    // the rendered sheet independently of that text anchor.
+    final openingFrame = opening != null &&
+            opening.layout == resumeLayout &&
+            _hasSavedLocator &&
+            opening.locator.href == saved?.href &&
+            savedProgress != null &&
+            capturedProgress != null &&
+            (savedProgress - capturedProgress).abs() < .00001
+        ? opening.frame
+        : null;
+    return ReadiumPageSurface(
+    controller: turns,
+    frameKey:
+        "${locator?.href}|$fraction|$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|${_appearance.pageEffect}",
+    layoutKey: '$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|${_appearance.pageEffect}',
+    preferences: _appearance,
+    paper: pagePaper,
+    capture: _capturePage,
+    step: _stepPage,
+    onPageTurn: onPageTurn,
+    coverInitialEntry: coverInitialEntry,
+    showEntryProgress: !Platform.isAndroid,
+    openingPage: openingFrame,
+    openingPageReady: ready,
+    canTurn: _canTurnPage,
+    preview: useSnapshots ? _previewPage : null,
+    previewRun: useSnapshots ? _previewRun : null,
+    land: (frame) => _landFrame(frame),
+    lookAhead: 3,
+    rightToLeft: _rightToLeft,
+    refreshRateLimit: _refreshRateLimit,
+    onPrioritize: _interruptPreview,
+    onTurnAvailable: _continueHeldDrag,
+    replayTap: (point) => native.invokeMethod<void>('tap', {'x': point.dx, 'y': point.dy}),
+    onRetainedDrag: useSnapshots ? _pageDrag : null,
+    child: Stack(
+      fit: StackFit.expand,
+      children: [
+        IgnorePointer(
+          ignoring: !_styleReady,
+          child: Opacity(
+            opacity: _styleReady ? 1 : 0,
+            child: rd.ReadiumReaderWidget(
+              key: _viewKey,
+              publication: publication!,
+              initialLocator: initialLocator,
+              appContentPadding: _pageInsets,
+              appMinimumStatusInset: _minimumStatusInset,
+              shouldShowControls: controls,
+              // Android forwards only unhandled Readium taps through InputListener.
+              // Links, footnotes, annotations and selection handles retain their taps.
+              onReaderTap: onTap,
+              onReaderDrag: _pageDrag,
+              onFootnote: (markup) {
+                final note = html.parseFragment(markup).text;
+                if (note != null && note.trim().isNotEmpty)
+                  onAction('note', note.trim());
+              },
+              onUserNavigation: () {
+                _layoutAnchor = null;
+                _seekTicket++;
+                onUserNavigation();
+              },
+              selectionActions: const [
+                rd.SelectionAction(id: 'copy', title: '复制'),
+                rd.SelectionAction(id: 'bookmark', title: '书签'),
+                rd.SelectionAction(id: 'dictionary', title: '词典'),
+                rd.SelectionAction(id: 'illustrations', title: '插图'),
+              ],
+              allowedDefaultActions: const {},
+              onImageTapped: (image) => onAction('image', image.href),
+              onTextSelected: (e) =>
+                  unawaited(_selected(e).catchError((Object _) {})),
+              onSelectionAction: (e) {
+                selectedLocator = e.locator;
+                onAction(e.actionId, e.selectedText ?? '');
+              },
+              onDecorationInteraction: (e) {
+                if (e.group == 'wenku-annotations')
+                  onAnnotation(e.decorationId);
+              },
+              goBackwardSemanticLabel: '上一页',
+              goForwardSemanticLabel: '下一页',
+              toggleShowControlsSemanticLabel: '切换阅读控件',
+            ),
           ),
-        );
+        ),
+        if (!_styleReady && !Platform.isAndroid)
+          const Center(child: CircularProgressIndicator()),
+      ],
+    ),
+  );
+  }
+
   @override
   void dispose() {
     if (Platform.isAndroid) FrameRateSettings.shared.removeListener(_frameRateChanged);
     _disposed = true;
     persist();
+    final page = _resumePage ?? _openingPage;
+    _resumePage = null;
+    if (!identical(page, _openingPage)) _openingPage?.frame.dispose();
+    _openingPage = null;
     unawaited(_events?.cancel());
     if (!_firstLocation.isCompleted) _firstLocation.complete();
     unawaited(
       opening.then((_) {
+        var parkedPage = false;
         final release = _lifecycle.catchError((Object _) {}).then((_) async {
           await _commands;
           if (_owner == this) {
@@ -1680,7 +1678,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
               try {
                 await native.invokeMethod<void>('parkPublication');
                 _parkPublication((books: books, identity: identity,
-                  staging: _staging, publication: opened));
+                  staging: _staging, publication: opened, page: page));
+                parkedPage = true;
                 _staging = null;
               } catch (_) {
                 await api.closePublication();
@@ -1692,7 +1691,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
           await _saves;
           if (_staging != null) await _staging!.delete(recursive: true);
         });
-        _lifecycle = release.catchError((Object _) {});
+        _lifecycle = release.whenComplete(() {
+          if (!parkedPage) page?.frame.dispose();
+        }).catchError((Object _) {});
       }),
     );
     turns.dispose();
