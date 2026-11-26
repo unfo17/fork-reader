@@ -1571,87 +1571,87 @@ class ReadiumReaderBridge extends ChangeNotifier {
         ? opening.frame
         : null;
     return ReadiumPageSurface(
-    controller: turns,
-    frameKey:
-        "${locator?.href}|$fraction|$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|${_appearance.pageEffect}",
-    layoutKey: '$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|${_appearance.pageEffect}',
-    preferences: _appearance,
-    paper: pagePaper,
-    capture: _capturePage,
-    step: _stepPage,
-    onPageTurn: onPageTurn,
-    coverInitialEntry: coverInitialEntry,
-    showEntryProgress: !Platform.isAndroid,
-    openingPage: openingFrame,
-    openingPageReady: ready,
-    canTurn: _canTurnPage,
-    preview: useSnapshots ? _previewPage : null,
-    previewRun: useSnapshots ? _previewRun : null,
-    land: (frame) => _landFrame(frame),
-    lookAhead: 3,
-    rightToLeft: _rightToLeft,
-    refreshRateLimit: _refreshRateLimit,
-    onPrioritize: _interruptPreview,
-    onTurnAvailable: _continueHeldDrag,
-    replayTap: (point) => native.invokeMethod<void>('tap', {'x': point.dx, 'y': point.dy}),
-    onRetainedDrag: useSnapshots ? _pageDrag : null,
-    child: Stack(
-      fit: StackFit.expand,
-      children: [
-        IgnorePointer(
-          ignoring: !_styleReady,
-          child: Opacity(
-            opacity: _styleReady ? 1 : 0,
-            child: rd.ReadiumReaderWidget(
-              key: _viewKey,
-              publication: publication!,
-              initialLocator: initialLocator,
-              appContentPadding: _pageInsets,
-              appMinimumStatusInset: _minimumStatusInset,
-              shouldShowControls: controls,
-              // Android forwards only unhandled Readium taps through InputListener.
-              // Links, footnotes, annotations and selection handles retain their taps.
-              onReaderTap: onTap,
-              onReaderDrag: _pageDrag,
-              onFootnote: (markup) {
-                final note = html.parseFragment(markup).text;
-                if (note != null && note.trim().isNotEmpty)
-                  onAction('note', note.trim());
-              },
-              onUserNavigation: () {
-                _layoutAnchor = null;
-                _seekTicket++;
-                onUserNavigation();
-              },
-              selectionActions: const [
-                rd.SelectionAction(id: 'copy', title: '复制'),
-                rd.SelectionAction(id: 'bookmark', title: '书签'),
-                rd.SelectionAction(id: 'dictionary', title: '词典'),
-                rd.SelectionAction(id: 'illustrations', title: '插图'),
-              ],
-              allowedDefaultActions: const {},
-              onImageTapped: (image) => onAction('image', image.href),
-              onTextSelected: (e) =>
-                  unawaited(_selected(e).catchError((Object _) {})),
-              onSelectionAction: (e) {
-                selectedLocator = e.locator;
-                onAction(e.actionId, e.selectedText ?? '');
-              },
-              onDecorationInteraction: (e) {
-                if (e.group == 'wenku-annotations')
-                  onAnnotation(e.decorationId);
-              },
-              goBackwardSemanticLabel: '上一页',
-              goForwardSemanticLabel: '下一页',
-              toggleShowControlsSemanticLabel: '切换阅读控件',
+      controller: turns,
+      frameKey:
+          "${locator?.href}|$fraction|$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|${_appearance.pageEffect}",
+      layoutKey: '$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|${_appearance.pageEffect}',
+      preferences: _appearance,
+      paper: pagePaper,
+      capture: _capturePage,
+      step: _stepPage,
+      onPageTurn: onPageTurn,
+      coverInitialEntry: coverInitialEntry,
+      showEntryProgress: !Platform.isAndroid,
+      openingPage: openingFrame,
+      openingPageReady: ready,
+      canTurn: _canTurnPage,
+      preview: useSnapshots ? _previewPage : null,
+      previewRun: useSnapshots ? _previewRun : null,
+      land: (frame) => _landFrame(frame),
+      lookAhead: 4,
+      rightToLeft: _rightToLeft,
+      refreshRateLimit: _refreshRateLimit,
+      onPrioritize: _interruptPreview,
+      onTurnAvailable: _continueHeldDrag,
+      replayTap: (point) => native.invokeMethod<void>('tap', {'x': point.dx, 'y': point.dy}),
+      onRetainedDrag: useSnapshots ? _pageDrag : null,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          IgnorePointer(
+            ignoring: !_styleReady,
+            child: Opacity(
+              opacity: _styleReady ? 1 : 0,
+              child: rd.ReadiumReaderWidget(
+                key: _viewKey,
+                publication: publication!,
+                initialLocator: initialLocator,
+                appContentPadding: _pageInsets,
+                appMinimumStatusInset: _minimumStatusInset,
+                shouldShowControls: controls,
+                // Android forwards only unhandled Readium taps through InputListener.
+                // Links, footnotes, annotations and selection handles retain their taps.
+                onReaderTap: onTap,
+                onReaderDrag: _pageDrag,
+                onFootnote: (markup) {
+                  final note = html.parseFragment(markup).text;
+                  if (note != null && note.trim().isNotEmpty)
+                    onAction('note', note.trim());
+                },
+                onUserNavigation: () {
+                  _layoutAnchor = null;
+                  _seekTicket++;
+                  onUserNavigation();
+                },
+                selectionActions: const [
+                  rd.SelectionAction(id: 'copy', title: '复制'),
+                  rd.SelectionAction(id: 'bookmark', title: '书签'),
+                  rd.SelectionAction(id: 'dictionary', title: '词典'),
+                  rd.SelectionAction(id: 'illustrations', title: '插图'),
+                ],
+                allowedDefaultActions: const {},
+                onImageTapped: (image) => onAction('image', image.href),
+                onTextSelected: (e) =>
+                    unawaited(_selected(e).catchError((Object _) {})),
+                onSelectionAction: (e) {
+                  selectedLocator = e.locator;
+                  onAction(e.actionId, e.selectedText ?? '');
+                },
+                onDecorationInteraction: (e) {
+                  if (e.group == 'wenku-annotations')
+                    onAnnotation(e.decorationId);
+                },
+                goBackwardSemanticLabel: '上一页',
+                goForwardSemanticLabel: '下一页',
+                toggleShowControlsSemanticLabel: '切换阅读控件',
+              ),
             ),
           ),
-        ),
-        if (!_styleReady && !Platform.isAndroid)
-          const Center(child: CircularProgressIndicator()),
-      ],
-    ),
-  );
+          if (!_styleReady && !Platform.isAndroid)
+            const Center(child: CircularProgressIndicator()),
+        ],
+      ),
+    );
   }
 
   @override

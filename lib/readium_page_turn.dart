@@ -464,9 +464,16 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     final bytes = frame.image.width * frame.image.height * 4;
     final slots = ((96 * 1024 * 1024 ~/ bytes) - 1)
         .clamp(2, math.max(2, 2 * widget.lookAhead));
-    if (widget.preferences.pageEffect == ReaderPageEffect.paper &&
-        widget.lookAhead >= 3 && slots == 4) {
-      return [ahead, behind, 2 * ahead, 3 * ahead];
+    if (widget.lookAhead >= 3 && slots >= 4 && slots < 2 * widget.lookAhead) {
+      // Fit the active direction first within the existing bitmap budget.
+      // Keep the immediately previous page ready for a reversal at any size.
+      final preceding = math.max(1, slots - widget.lookAhead);
+      return [
+        ahead,
+        behind,
+        for (var distance = 2; distance <= slots - preceding; distance++) distance * ahead,
+        for (var distance = 2; distance <= preceding; distance++) distance * behind,
+      ];
     }
     return [for (var slot = 0; slot < slots; slot++)
       (slot ~/ 2 + 1) * (slot.isEven ? ahead : behind)];
