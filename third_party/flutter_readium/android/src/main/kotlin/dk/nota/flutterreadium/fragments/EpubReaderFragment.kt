@@ -240,6 +240,7 @@ class EpubReaderFragment :
         val model =
             requireOrLog(TAG, epubVm, "No epubVm available.") ?: return
 
+        if (model.preferences == preferences) return
         model.preferences = preferences
 
         val navigator =

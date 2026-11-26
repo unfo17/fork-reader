@@ -494,8 +494,11 @@ object ReadiumReader :
                         if(window.__wenkuPageReady&&!window.__wenkuPageReady())return null;
                         $appGeometryScript
                         var w=innerWidth,h=innerHeight,v=$vertical,extent=v?w:h;
+                        var imageOnly=!!document.querySelector('img,svg image') &&
+                            !(document.body.innerText||'').trim() &&
+                            !document.querySelector('svg text,canvas,video');
                         var gaps=[];
-                        if($includeBands){
+                        if($includeBands&&!imageOnly){
                             var groups=new Map(), visible=new Map(), range=document.createRange();
                             var block='p,h1,h2,h3,h4,h5,h6,li,pre,blockquote,figcaption,td,th,div,figure,body';
                             function onscreen(r){return r.right>0&&r.left<w&&r.bottom>0&&r.top<h;}
@@ -552,7 +555,7 @@ object ReadiumReader :
                             }
                         }
                         var color=getComputedStyle(document.documentElement).backgroundColor.match(/[\d.]+/g)||[255,255,255];
-                        return JSON.stringify({gaps:gaps,color:color.slice(0,3).map(Number),geometry:geometry()});
+                        return JSON.stringify({gaps:gaps,color:color.slice(0,3).map(Number),geometry:geometry(),imageOnly:imageOnly});
                     })();
                 """.trimIndent()) { value -> if (c.isActive) c.resumeWith(Result.success(value)) }
             }
@@ -562,18 +565,26 @@ object ReadiumReader :
         val geometry = info.getJSONObject("geometry")
         val rootPosition = IntArray(2).also(root::getLocationInWindow)
         val pagePosition = IntArray(2).also(view::getLocationInWindow)
-        val bandOffset = if (vertical) pagePosition[0] - rootPosition[0] else pagePosition[1] - rootPosition[1]
-        val bandExtent = if (vertical) view.width else view.height
         val visibleLocator = appLocatorAtGeometry(locator, view, geometry)
         val color = info.getJSONArray("color")
         val paper = fixedLayoutPaper ?: android.graphics.Color.rgb(color.getInt(0), color.getInt(1), color.getInt(2))
-        // Keep one physical pixel per texel. Downsampling here blurs every
-        // glyph before the curl or paragraph animation has even transformed it.
-        val bitmap = android.graphics.Bitmap.createBitmap(root.width, root.height, android.graphics.Bitmap.Config.ARGB_8888)
+        val imageOnly = info.optBoolean("imageOnly")
+        // Preserve text at device resolution. Illustration transitions can
+        // share smaller textures while Readium keeps the full-size live page.
+        val scale = if (imageOnly) minOf(1.0, 1600.0 / maxOf(root.width, root.height)) else 1.0
+        val bitmap = android.graphics.Bitmap.createBitmap(
+            (root.width * scale).roundToInt().coerceAtLeast(1),
+            (root.height * scale).roundToInt().coerceAtLeast(1),
+            android.graphics.Bitmap.Config.ARGB_8888,
+        )
+        val axis = if (vertical) 0 else 1
+        val bandOffset = pagePosition[axis] - rootPosition[axis]
+        val bandExtent = if (vertical) view.width else view.height
         return try {
             val canvas = android.graphics.Canvas(bitmap)
             appSetPaper(paper)
             canvas.drawColor(paper)
+            canvas.scale(bitmap.width.toFloat() / root.width, bitmap.height.toFloat() / root.height)
             root.draw(canvas)
             val identity = "${view.url}|${view.scrollX}|${view.scrollY}|${root.width}|${root.height}"
             withContext(Dispatchers.Default) {
@@ -639,9 +650,13 @@ object ReadiumReader :
                 }
                 cuts.add(1.0)
                 val bands = cuts.zipWithNext { a,b -> if (vertical) listOf(a,0.0,b,1.0) else listOf(0.0,a,1.0,b) }
-                val returnBottoms = if (includeBands && !vertical && cuts.size > 2) cuts.drop(1)
-                    else appHorizontalCuts(rgba, width, height)
+                val returnBottoms = when {
+                    imageOnly -> listOf(1.0)
+                    includeBands && !vertical && cuts.size > 2 -> cuts.drop(1)
+                    else -> appHorizontalCuts(rgba, width, height)
+                }
                 mapOf("width" to width, "height" to height, "pixels" to rgba,
+                    "sampled" to (scale < 1.0),
                     "bands" to bands, "returnBottoms" to returnBottoms,
                     "color" to listOf(android.graphics.Color.red(paper), android.graphics.Color.green(paper), android.graphics.Color.blue(paper)),
                     "locator" to visibleLocator, "identity" to identity,

@@ -6,30 +6,27 @@ class ReleaseSection {
   final List<String> items;
 }
 
-const _margins = '固定阅读页面的上下留白，可在「操作」中分别调整上、下边距。';
-const _swipes = '减少翻页时的重复合成，打开阅读菜单时暂停相邻页预载。';
-const _contents = '目录分组用行尾箭头开合，最高层分组不占编号。入场与段落接续按原书内容衔接。';
-const _widgets = 'Android 桌面小组件使用原版布局，支持五种样式。';
+const _contents = '图书详情和阅读目录恢复原版按卷分组与编号，沿用 EPUB 的跳转地址。';
+const _opening = '在图书详情页提前打开 EPUB，缩短开始阅读和继续阅读的等待。';
+const _swipes = '减少插图翻页的纹理开销，预载相邻页时减少往返。';
 const _androidInstall = '已安装本仓库固定签名版的 Android 用户可以直接覆盖更新，书籍和阅读记录会保留。';
 
 const publicReleaseNotes =
     '''
 ### $appDisplayName · Android 预览
 
-- $_margins
-- $_swipes
 - $_contents
-- $_widgets
+- $_opening
+- $_swipes
 
 $_androidInstall
 ''';
 const currentReleaseNotes = publicReleaseNotes;
 const currentReleaseSummary = [
   currentReleaseSourcePolicy,
-  _margins,
-  _swipes,
   _contents,
-  _widgets,
+  _opening,
+  _swipes,
 ];
 const currentReleaseSections = [
   ReleaseSection('欢迎使用$appDisplayName', [
@@ -39,10 +36,9 @@ const currentReleaseSections = [
     projectDataNotice,
   ]),
   ReleaseSection('本次更新', [
-    _margins,
-    _swipes,
     _contents,
-    _widgets,
+    _opening,
+    _swipes,
     _androidInstall,
   ]),
 ];

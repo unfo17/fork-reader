@@ -38,9 +38,6 @@ class Novel {
   static final _directoryCache = Expando<List<NovelDirectoryEntry>>();
   List<NovelDirectoryEntry> get directory =>
       _directoryCache[this] ??= _directory();
-  static final _hierarchyCache = Expando<NovelDirectoryHierarchy>();
-  NovelDirectoryHierarchy get directoryHierarchy =>
-      _hierarchyCache[this] ??= NovelDirectoryHierarchy(directory);
   List<NovelDirectoryEntry> _directory() {
     final indices = {
       for (final (i, chapter) in chapters.indexed) chapter.id: i,
@@ -229,66 +226,6 @@ class NovelDirectoryEntry {
   final String title;
   final int chapter, depth;
   final BookReadingTarget target;
-}
-
-/// Display the authored TOC without changing the addresses of its entries.
-class NovelDirectoryHierarchy {
-  NovelDirectoryHierarchy(List<NovelDirectoryEntry> entries)
-      : _parents = List.filled(entries.length, null),
-        _children = List.generate(entries.length, (_) => <int>[]) {
-    final stack = <int>[];
-    for (final (index, entry) in entries.indexed) {
-      while (stack.isNotEmpty && entries[stack.last].depth >= entry.depth) {
-        stack.removeLast();
-      }
-      final parent = stack.lastOrNull;
-      _parents[index] = parent;
-      (parent == null ? _roots : _children[parent]).add(index);
-      stack.add(index);
-    }
-    _numbers = List.filled(entries.length, null);
-    for (var index = 0; index < entries.length; index++) {
-      if (_parents[index] == null && hasChildren(index)) continue;
-      _numberedEntries.add(index);
-      _numbers[index] = _numberedEntries.length;
-    }
-  }
-
-  final List<int> _roots = [];
-  final List<int?> _parents;
-  final List<List<int>> _children;
-  final List<int> _numberedEntries = [];
-  late final List<int?> _numbers;
-
-  bool hasChildren(int index) => _children[index].isNotEmpty;
-  int? numberOf(int index) => _numbers[index];
-  int? indexForNumber(int number) =>
-      number > 0 && number <= _numberedEntries.length
-      ? _numberedEntries[number - 1]
-      : null;
-
-  Iterable<int> ancestorsOf(int index) sync* {
-    if (index < 0 || index >= _parents.length) return;
-    for (var parent = _parents[index]; parent != null; parent = _parents[parent]) {
-      yield parent;
-    }
-  }
-
-  List<int> visible(Set<int> expanded, {bool reversed = false, Set<int>? matches}) {
-    final visible = matches == null
-        ? null
-        : {for (final index in matches) ...[index, ...ancestorsOf(index)]};
-    final result = <int>[];
-    void add(List<int> siblings) {
-      for (final index in reversed ? siblings.reversed : siblings) {
-        if (visible != null && !visible.contains(index)) continue;
-        result.add(index);
-        if (visible != null || expanded.contains(index)) add(_children[index]);
-      }
-    }
-    add(_roots);
-    return result;
-  }
 }
 
 class NovelChapter {

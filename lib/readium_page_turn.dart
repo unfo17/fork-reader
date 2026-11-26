@@ -11,7 +11,7 @@ import 'reader_turn_motion.dart';
 /// A retained image of Readium's rendered page, never re-typeset Flutter text.
 class ReadiumPageFrame {
   ReadiumPageFrame(this.image, this.location, this.bands, this.paper, {
-    this.anchor, this.returnBottoms = const [],
+    this.anchor, this.returnBottoms = const [], this.sampled = false,
   });
   final ui.Image image;
   final String location;
@@ -19,6 +19,8 @@ class ReadiumPageFrame {
   final List<double> returnBottoms;
   final Color paper;
   final String? anchor;
+  final bool sampled;
+  FilterQuality get filterQuality => sampled ? FilterQuality.low : FilterQuality.none;
   int _references = 1;
   ReadiumPageFrame retain() { _references++; return this; }
   ui.ImageShader? _shader;
@@ -273,6 +275,7 @@ class ReadiumPageSurface extends StatefulWidget {
     required this.frameKey,
     this.canTurn,
     this.preview,
+    this.previewRun,
     this.land,
     this.layoutKey,
     this.lookAhead = 1,
@@ -301,6 +304,9 @@ class ReadiumPageSurface extends StatefulWidget {
   final Future<void> Function(Offset fraction)? replayTap;
   final Future<bool> Function(int direction)? canTurn;
   final Future<ReadiumPageFrame?> Function(int direction, ReadiumPageFrame origin)? preview;
+  final Future<Map<int, ReadiumPageFrame?>> Function(
+    List<int> offsets, ReadiumPageFrame origin,
+  )? previewRun;
   final Future<bool> Function(ReadiumPageFrame frame)? land;
   final Widget child;
   @override
@@ -393,7 +399,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   Widget _pageImage(ReadiumPageFrame frame) => RawImage(
     image: frame.image,
     fit: BoxFit.fill,
-    filterQuality: FilterQuality.none,
+    filterQuality: frame.filterQuality,
   );
 
   void _holdPresentedPage(ReadiumPageFrame frame) {
@@ -587,26 +593,42 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         });
         _edges.retainWhere(offsets.contains);
       }
-      for (final direction in offsets) {
+      final batch = requiredDirection == null && widget.previewRun != null;
+      final runs = batch ? [
+        for (final offset in offsets.where((offset) => offset.abs() == 1))
+          [offset],
+        for (final direction in [_dragDirection, -_dragDirection])
+          offsets.where((offset) => offset.abs() > 1 && offset.sign == direction).toList(),
+      ] : offsets.map((offset) => [offset]);
+      for (final run in runs) {
         if (!mounted || key != widget.frameKey || _routePaused ||
             (requiredDirection == null && (_preparationInterrupted || _overlayOpen))) break;
-        if (direction.abs() > 1 && _edges.contains(direction.sign)) { _edges.add(direction); continue; }
-        if (_neighbors.containsKey(direction) || _edges.contains(direction)) continue;
-        _preparingOffset = direction;
+        final missing = <int>[];
+        for (final offset in run) {
+          if (offset.abs() > 1 && _edges.contains(offset.sign)) _edges.add(offset);
+          if (!_neighbors.containsKey(offset) && !_edges.contains(offset)) missing.add(offset);
+        }
+        if (missing.isEmpty) continue;
+        _preparingOffset = missing.first;
         for (var attempt = 0; attempt < (requiredDirection == null || _refilling ? 1 : 2); attempt++) {
           if (!mounted || key != widget.frameKey || _routePaused) break;
-          ReadiumPageFrame? frame;
+          final Map<int, ReadiumPageFrame?> frames;
           try {
-            frame = await widget.preview!(direction, origin);
+            frames = missing.length > 1
+                ? await widget.previewRun!(missing, origin)
+                : {missing.first: await widget.preview!(missing.first, origin)};
           } catch (_) {
             continue;
           }
-          if (!mounted || key != widget.frameKey) {
-            frame?.dispose();
-          } else if (frame == null) {
-            _edges.add(direction);
-          } else {
-            _neighbors[direction] = frame;
+          for (final MapEntry(key: direction, value: frame) in frames.entries) {
+            if (!mounted || key != widget.frameKey) {
+              frame?.dispose();
+            } else if (frame == null) {
+              _edges.add(direction);
+            } else {
+              _neighbors[direction]?.dispose();
+              _neighbors[direction] = frame;
+            }
           }
           break;
         }
@@ -1520,7 +1542,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   }
 
   Widget _leaf(ReadiumPageFrame frame, bool incoming) {
-    final image = RawImage(image: frame.image, fit: BoxFit.fill, filterQuality: FilterQuality.none);
+    final image = _pageImage(frame);
     if (_effect == ReaderPageEffect.staggered) {
       return CustomPaint(
         painter: _ReadiumParagraphTurn(
@@ -1624,7 +1646,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       if (_presented case final frame? when !_sceneCoversPage && _previewCover == null && _routeCover == null)
         Positioned.fill(child: IgnorePointer(child: _pageImage(frame))),
       if (_routeCover case final cover?)
-        Positioned.fill(child: IgnorePointer(child: RawImage(image: cover.image, fit: BoxFit.fill, filterQuality: FilterQuality.none))),
+        Positioned.fill(child: IgnorePointer(child: _pageImage(cover))),
       if (_overlayCover case final cover?)
         Positioned.fill(child: IgnorePointer(child: _pageImage(cover))),
       if (_previewCover case final cover?)
@@ -1732,7 +1754,7 @@ void _drawReadiumPage(Canvas canvas, Size size, ReadiumPageFrame frame) {
   final image = frame.image;
   canvas.drawImageRect(image,
     Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
-    Offset.zero & size, Paint()..filterQuality = FilterQuality.none);
+    Offset.zero & size, Paint()..filterQuality = frame.filterQuality);
 }
 
 /// A turn paints the next turn in its destination's place. Earlier sheets
@@ -1778,6 +1800,8 @@ class _ReadiumCompositeTurn extends CustomPainter {
     }
   }
 
+  void _origin(Canvas canvas, Size size) => _drawReadiumPage(canvas, size, from);
+
   @override
   void paint(Canvas canvas, Size size) {
     final bounds = Offset.zero & size;
@@ -1792,11 +1816,12 @@ class _ReadiumCompositeTurn extends CustomPainter {
       switch (effect) {
         case ReaderPageEffect.paper:
           if (direction < 0) {
-            _drawReadiumPage(canvas, size, from);
-            _curl!.paintSheet(canvas, size, paintFlat: below == null ? null : _destination);
+            _curl!.paintSheet(canvas, size,
+              paintFlat: below == null ? null : _destination,
+              paintUnderlay: _origin,
+            );
           } else {
-            _destination(canvas, size);
-            _curl!.paint(canvas, size);
+            _curl!.paintSheet(canvas, size, paintUnderlay: _destination);
           }
         case ReaderPageEffect.staggered:
           canvas.drawRect(bounds, Paint()..color = from.paper);
@@ -1879,7 +1904,7 @@ class _ReadiumParagraphTurn extends CustomPainter {
   late double _scaleX, _scaleY;
   late Float32List _transforms, _sources;
   final _mask = Path();
-  final _ink = Paint()..filterQuality = FilterQuality.none;
+  late final _ink = Paint()..filterQuality = frame.filterQuality;
   final _paper = Paint();
 
   void _layout(Size size) {
@@ -2028,9 +2053,15 @@ class _ReadiumCurl extends CustomPainter {
   @override
   void paint(Canvas c, Size size) => paintSheet(c, size);
 
-  void paintSheet(Canvas c, Size size, {void Function(Canvas, Size)? paintFlat}) {
+  void paintSheet(Canvas c, Size size, {
+    void Function(Canvas, Size)? paintFlat,
+    void Function(Canvas, Size)? paintUnderlay,
+  }) {
     final t = clock.value.clamp(0.0, 1.0);
-    if (t >= 1) return;
+    if (t >= 1) {
+      paintUnderlay?.call(c, size);
+      return;
+    }
     if (t <= 0) {
       if (paintFlat == null) {
         _paintPageFace(c, size);
@@ -2101,7 +2132,16 @@ class _ReadiumCurl extends CustomPainter {
     final flat=Path()..addPolygon(clip(page,0,false),true);
     c.save();c.clipRect(Offset.zero & size);
     if(backwards){c.translate(w,0);c.scale(-1,1);}
-    c.save();c.clipPath(flat);
+    if (paintUnderlay != null) {
+      // The opaque flat sheet covers this part of the underlying texture.
+      // Only rasterize the next page where the curling sheet exposes it.
+      c.save();
+      c.clipPath(Path()..addPolygon(clip(page, 0, true), true), doAntiAlias: false);
+      if (backwards) { c.translate(w, 0); c.scale(-1, 1); }
+      paintUnderlay(c, size);
+      c.restore();
+    }
+    c.save();c.clipPath(flat, doAntiAlias: paintUnderlay == null);
     if(backwards){c.translate(w,0);c.scale(-1,1);}
     if (paintFlat == null) {
       _paintPageFace(c, size);

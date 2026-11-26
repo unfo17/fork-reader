@@ -22,6 +22,13 @@ class _PendingReaderDrag {
   Map<String, dynamic>? latest;
 }
 
+typedef _ParkedPublication = ({
+  LocalBookStore books,
+  Object identity,
+  Directory? staging,
+  rd.Publication publication,
+});
+
 /// Engine adapter only. ReaderPage retains every Flutter control and panel.
 class ReadiumReaderBridge extends ChangeNotifier {
   ReadiumReaderBridge({
@@ -78,7 +85,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
   static ReadiumReaderBridge? _owner;
   static Future<void> _lifecycle = Future.value();
   static Timer? _idlePublicationClose;
-  static ({LocalBookStore books, Object identity, Directory? staging})? _parked;
+  static _ParkedPublication? _parked;
   Object? _sourceIdentity;
   var _firstLocation = Completer<void>();
   bool _suspended = false;
@@ -498,13 +505,74 @@ class ReadiumReaderBridge extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Start opening the EPUB while its details are on screen. The reader takes
+  /// the same publication through the lifecycle queue if the user opens it.
+  static Future<void> preparePublication(LocalBookStore books, int id) async {
+    if (!Platform.isAndroid || _owner != null) return;
+    final identity = books.readiumSourceIdentity(id);
+    if (identity == null) return;
+    final api = rd.FlutterReadium();
+    final prepare = _lifecycle.then((_) async {
+      if (_owner != null || books.readiumSourceIdentity(id) != identity) return;
+      if (identical(_parked?.books, books) && _parked?.identity == identity) {
+        return;
+      }
+      if (_parked != null) await _closeParked(api);
+      final source = await _stagePublication(books, id);
+      try {
+        final publication = await api.openPublication(source.file.uri.toString());
+        _parkPublication((books: books, identity: identity,
+          staging: source.staging, publication: publication));
+      } catch (_) {
+        await _deleteStaging(source.staging);
+        rethrow;
+      }
+    });
+    _lifecycle = prepare.catchError((Object _) {});
+    await _lifecycle;
+  }
+
+  static Future<({File file, Directory? staging})> _stagePublication(
+    LocalBookStore books, int id,
+  ) async {
+    final managed = await books.managedEpubForReadium(id);
+    if (managed != null) return (file: managed, staging: null);
+    final staging = await (await getTemporaryDirectory()).createTemp('readium-render-');
+    try {
+      final file = File('${staging.path}/publication.epub');
+      await books.copyEpubForReadium(id, file);
+      return (file: file, staging: staging);
+    } catch (_) {
+      await _deleteStaging(staging);
+      rethrow;
+    }
+  }
+
+  static Future<void> _deleteStaging(Directory? staging) async {
+    if (staging != null && await staging.exists()) {
+      await staging.delete(recursive: true);
+    }
+  }
+
+  static void _parkPublication(_ParkedPublication parked) {
+    _parked = parked;
+    _idlePublicationClose?.cancel();
+    _idlePublicationClose = Timer(const Duration(seconds: 45), () {
+      final close = _lifecycle.then((_) async {
+        if (identical(_parked, parked) && _owner == null) {
+          await _closeParked(rd.FlutterReadium());
+        }
+      });
+      _lifecycle = close.catchError((Object _) {});
+    });
+  }
+
   Future<void> _open() async {
     try {
       _prefs = await SharedPreferences.getInstance();
       if (_disposed) return;
       final acquire = _lifecycle.catchError((Object _) {}).then((_) async {
         if (_disposed) return;
-        _idlePublicationClose?.cancel();
         _sourceIdentity = books.readiumSourceIdentity(book.id);
         final parked = _parked;
         if (parked != null) {
@@ -513,34 +581,37 @@ class ReadiumReaderBridge extends ChangeNotifier {
               // Open an inexpensive read lease again so a revoked grant or
               // changed original cannot silently reopen the staged revision.
               await books.validateReadiumOriginal(book.id);
-              if (_disposed) {
-                await _closeParked();
-                return;
-              }
+              if (_disposed) return;
               final staged = parked.staging;
               if (staged == null || await File('${staged.path}/publication.epub').exists()) {
+                if (_disposed) return;
+                if (_staging?.path != staged?.path) await _deleteStaging(_staging);
+                _idlePublicationClose?.cancel();
                 _staging = staged;
                 _parked = null;
+                _owner = this;
+                api.setDefaultPreferences(_preferences);
+                publication = parked.publication;
+                return;
               }
             } catch (_) {
-              await _closeParked();
+              await _closeParked(api);
               rethrow;
             }
           }
-          if (_parked != null) await _closeParked();
+          await _closeParked(api);
         }
-        final managed = _staging == null ? await books.managedEpubForReadium(book.id) : null;
-        if (managed == null) {
-          _staging ??= await (await getTemporaryDirectory()).createTemp('readium-render-');
+        final staged = _staging == null ? null : File('${_staging!.path}/publication.epub');
+        final File file;
+        if (staged != null && await staged.exists()) {
+          file = staged;
+        } else {
+          final source = await _stagePublication(books, book.id);
+          await _deleteStaging(_staging);
+          _staging = source.staging;
+          file = source.file;
         }
-        final file = managed ?? File('${_staging!.path}/publication.epub');
-        if (managed == null && !await file.exists()) {
-          await books.copyEpubForReadium(book.id, file);
-        }
-        if (_disposed) {
-          if (parked != null && _owner == null) await api.closePublication();
-          return;
-        }
+        if (_disposed) return;
         final previous = _owner;
         if (previous != null) {
           await previous._events?.cancel();
@@ -587,15 +658,14 @@ class ReadiumReaderBridge extends ChangeNotifier {
     }
   }
 
-  Future<void> _closeParked() async {
+  static Future<void> _closeParked(rd.FlutterReadium api) async {
+    _idlePublicationClose?.cancel();
     final staging = _parked?.staging;
     _parked = null;
     try {
       await api.closePublication();
     } finally {
-      if (staging != null && await staging.exists()) {
-        await staging.delete(recursive: true);
-      }
+      await _deleteStaging(staging);
     }
   }
 
@@ -677,19 +747,43 @@ class ReadiumReaderBridge extends ChangeNotifier {
         });
         if (moved != true) throw StateError('原书位置未能打开');
         await _waitForPageReady(stable: true);
-        final raw = await native.invokeMethod<String>('locator');
-        if (raw != null && !_disposed && _owner == this) {
-          final visible = rd.Locator.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-          final page = await native.invokeMapMethod<String, dynamic>('visualPage');
-          _stableVisualKey = page?['key'] as String?;
-          if (visible != null) _located(visible);
-        }
+        final visible = await _visibleLocator();
+        if (visible != null) await _publishVisibleLocator(visible);
       }, capture: () => _capturePage(allowNavigating: true),
         transitionDirection: transitionDirection, chapterEntrance: chapterEntrance);
     } finally {
       _navigating = false;
       if (!_disposed) notifyListeners();
     }
+  }
+
+  Future<rd.Locator?> _visibleLocator() async {
+    final raw = await native.invokeMethod<String>('locator');
+    return raw == null ? null :
+        rd.Locator.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+  }
+
+  Future<void> _publishVisibleLocator(rd.Locator visible) async {
+    if (_disposed || _owner != this) return;
+    final page = await native.invokeMapMethod<String, dynamic>('visualPage');
+    if (_disposed || _owner != this) return;
+    _stableVisualKey = page?['key'] as String?;
+    _located(visible);
+  }
+
+  bool _matchesInitialLocation(rd.Locator? visible, rd.Locator saved) {
+    if (visible == null || visible.href != saved.href) return false;
+    final at = visible.locations;
+    final target = saved.locations;
+    if (at == null || target == null || target.progression == null) return false;
+    if (target.cssSelector != null && target.cssSelector != at.cssSelector) {
+      return false;
+    }
+    final fragments = target.toJson()['fragments'] as List?;
+    if (fragments?.isNotEmpty == true || (saved.text?.highlight ?? '').isNotEmpty) {
+      return false;
+    }
+    return ((at.progression ?? -1) - target.progression!).abs() < 0.00001;
   }
 
   Future<void> seekProgress(double fraction) {
@@ -793,45 +887,78 @@ class ReadiumReaderBridge extends ChangeNotifier {
   }
 
   Future<ReadiumPageFrame?> _previewPage(int direction, ReadiumPageFrame origin) async {
-    ReadiumPageFrame? frame;
-    await (() async {
-      if (_disposed || origin.anchor == null) return;
-      if (await native.invokeMethod<bool>('canTurn', {'direction': direction.sign}) == false) return;
-      final epoch = _previewEpoch;
-      _previewing = true;
+    final frames = await _previewRun([direction], origin);
+    if (!frames.containsKey(direction)) throw StateError('相邻页未能就绪');
+    return frames[direction];
+  }
+
+  Future<Map<int, ReadiumPageFrame?>> _previewRun(
+    List<int> offsets, ReadiumPageFrame origin,
+  ) async {
+    final frames = <int, ReadiumPageFrame?>{};
+    if (_disposed || origin.anchor == null) return frames;
+    final epoch = _previewEpoch;
+    final direction = offsets.first.sign;
+    var travelled = 0;
+    var restorePosition = false;
+    var atEdge = false;
+    _previewing = true;
+    try {
       try {
         final version = await native.invokeMethod<int>('previewVersion');
-        for (var offset = 0; offset < direction.abs(); offset++) {
-          if (offset > 0 && await native.invokeMethod<bool>('canTurn', {'direction': direction.sign}) == false) return;
-          final result = await native.invokeMapMethod<String, dynamic>('page', {'direction': direction.sign, 'animated': false});
-          if (result?['moved'] != true) throw StateError('相邻页未能就绪');
-          if (epoch != _previewEpoch) throw StateError('预加载已让位于阅读操作');
-          if (offset == direction.abs() - 1 || result?['resourceChanged'] == true) {
-            await _waitForPageReady(previewVersion: version, stable: true, waitForPaint: false);
+        for (final offset in offsets) {
+          while (travelled < offset.abs() && !atEdge) {
+            if (_disposed || epoch != _previewEpoch) return frames;
+            atEdge = await native.invokeMethod<bool>('canTurn', {'direction': direction}) == false;
+            if (_disposed || epoch != _previewEpoch) return frames;
+            if (atEdge) break;
+            restorePosition = true;
+            final result = await native.invokeMapMethod<String, dynamic>('page', {
+              'direction': direction,
+              'animated': false,
+            });
+            if (result?['moved'] != true) return frames;
+            travelled++;
+            if (_disposed || epoch != _previewEpoch) return frames;
+            if (travelled == offset.abs() || result?['resourceChanged'] == true) {
+              await _waitForPageReady(previewVersion: version, stable: true, waitForPaint: false);
+            }
           }
-        }
-        for (var attempt = 0; attempt < 3 && frame == null; attempt++) {
-          final captured = await _capturePage();
-          if (captured?.location == origin.location) {
+          if (atEdge) {
+            frames[offset] = null;
+            continue;
+          }
+          for (var attempt = 0; attempt < 3; attempt++) {
+            if (_disposed || epoch != _previewEpoch) return frames;
+            final captured = await _capturePage();
+            if (captured != null && captured.location != origin.location) {
+              frames[offset] = captured;
+              break;
+            }
             captured?.dispose();
-          } else {
-            frame = captured;
+            await Future<void>.delayed(const Duration(milliseconds: 16));
           }
-          if (frame == null) await Future<void>.delayed(const Duration(milliseconds: 16));
         }
-        if (frame == null) throw StateError('相邻页画面未能就绪');
       } finally {
-        try {
-          final destination = turns.pendingPage;
-          if (!await _landFrame(destination ?? origin, publish: false)) throw StateError('阅读位置未能恢复');
+        // Keep the navigator behind the retained page for the entire run.
+        // A newly committed turn can adopt its target without restoring twice.
+        final destination = turns.pendingPage;
+        if (!_disposed && (restorePosition || destination != null)) {
+          if (!await _landFrame(destination ?? origin, publish: false)) {
+            throw StateError('阅读位置未能恢复');
+          }
           if (destination != null) turns.previewHandedOff();
-        } catch (_) {
-          frame?.dispose();
-          rethrow;
-        } finally { _previewing = false; }
+        }
       }
-    })();
-    return frame;
+    } catch (_) {
+      for (final frame in frames.values) {
+        frame?.dispose();
+      }
+      rethrow;
+    } finally {
+      _previewing = false;
+    }
+    return frames;
   }
 
   Future<void> _waitForPageReady({
@@ -929,6 +1056,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       Color.fromARGB(255, color[0].round(), color[1].round(), color[2].round()),
       anchor: pixels['anchor'] as String?,
       returnBottoms: (pixels['returnBottoms'] as List?)?.cast<double>() ?? const [],
+      sampled: pixels['sampled'] == true,
     );
   }
 
@@ -1308,28 +1436,25 @@ class ReadiumReaderBridge extends ChangeNotifier {
       }
       if (Platform.isAndroid) await _waitForLayoutStable(ticket: ticket);
       if (anchor != null && ticket == _preferencesTicket) {
-        // Navigator preferences and app fonts/CSS both reflow the same Readium DOM.
-        // Restore its original locator after both have settled.
-        if (Platform.isAndroid && fontFile != null) {
-          for (var i = 0; i < 40 && ticket == _preferencesTicket; i++) {
-            final status = await native.invokeMethod<String>('evaluate', {
-              'script':
-                  '(function(){document.body.offsetHeight;return document.fonts.status;})()',
-            });
-            if (status == '"loaded"') break;
-            await Future<void>.delayed(const Duration(milliseconds: 50));
-          }
+        final openingLocation = identical(anchor, initialLocator);
+        final visible = Platform.isAndroid && openingLocation
+            ? await _visibleLocator() : null;
+        if (!Platform.isAndroid) {
+          await Future<void>.delayed(const Duration(milliseconds: 120));
         }
-        await Future<void>.delayed(const Duration(milliseconds: 120));
         if (ticket == _preferencesTicket &&
             !_disposed &&
             _owner == this &&
             identical(_layoutAnchor, anchor)) {
           final locations = anchor.locations;
-          await _navigate(anchor, seek: identical(anchor, initialLocator) &&
-              locations?.progression != null &&
-              locations?.cssSelector == null &&
-              (anchor.text?.highlight ?? '').isEmpty);
+          if (_matchesInitialLocation(visible, anchor)) {
+            await _publishVisibleLocator(visible!);
+          } else {
+            await _navigate(anchor, seek: openingLocation &&
+                locations?.progression != null &&
+                locations?.cssSelector == null &&
+                (anchor.text?.highlight ?? '').isEmpty);
+          }
           _layoutAnchor = null;
         }
       }
@@ -1363,7 +1488,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
         stable++;
       else
         stable = 0;
-      if (stable >= (sample?.contains('|image') == true ? 1 : 3)) {
+      if (stable >= (sample?.contains('|image') == true ? 1 : 2)) {
         final rgb = RegExp(r'rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)').firstMatch(sample!);
         if (rgb != null) {
           final paper = _systemPaper ?? (rgb[4] != null && double.parse(rgb[4]!) == 0
@@ -1378,7 +1503,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
         return;
       }
       previous = sample;
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await Future<void>.delayed(const Duration(milliseconds: 32));
     }
   }
 
@@ -1414,6 +1539,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
         });
   }
 
+  bool get useSnapshots => Platform.isAndroid && _appearance.mode.paginated &&
+      _appearance.pageEffect != ReaderPageEffect.none;
+
   Widget view() => _suspended
       ? const SizedBox.expand()
       : publication == null
@@ -1434,7 +1562,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
           onPageTurn: onPageTurn,
           coverInitialEntry: coverInitialEntry,
           canTurn: _canTurnPage,
-          preview: Platform.isAndroid && _appearance.mode.paginated && _appearance.pageEffect != ReaderPageEffect.none ? _previewPage : null,
+          preview: useSnapshots ? _previewPage : null,
+          previewRun: useSnapshots ? _previewRun : null,
           land: (frame) => _landFrame(frame),
           lookAhead: 3,
           rightToLeft: _rightToLeft,
@@ -1513,18 +1642,13 @@ class ReadiumReaderBridge extends ChangeNotifier {
           if (_owner == this) {
             _owner = null;
             final identity = _sourceIdentity;
-            if (Platform.isAndroid && identity != null && publication != null) {
+            final opened = publication;
+            if (Platform.isAndroid && identity != null && opened != null) {
               try {
                 await native.invokeMethod<void>('parkPublication');
-                _parked = (books: books, identity: identity, staging: _staging);
+                _parkPublication((books: books, identity: identity,
+                  staging: _staging, publication: opened));
                 _staging = null;
-                _idlePublicationClose?.cancel();
-                _idlePublicationClose = Timer(const Duration(seconds: 45), () {
-                  final close = _lifecycle.catchError((Object _) {}).then((_) async {
-                    if (_owner == null && _parked != null) await _closeParked();
-                  });
-                  _lifecycle = close.catchError((Object _) {});
-                });
               } catch (_) {
                 await api.closePublication();
               }

@@ -4302,6 +4302,8 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
   );
   Animation<double>? _routeAnimation;
   bool _introStarted = false;
+  Timer? _readiumPreparation;
+  int? _preparedReadiumBook;
   bool _contentStarted = false;
   bool _cacheSkeletonShown = false;
   bool _readerOpening = false;
@@ -4316,8 +4318,6 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
   int? _resumeDirectory;
   final Set<String> _expandedVolumes = {};
   final Set<String> _directoryVolumeKeys = {};
-  final Set<int> _expandedDirectory = {};
-  NovelDirectoryHierarchy? _detailHierarchy;
   int? _directoryBook;
 
   List<({NovelVolume? volume, int? chapter})> _directory() {
@@ -4334,20 +4334,6 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
       paragraph: state.positionFor(novel.id)?.paragraphIndex ?? 0,
       offset: state.positionFor(novel.id)?.textOffset ?? 0,
     );
-    if (novel.navigation != null) {
-      final hierarchy = novel.directoryHierarchy;
-      if (!identical(_detailHierarchy, hierarchy)) {
-        _detailHierarchy = hierarchy;
-        _expandedDirectory
-          ..clear()
-          ..addAll(hierarchy.ancestorsOf(current));
-        _directoryBook = novel.id;
-      }
-      return [
-        for (final index in hierarchy.visible(_expandedDirectory, reversed: _catalogueReversed))
-          (volume: null, chapter: index),
-      ];
-    }
     for (final volume in volumes) {
       if (current >= volume.start &&
           current < volume.end &&
@@ -4489,6 +4475,9 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
       _contentIntro.value = 1;
       _introStarted = true;
       _contentStarted = !isLoading;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _prepareReadium();
+      });
     } else if (animation == null ||
         animation.status == AnimationStatus.completed) {
       // A newly installed route's proxy can briefly report completed before
@@ -4517,6 +4506,22 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
       _contentStarted = true;
       _contentIntro.forward();
     }
+    _prepareReadium();
+  }
+
+  void _prepareReadium() {
+    if (isLoading || loadError != null || _preparedReadiumBook == novel.id) return;
+    final source = repository;
+    if (source is! OfflineNovelRepository) return;
+    final books = source.local;
+    final id = novel.id;
+    if (books == null || !books.isReadiumEpub(id)) return;
+    _readiumPreparation?.cancel();
+    _readiumPreparation = Timer(NovelMotion.enter, () {
+      if (!mounted || novel.id != id || ModalRoute.of(context)?.isCurrent != true) return;
+      _preparedReadiumBook = id;
+      unawaited(ReadiumReaderBridge.preparePublication(books, id));
+    });
   }
 
   @override
@@ -4541,11 +4546,15 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
         _startIntro();
       }
     }
+    if (oldWidget.novel.id != widget.novel.id || oldWidget.isLoading != isLoading) {
+      _prepareReadium();
+    }
   }
 
   @override
   void dispose() {
     state.readerSettingsChanges.removeListener(_catalogueSettingsChanged);
+    _readiumPreparation?.cancel();
     _routeAnimation?.removeStatusListener(_routeChanged);
     _intro.dispose();
     _contentIntro.dispose();
@@ -5483,9 +5492,6 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
   Widget _chapterRow(BuildContext context, int index) {
     final entry = novel.directory[index];
     final current = _resumeDirectory == index;
-    final branch = novel.navigation != null && novel.directoryHierarchy.hasChildren(index);
-    final expanded = _expandedDirectory.contains(index);
-    final number = novel.directoryHierarchy.numberOf(index);
     return _cacheReactive(
       () => JellyTapSurface(
         key: ValueKey('detail-directory-entry-$index'),
@@ -5497,7 +5503,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
               : null,
         ),
         child: Container(
-          padding: EdgeInsets.only(top: 16, bottom: 16, left: entry.depth.clamp(0, 6) * 12.0),
+          padding: const EdgeInsets.symmetric(vertical: 16),
           decoration: BoxDecoration(
             border: Border(
               bottom: BorderSide(
@@ -5509,17 +5515,16 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              if (number != null)
-                SizedBox(
-                  width: 36,
-                  child: AppText(
-                    number.toString().padLeft(2, '0'),
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
+              SizedBox(
+                width: 36,
+                child: AppText(
+                  (index + 1).toString().padLeft(2, '0'),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                 ),
+              ),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -5555,19 +5560,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                 ),
               ],
               const SizedBox(width: 12),
-              if (branch)
-                GlassIconButton(
-                  key: ValueKey('detail-toc-toggle-$index'),
-                  icon: expanded ? CupertinoIcons.chevron_down : CupertinoIcons.chevron_right,
-                  label: expanded ? '收起 ${entry.title}' : '展开 ${entry.title}',
-                  liveGlass: false,
-                  transparent: true,
-                  onPressed: () => _changeDirectory(() {
-                    if (!_expandedDirectory.add(index)) _expandedDirectory.remove(index);
-                  }),
-                )
-              else
-                const ArchiveIcon(CupertinoIcons.chevron_right, size: 13),
+              const ArchiveIcon(CupertinoIcons.chevron_right, size: 13),
             ],
           ),
         ),
