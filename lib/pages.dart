@@ -1674,7 +1674,7 @@ class _ReaderLoaderPageState extends State<ReaderLoaderPage> {
           initialChapter: chapter,
           directEntry: true,
           animateEntry: true,
-        )._withReadiumEntrance(Theme.of(context));
+        );
       }
       final preferences = _readerPreferences;
       final chromeVisible = widget.state.readerChromeVisible;
@@ -5656,8 +5656,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
           initialPosition: target == null
               ? null
               : _bookTargetPosition(novel, target),
-        )._withReadiumEntrance(Theme.of(context)),
-        slot: ReaderPage,
+        ),
         reduceMotion: state.reduceMotion,
       );
     } finally {
@@ -5720,21 +5719,6 @@ class ReaderPage extends StatefulWidget {
   @visibleForTesting
   final Duration Function()? verifiedReadingElapsed;
 
-  Widget _withReadiumEntrance(ThemeData appTheme) {
-    final source = repository;
-    if (!LocalPlatform.android || source is! OfflineNovelRepository ||
-        source.local?.isReadiumEpub(novel.id) != true) return this;
-    return ReadiumReaderEntrance(
-      reader: this,
-      placeholder: ReaderAppearance(
-        state: state,
-        bookId: novel.id,
-        appTheme: appTheme,
-        child: const Scaffold(body: ReadiumLoadingIndicator()),
-      ),
-    );
-  }
-
   @override
   State<ReaderPage> createState() => _ReaderPageState();
 }
@@ -5771,31 +5755,35 @@ class _ReaderPageState extends State<ReaderPage>
   Animation<double>? _nativeEntryRoute;
 
   void _nativeEntry() {
-    if (!mounted || !widget.animateEntry) return;
+    if (!mounted) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final route = ModalRoute.of(context)?.animation;
-      if (route?.status == AnimationStatus.forward) {
+      if (route?.status == AnimationStatus.forward ||
+          route?.status == AnimationStatus.reverse) {
         _nativeEntryRoute = route;
         route!.addStatusListener(_nativeEntryRouteStatus);
       } else {
-        _playNativeEntry();
+        unawaited(_playNativeEntry());
       }
     });
     WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   void _nativeEntryRouteStatus(AnimationStatus status) {
-    if (status == AnimationStatus.forward) return;
+    if (status == AnimationStatus.forward || status == AnimationStatus.reverse) return;
     _nativeEntryRoute?.removeStatusListener(_nativeEntryRouteStatus);
     _nativeEntryRoute = null;
-    if (status == AnimationStatus.completed) _playNativeEntry();
+    if (status == AnimationStatus.completed) unawaited(_playNativeEntry());
   }
 
-  void _playNativeEntry() {
-    if (!mounted) return;
-    _readium?.turns.animateEntry(
-      widget.state.reduceMotion || !_activityRouteCurrent
+  Future<void> _playNativeEntry() async {
+    final engine = _readium;
+    if (!mounted || engine == null) return;
+    await engine.waitForEntryPaint();
+    if (!mounted || !identical(engine, _readium)) return;
+    engine.turns.animateEntry(
+      !widget.animateEntry || widget.state.reduceMotion || !_activityRouteCurrent
           ? ReaderPageEffect.none
           : _readerPreferences.pageEffect,
     );
@@ -6170,15 +6158,7 @@ class _ReaderPageState extends State<ReaderPage>
         }),
       );
     }
-    // A retained page covers native startup only with identical pagination
-    // geometry and without annotations that are reapplied after layout.
-    final resumeLayout = prefs.mode.paginated &&
-            !widget.state.bookmarksFor(widget.novel.id).any(
-              (mark) => mark.annotation.style != ReaderMarkStyle.none,
-            )
-        ? (key, MediaQuery.sizeOf(context), MediaQuery.devicePixelRatioOf(context), safe)
-        : null;
-    final view = bridge.view(resumeLayout: resumeLayout);
+    final view = bridge.view();
     return ReaderTouchSurface(
       canRecord: () => _activityEligible && !_selection.value,
       child: nativeSafeArea
@@ -6907,8 +6887,9 @@ class _ReaderPageState extends State<ReaderPage>
         initialChapter: _chapter,
         restoreLocator:
             widget.initialBookmark == null && widget.initialPosition == null,
-        coverInitialEntry: widget.animateEntry && !widget.state.reduceMotion &&
-            _readerPreferences.pageEffect != ReaderPageEffect.none,
+        coverInitialEntry: LocalPlatform.android ||
+            (widget.animateEntry && !widget.state.reduceMotion &&
+                _readerPreferences.pageEffect != ReaderPageEffect.none),
         chromeVisible: _chromeTarget,
         onLocation: _nativeLocation,
         onPage: _pageBy,

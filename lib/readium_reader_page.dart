@@ -15,8 +15,6 @@ import 'local_books.dart';
 import 'reader_preferences.dart';
 import 'readium_page_turn.dart';
 
-export 'readium_page_turn.dart' show ReadiumLoadingIndicator;
-
 enum _ReaderDragSource { navigator, retained }
 
 class _HeldReaderDrag {
@@ -26,63 +24,12 @@ class _HeldReaderDrag {
   Map<String, dynamic>? latest;
 }
 
-typedef _ResumePage = ({Object layout, rd.Locator locator, ReadiumPageFrame frame});
-
 typedef _ParkedPublication = ({
   LocalBookStore books,
   Object identity,
   Directory? staging,
   rd.Publication publication,
-  _ResumePage? page,
 });
-
-class ReadiumReaderEntrance extends StatefulWidget {
-  const ReadiumReaderEntrance({super.key, required this.placeholder, required this.reader});
-
-  final Widget placeholder;
-  final Widget reader;
-
-  @override
-  State<ReadiumReaderEntrance> createState() => _ReadiumReaderEntranceState();
-}
-
-class _ReadiumReaderEntranceState extends State<ReadiumReaderEntrance> {
-  Animation<double>? _route;
-  bool _showReader = false;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      _route = ModalRoute.of(context)?.animation;
-      _route?.addStatusListener(_routeChanged);
-      _routeChanged(_route?.status ?? AnimationStatus.completed);
-    });
-  }
-
-  void _routeChanged(AnimationStatus status) {
-    if (status == AnimationStatus.dismissed) _route?.removeStatusListener(_routeChanged);
-    if (status != AnimationStatus.completed) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _showReader ||
-          (_route != null && _route!.status != AnimationStatus.completed) ||
-          ModalRoute.of(context)?.isActive == false) return;
-      _route?.removeStatusListener(_routeChanged);
-      setState(() => _showReader = true);
-    });
-    WidgetsBinding.instance.ensureVisualUpdate();
-  }
-
-  @override
-  Widget build(BuildContext context) => _showReader ? widget.reader : widget.placeholder;
-
-  @override
-  void dispose() {
-    _route?.removeStatusListener(_routeChanged);
-    super.dispose();
-  }
-}
 
 /// Engine adapter only. ReaderPage retains every Flutter control and panel.
 class ReadiumReaderBridge extends ChangeNotifier {
@@ -141,8 +88,6 @@ class ReadiumReaderBridge extends ChangeNotifier {
   static Future<void> _lifecycle = Future.value();
   static Timer? _idlePublicationClose;
   static _ParkedPublication? _parked;
-  Object? _resumeLayout;
-  _ResumePage? _resumePage, _openingPage;
   Object? _sourceIdentity;
   var _firstLocation = Completer<void>();
   bool _suspended = false;
@@ -216,7 +161,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     if (_disposed || _owner != this) return;
     final phase = event['phase'];
     if (phase == 'Start') {
-      if (!ready) return;
+      if (!ready || turns.waitingForEntry) return;
       _heldDrag = null;
       if (!_pagePending) {
         _startPageDrag(event, source);
@@ -252,7 +197,13 @@ class ReadiumReaderBridge extends ChangeNotifier {
 
   bool _startOverlappingDrag(Map<String, dynamic> event, _ReaderDragSource source) {
     final start = _dragStart(event);
-    if (!turns.beginOverlappingDrag(start.direction, start.dx, start.width, start.y)) return false;
+    // A fresh flick turns the exposed page. An intentional hold before
+    // moving can still pick up a paper sheet that is halfway through a turn.
+    final heldBeforeDrag = (event['durationMillis'] as num?) ?? 0;
+    if (!turns.beginOverlappingDrag(
+      start.direction, start.dx, start.width, start.y,
+      grabSettlingSheet: heldBeforeDrag >= 120,
+    )) return false;
     _dragInFlight = true;
     _receivingDrag = source;
     onUserNavigation();
@@ -562,7 +513,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       try {
         final publication = await api.openPublication(source.file.uri.toString());
         _parkPublication((books: books, identity: identity,
-          staging: source.staging, publication: publication, page: null));
+          staging: source.staging, publication: publication));
       } catch (_) {
         await _deleteStaging(source.staging);
         rethrow;
@@ -629,7 +580,6 @@ class ReadiumReaderBridge extends ChangeNotifier {
                 _idlePublicationClose?.cancel();
                 _staging = staged;
                 _parked = null;
-                _openingPage = parked.page;
                 _owner = this;
                 api.setDefaultPreferences(_preferences);
                 publication = parked.publication;
@@ -703,7 +653,6 @@ class ReadiumReaderBridge extends ChangeNotifier {
     _idlePublicationClose?.cancel();
     final parked = _parked;
     _parked = null;
-    parked?.page?.frame.dispose();
     try {
       await api.closePublication();
     } finally {
@@ -871,7 +820,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
 
   bool _pagePending = false;
   Future<void> pageBy(int direction, {bool animated = true}) async {
-    if (_disposed || _navigating) return;
+    if (_disposed || _navigating || turns.waitingForEntry) return;
     if (_pagePending) {
       if (_heldDrag == null && _receivingDrag == null &&
           turns.turnExposedPage(direction, animated: animated)) {
@@ -1046,14 +995,31 @@ class ReadiumReaderBridge extends ChangeNotifier {
       final anchor = jsonDecode(frame.anchor!) as Map<String, dynamic>;
       final at = rd.Locator.fromJson(anchor['locator'] as Map<String, dynamic>);
       if (at != null) {
-        _rememberResumePage(frame, at);
         if (_dragInFlight) { _dragLocation = at; } else { _located(at); }
       }
     }
     return true;
   }
 
-  Future<ReadiumPageFrame?> _capturePage({bool allowNavigating = false}) async {
+  Future<void> waitForEntryPaint() async {
+    if (!Platform.isAndroid) return;
+    Future<void> pending;
+    do {
+      pending = _commands;
+      await pending;
+    } while (!_disposed && !identical(pending, _commands));
+    if (_disposed || _owner != this || !ready) return;
+    try {
+      await _waitForPageReady(stable: true);
+    } catch (_) {
+      // Layout is already applied. A slow paint acknowledgement must not
+      // leave the reading controls behind the loading view permanently.
+    }
+  }
+
+  Future<ReadiumPageFrame?> _capturePage({
+    bool allowNavigating = false, bool fullResolution = false,
+  }) async {
     if (!Platform.isAndroid || _disposed || _owner != this || !_styleReady)
       return null;
     if (_navigating && !allowNavigating) return null;
@@ -1062,6 +1028,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       'bands': _appearance.pageEffect == ReaderPageEffect.staggered,
       'vertical': _preferences.verticalText == true,
       'allowLateCapture': allowNavigating,
+      if (fullResolution) 'fullResolution': true,
       if (_systemPaper case final paper? when _fixedLayout == true)
         'paper': paper.toARGB32(),
     });
@@ -1110,19 +1077,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       returnBottoms: (pixels['returnBottoms'] as List?)?.cast<double>() ?? const [],
       sampled: pixels['sampled'] == true,
     );
-    if (at != null && !_previewing && !_navigating && !_landing) {
-      final captured = rd.Locator.fromJson(at);
-      if (captured != null) _rememberResumePage(frame, captured);
-    }
     return frame;
-  }
-
-  void _rememberResumePage(ReadiumPageFrame frame, rd.Locator at) {
-    final layout = _resumeLayout;
-    if (layout == null || frame.anchor == null || !_appearance.mode.paginated) return;
-    final previous = _resumePage;
-    _resumePage = (layout: layout, locator: at, frame: frame.retain());
-    previous?.frame.dispose();
   }
 
   rd.Locator? locationFor(
@@ -1248,7 +1203,10 @@ class ReadiumReaderBridge extends ChangeNotifier {
   final _appliedDecorationKeys = <String, String>{};
   Future<void> decorations(String group, List<Map<String, dynamic>> marks) {
     final key = jsonEncode(marks);
-    if (_appliedDecorationKeys[group] == key) return Future<void>.value();
+    final previous = _appliedDecorationKeys[group];
+    if (previous == key || (previous == null && marks.isEmpty)) {
+      return Future<void>.value();
+    }
     _appliedDecorationKeys[group] = key;
     _marksRevision++;
     return command(() async {
@@ -1608,29 +1566,12 @@ class ReadiumReaderBridge extends ChangeNotifier {
   bool get useSnapshots => Platform.isAndroid && _appearance.mode.paginated &&
       _appearance.pageEffect != ReaderPageEffect.none;
 
-  Widget view({required Object? resumeLayout}) {
-    _resumeLayout = resumeLayout;
+  Widget view() {
     if (_suspended) return const SizedBox.expand();
     if (publication == null) {
       if (error case final message?) return Center(child: Text(message));
       return const ReadiumLoadingIndicator();
     }
-    final saved = initialLocator;
-    final opening = _openingPage;
-    final savedProgress = saved?.locations?.progression;
-    final capturedProgress = opening?.locator.locations?.progression;
-    // A live locator can include a first-element selector that a snapshot
-    // omits. In an identical viewport, the resource and page offset identify
-    // the rendered sheet independently of that text anchor.
-    final openingFrame = opening != null &&
-            opening.layout == resumeLayout &&
-            _hasSavedLocator &&
-            opening.locator.href == saved?.href &&
-            savedProgress != null &&
-            capturedProgress != null &&
-            (savedProgress - capturedProgress).abs() < .00001
-        ? opening.frame
-        : null;
     return ReadiumPageSurface(
       controller: turns,
       frameKey:
@@ -1642,7 +1583,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       step: _stepPage,
       onPageTurn: onPageTurn,
       coverInitialEntry: coverInitialEntry,
-      openingPage: openingFrame,
+      captureEntry: () => _capturePage(fullResolution: true),
       canTurn: _canTurnPage,
       preview: useSnapshots ? _previewPage : null,
       previewRun: useSnapshots ? _previewRun : null,
@@ -1720,15 +1661,10 @@ class ReadiumReaderBridge extends ChangeNotifier {
     if (Platform.isAndroid) FrameRateSettings.shared.removeListener(_frameRateChanged);
     _disposed = true;
     persist();
-    final page = _resumePage ?? _openingPage;
-    _resumePage = null;
-    if (!identical(page, _openingPage)) _openingPage?.frame.dispose();
-    _openingPage = null;
     unawaited(_events?.cancel());
     if (!_firstLocation.isCompleted) _firstLocation.complete();
     unawaited(
       opening.then((_) {
-        var parkedPage = false;
         final release = _lifecycle.catchError((Object _) {}).then((_) async {
           await _commands;
           if (_owner == this) {
@@ -1739,8 +1675,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
               try {
                 await native.invokeMethod<void>('parkPublication');
                 _parkPublication((books: books, identity: identity,
-                  staging: _staging, publication: opened, page: page));
-                parkedPage = true;
+                  staging: _staging, publication: opened));
                 _staging = null;
               } catch (_) {
                 await api.closePublication();
@@ -1752,9 +1687,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
           await _saves;
           if (_staging != null) await _staging!.delete(recursive: true);
         });
-        _lifecycle = release.whenComplete(() {
-          if (!parkedPage) page?.frame.dispose();
-        }).catchError((Object _) {});
+        _lifecycle = release.catchError((Object _) {});
       }),
     );
     turns.dispose();

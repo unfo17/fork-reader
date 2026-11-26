@@ -470,6 +470,7 @@ object ReadiumReader :
     suspend fun appCapturePage(
         includeBands: Boolean = false, vertical: Boolean = false,
         allowLateCapture: Boolean = false, fixedLayoutPaper: Int? = null,
+        fullResolution: Boolean = false,
     ): Map<String, Any>? {
         // Use the selected resource for DOM geometry, but draw its parent tree:
         // ViewGroup.drawChild supplies the WebView's native scroll translation.
@@ -572,7 +573,7 @@ object ReadiumReader :
         val imageOnly = info.optBoolean("imageOnly")
         // Preserve text at device resolution. Illustration transitions can
         // share smaller textures while Readium keeps the full-size live page.
-        val scale = if (imageOnly) minOf(1.0, 1600.0 / maxOf(root.width, root.height)) else 1.0
+        val scale = if (imageOnly && !fullResolution) minOf(1.0, 1600.0 / maxOf(root.width, root.height)) else 1.0
         val bitmap = android.graphics.Bitmap.createBitmap(
             (root.width * scale).roundToInt().coerceAtLeast(1),
             (root.height * scale).roundToInt().coerceAtLeast(1),

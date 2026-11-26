@@ -75,6 +75,7 @@ class ReadiumControlsPlugin : FlutterPlugin {
                                     call.argument<Boolean>("vertical") == true,
                                     call.argument<Boolean>("allowLateCapture") == true,
                                     call.argument<Number>("paper")?.toInt(),
+                                    fullResolution = call.argument<Boolean>("fullResolution") == true,
                                 )
                                 if (includeBands && android.util.Log.isLoggable("ReadiumControlTiming", android.util.Log.DEBUG)) {
                                     val count = (frame?.get("bands") as? List<*>)?.size ?: 0

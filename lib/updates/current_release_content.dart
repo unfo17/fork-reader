@@ -6,8 +6,8 @@ class ReleaseSection {
   final List<String> items;
 }
 
-const _opening = '进入阅读时使用 Material 3 加载指示器。页面弹出后再初始化 EPUB 阅读视图。';
-const _swipes = '前一页的动画仍在播放时，继续准备并响应下一次翻页。';
+const _opening = '点击阅读立即准备 EPUB。等待时显示 Material 3 Expressive 变形加载动画。';
+const _swipes = '连续短滑各自翻页。续读过渡使用恢复排版后的当前页。';
 const _androidInstall = '已安装本仓库固定签名版的 Android 用户可以直接覆盖更新，书籍和阅读记录会保留。';
 
 const publicReleaseNotes =

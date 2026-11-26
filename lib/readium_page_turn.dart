@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:flutter/gestures.dart' show VelocityTracker, kLongPressTimeout, kPrimaryButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:material3_expressive_loading_indicator/material3_expressive_loading_indicator.dart';
 import 'reader_preferences.dart';
 import 'reader_sheet_motion.dart';
 import 'reader_turn_motion.dart';
@@ -13,13 +14,11 @@ class ReadiumLoadingIndicator extends StatelessWidget {
   const ReadiumLoadingIndicator({super.key});
 
   @override
-  Widget build(BuildContext context) => const Center(
+  Widget build(BuildContext context) => Center(
     child: RepaintBoundary(
-      child: CircularProgressIndicator(
-        // The pinned Flutter SDK still defaults to the older Material 3 style.
-        // ignore: deprecated_member_use
-        year2023: false,
-        semanticsLabel: '正在加载阅读页面',
+      child: TickerMode(
+        enabled: !MediaQuery.disableAnimationsOf(context),
+        child: const ExpressiveLoadingIndicator(semanticsLabel: '正在加载阅读页面'),
       ),
     ),
   );
@@ -240,10 +239,12 @@ class ReadiumPageTurnController {
     return (progress >= .25 || (progress > .06 && velocity > 700)) && velocity > -600;
   }
 
-  bool beginOverlappingDrag(int direction, double dx, double width, double touchY) {
+  bool beginOverlappingDrag(int direction, double dx, double width, double touchY, {
+    bool grabSettlingSheet = false,
+  }) {
     final owner = _owner;
     if (_release?.isCompleted == false || owner == null ||
-        !(owner._grabPaper(direction) || owner._addOverlap(direction))) return false;
+        !((grabSettlingSheet && owner._grabPaper(direction)) || owner._addOverlap(direction))) return false;
     beginDrag(dx, width, touchY, direction: direction);
     return true;
   }
@@ -283,6 +284,7 @@ class ReadiumPageTurnController {
   void animateEntry(ReaderPageEffect effect) =>
       unawaited(_owner?._animateReturn(effect: effect));
   bool get entering => _owner?._entering ?? false;
+  bool get waitingForEntry => _owner?._coverInitialEntry ?? false;
 
   Future<void> freezeForRoute() async => _owner?._freezeForRoute();
   Future<void> thawAfterRoute() async => _owner?._thawAfterRoute();
@@ -327,7 +329,7 @@ class ReadiumPageSurface extends StatefulWidget {
     this.onTurnAvailable,
     this.onPageTurn,
     this.coverInitialEntry = false,
-    this.openingPage,
+    this.captureEntry,
     this.replayTap,
     this.onRetainedDrag,
     this.refreshRateLimit = 0,
@@ -346,7 +348,7 @@ class ReadiumPageSurface extends StatefulWidget {
   final VoidCallback? onTurnAvailable;
   final VoidCallback? onPageTurn;
   final bool coverInitialEntry;
-  final ReadiumPageFrame? openingPage;
+  final Future<ReadiumPageFrame?> Function()? captureEntry;
   final Future<void> Function(Offset fraction)? replayTap;
   final ValueChanged<Map<String, dynamic>>? onRetainedDrag;
   final Future<bool> Function(int direction)? canTurn;
@@ -540,14 +542,15 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       widget.onPrioritize?.call();
       _preparationInterrupted = true;
     }
-    final opening = initial ? widget.openingPage : null;
-    ReadiumPageFrame? frame = (opening ?? _presented ?? _cached)?.retain();
+    ReadiumPageFrame? frame = initial ? null : (_presented ?? _cached)?.retain();
     try {
       if (frame == null) {
         if (_warming) await _warmDone?.future;
         await _preparing;
         if (mounted && _returnEpoch == epoch && !_busy) {
-          frame = (_presented ?? _cached)?.retain() ?? await widget.capture();
+          frame = initial
+              ? await (widget.captureEntry ?? widget.capture)()
+              : (_presented ?? _cached)?.retain() ?? await widget.capture();
         }
       }
     } catch (_) {
@@ -570,24 +573,27 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       _entryFromBottom = effect == null;
       if (initial) {
         _coverInitialEntry = false;
-        if (widget.preview != null && opening == null) _cached ??= frame!.retain();
+        if (widget.preview != null) _cached ??= frame!.retain();
       }
     });
     if (initial) await WidgetsBinding.instance.endOfFrame;
     if (!mounted || _returnEpoch != epoch) return;
     unawaited(_returnClock.forward().orCancel.then((_) {
-      if (mounted && _returnEpoch == epoch) _stopReturnAnimation();
+      if (mounted && _returnEpoch == epoch) _stopReturnAnimation(keepPage: initial);
     }).catchError((Object error) {
       if (error is! TickerCanceled) throw error;
     }));
   }
 
-  void _stopReturnAnimation() {
+  void _stopReturnAnimation({bool keepPage = false}) {
     _returnEpoch++;
     final frame = _returnFrame;
     if (frame == null) return;
     _returnClock.stop();
-    setState(() => _returnFrame = null);
+    setState(() {
+      if (keepPage && widget.preview != null) _holdPresentedPage(frame);
+      _returnFrame = null;
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) => frame.dispose());
     _warmLater();
   }
@@ -1815,10 +1821,11 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     children: [
       Opacity(
         opacity: _routeCover != null ||
-                (_overlayCover != null && _previewCover == null) || _returnFrame != null ||
+                (_overlayCover != null && _previewCover == null) ||
+                (_returnFrame != null && _entryFromBottom) ||
                 (_sceneCoversPage && widget.preview != null && _previewCover == null)
             ? 0 : 1,
-        child: widget.child,
+        child: IgnorePointer(ignoring: _coverInitialEntry, child: widget.child),
       ),
       if (_presented case final frame? when !_sceneCoversPage && _previewCover == null && _routeCover == null)
         Positioned.fill(child: IgnorePointer(child: _pageImage(frame))),
