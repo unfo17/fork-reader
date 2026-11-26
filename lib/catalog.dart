@@ -38,6 +38,9 @@ class Novel {
   static final _directoryCache = Expando<List<NovelDirectoryEntry>>();
   List<NovelDirectoryEntry> get directory =>
       _directoryCache[this] ??= _directory();
+  static final _directoryLayouts = Expando<NovelDirectoryLayout>();
+  NovelDirectoryLayout get directoryLayout =>
+      _directoryLayouts[this] ??= NovelDirectoryLayout(this);
   List<NovelDirectoryEntry> _directory() {
     final indices = {
       for (final (i, chapter) in chapters.indexed) chapter.id: i,
@@ -247,9 +250,16 @@ class NovelChapter {
 /// Contiguous volume ranges keep the original, flat chapter indices stable.
 /// Old directories without volume metadata remain a plain chapter list.
 class NovelVolume {
-  const NovelVolume(this.key, this.title, this.start, this.end);
+  const NovelVolume(
+    this.key,
+    this.title,
+    this.start,
+    this.end, {
+    this.depth = 0,
+  });
   final String key, title;
   final int start, end;
+  final int depth;
   int get length => end - start;
 
   static List<NovelVolume> of(List<NovelChapter> chapters) {
@@ -274,6 +284,142 @@ class NovelVolume {
       start = end;
     }
     return result;
+  }
+}
+
+typedef NovelDirectoryRow = ({NovelVolume? volume, int? chapter});
+
+/// Directory grouping is a display projection. Chapter indices and Readium
+/// targets continue to refer to the original entries, including group links.
+class NovelDirectoryLayout {
+  NovelDirectoryLayout(Novel novel)
+    : _entries = novel.directory,
+      _chapters = novel.directoryChapters {
+    final parents = <int>[];
+    for (var i = 0; i <= _entries.length; i++) {
+      while (parents.isNotEmpty &&
+          (i == _entries.length ||
+              _entries[parents.last].depth >= _entries[i].depth)) {
+        final root = parents.removeLast();
+        if (i > root + 1) {
+          _branches[root] = NovelVolume(
+            'epub:$root',
+            _entries[root].title,
+            root,
+            i,
+            depth: parents.length,
+          );
+        }
+      }
+      if (i < _entries.length) {
+        final siblings = parents.isEmpty
+            ? _roots
+            : _children.putIfAbsent(parents.last, () => []);
+        siblings.add(i);
+        _depths.add(parents.length);
+        parents.add(i);
+      }
+    }
+    volumes = _branches.isEmpty
+        ? NovelVolume.of(_chapters)
+        : [
+            for (final i in _entries.asMap().keys)
+              if (_branches[i] case final group?) group,
+          ];
+    _numbers = List.filled(_entries.length, null);
+    for (var i = 0; i < _entries.length; i++) {
+      if (_branches.containsKey(i)) continue;
+      _numbered.add(i);
+      _numbers[i] = _numbered.length;
+    }
+  }
+
+  final List<NovelDirectoryEntry> _entries;
+  final List<NovelChapter> _chapters;
+  final _roots = <int>[];
+  final _children = <int, List<int>>{};
+  final _depths = <int>[];
+  final _branches = <int, NovelVolume>{};
+  final _numbered = <int>[];
+  late final List<int?> _numbers;
+  late final List<NovelVolume> volumes;
+
+  int? numberOf(int index) => _numbers[index];
+
+  int depthOf(int index) =>
+      _depths[index] + (_branches.containsKey(index) ? 1 : 0);
+
+  Set<int>? matches(String query) {
+    final text = query.trim().toLowerCase();
+    if (text.isEmpty) return null;
+    final number = int.tryParse(text);
+    if (number != null) {
+      return number > 0 && number <= _numbered.length
+          ? {_numbered[number - 1]}
+          : {};
+    }
+    return {
+      for (final (index, chapter) in _chapters.indexed)
+        if (chapter.title.toLowerCase().contains(text) ||
+            (_branches.isEmpty &&
+                chapter.volumeTitle.toLowerCase().contains(text)))
+          index,
+    };
+  }
+
+  Iterable<NovelDirectoryRow> rows({
+    required Set<String> expanded,
+    bool reversed = false,
+    Set<int>? matches,
+  }) sync* {
+    bool containsMatch(NovelVolume volume) =>
+        matches == null ||
+        Iterable<int>.generate(
+          volume.length,
+          (i) => volume.start + i,
+        ).any(matches.contains);
+
+    if (_branches.isEmpty) {
+      for (final volume in reversed ? volumes.reversed : volumes) {
+        if (!containsMatch(volume)) continue;
+        if (volume.title.isNotEmpty) yield (volume: volume, chapter: null);
+        if (matches == null &&
+            volume.title.isNotEmpty &&
+            !expanded.contains(volume.key))
+          continue;
+        for (var i = 0; i < volume.length; i++) {
+          final index = reversed ? volume.end - i - 1 : volume.start + i;
+          if (matches == null || matches.contains(index)) {
+            yield (volume: null, chapter: index);
+          }
+        }
+      }
+      return;
+    }
+
+    Iterable<NovelDirectoryRow> walk(List<int> siblings, bool listAll) sync* {
+      for (final index in reversed ? siblings.reversed : siblings) {
+        final selected = listAll || matches == null || matches.contains(index);
+        final group = _branches[index];
+        if (group == null) {
+          if (selected) yield (volume: null, chapter: index);
+          continue;
+        }
+        if (!selected && !containsMatch(group)) continue;
+        yield (volume: group, chapter: null);
+        if (matches != null || expanded.contains(group.key)) {
+          // Fold the original target into the group like a chapter in a volume.
+          // A group link is selectable even though it has no chapter number.
+          if (selected) yield (volume: null, chapter: index);
+          yield* walk(
+            _children[index]!,
+            listAll || (matches?.contains(index) ?? false),
+          );
+        }
+      }
+    }
+
+    yield* walk(_roots, false);
   }
 }
 

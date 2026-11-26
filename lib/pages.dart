@@ -4319,11 +4319,12 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
   final Set<String> _directoryVolumeKeys = {};
   int? _directoryBook;
 
-  List<({NovelVolume? volume, int? chapter})> _directory() {
+  List<NovelDirectoryRow> _directory() {
     // Provisional cached chapters can predate volume metadata. Wait for the
     // displayed directory before choosing its initially expanded volume.
     if (isLoading || loadError != null) return const [];
-    final volumes = NovelVolume.of(novel.directoryChapters);
+    final layout = novel.directoryLayout;
+    final volumes = layout.volumes;
     if (_directoryBook != novel.id) {
       _expandedVolumes.clear();
       _directoryVolumeKeys.clear();
@@ -4345,17 +4346,10 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
       ..addAll(volumes.map((volume) => volume.key));
     _expandedVolumes.retainAll(_directoryVolumeKeys);
     if (volumes.isNotEmpty) _directoryBook = novel.id;
-    return [
-      for (final volume in _catalogueReversed ? volumes.reversed : volumes) ...[
-        if (volume.title.isNotEmpty) (volume: volume, chapter: null),
-        if (volume.title.isEmpty || _expandedVolumes.contains(volume.key))
-          for (final i in Iterable.generate(
-            volume.length,
-            (i) => _catalogueReversed ? volume.end - i - 1 : volume.start + i,
-          ))
-            (volume: null, chapter: i),
-      ],
-    ];
+    return layout.rows(
+      expanded: _expandedVolumes,
+      reversed: _catalogueReversed,
+    ).toList();
   }
 
   Novel get novel =>
@@ -5364,9 +5358,8 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
 
   String get _directoryCountLabel {
     final count = novel.directory.length;
-    final volumes = NovelVolume.of(
-      novel.directoryChapters,
-    ).where((volume) => volume.title.isNotEmpty).length;
+    final volumes = novel.directoryLayout.volumes
+        .where((volume) => volume.title.isNotEmpty && volume.depth == 0).length;
     final unit = novel.navigation?.entries.isNotEmpty == true ? '项' : '章';
     return '${volumes > 0 ? '$volumes 卷 · ' : ''}$count $unit';
   }
@@ -5425,7 +5418,11 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
             }
           }),
           child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 18),
+            padding: EdgeInsets.only(
+              left: volume.depth.clamp(0, 6) * 12.0,
+              top: 18,
+              bottom: 18,
+            ),
             decoration: BoxDecoration(
               border: Border(
                 bottom: BorderSide(
@@ -5490,6 +5487,8 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
 
   Widget _chapterRow(BuildContext context, int index) {
     final entry = novel.directory[index];
+    final layout = novel.directoryLayout;
+    final number = layout.numberOf(index);
     final current = _resumeDirectory == index;
     return _cacheReactive(
       () => JellyTapSurface(
@@ -5502,7 +5501,11 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
               : null,
         ),
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 16),
+          padding: EdgeInsets.only(
+            left: layout.depthOf(index).clamp(0, 6) * 12.0,
+            top: 16,
+            bottom: 16,
+          ),
           decoration: BoxDecoration(
             border: Border(
               bottom: BorderSide(
@@ -5514,16 +5517,17 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              SizedBox(
-                width: 36,
-                child: AppText(
-                  (index + 1).toString().padLeft(2, '0'),
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+              if (number != null)
+                SizedBox(
+                  width: 36,
+                  child: AppText(
+                    number.toString().padLeft(2, '0'),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
-              ),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,

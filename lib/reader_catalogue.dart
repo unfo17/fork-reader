@@ -56,17 +56,16 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
   final _searchFocus = FocusNode();
   bool _searchOpen = false;
   late bool _reversed = widget.initialReversed;
-  late List<int> _matches = _filter('');
+  Set<int>? _matches;
   late final _entries = widget.novel.directory;
-  late final _directoryChapters = widget.novel.directoryChapters;
+  late final _layout = widget.novel.directoryLayout;
   late final _current = widget.novel.directoryIndexFor(
     widget.currentChapter,
     paragraph: widget.position?.paragraphIndex ?? 0,
     offset: widget.position?.textOffset ?? 0,
   );
-  late final _volumes = NovelVolume.of(_directoryChapters);
   late final Set<String> _expanded = {
-    for (final volume in _volumes)
+    for (final volume in _layout.volumes)
       if (_current >= volume.start && _current < volume.end) volume.key,
   };
 
@@ -88,24 +87,8 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
     if (motion) _orderMotion.forward(from: 0);
   }
 
-  List<int> _filter(String query) {
-    final chapters = _directoryChapters;
-    final text = query.trim().toLowerCase();
-    if (text.isEmpty) return List.generate(chapters.length, (index) => index);
-    final number = int.tryParse(text);
-    if (number != null) {
-      return number > 0 && number <= chapters.length ? [number - 1] : [];
-    }
-    return [
-      for (var index = 0; index < chapters.length; index++)
-        if (chapters[index].title.toLowerCase().contains(text) ||
-            chapters[index].volumeTitle.toLowerCase().contains(text))
-          index,
-    ];
-  }
-
   void _filterChanged(String query) {
-    setState(() => _matches = _filter(query));
+    setState(() => _matches = _layout.matches(query));
     _resetScrollAfterFrame();
   }
 
@@ -228,28 +211,12 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
   );
 
   Widget _chapters(BuildContext context) {
-    if (_matches.isEmpty) {
+    if (_entries.isEmpty || _matches?.isEmpty == true) {
       return const Center(child: AppText('没有匹配的章节'));
     }
-    final matches = _matches.toSet();
-    // Reorder only the display projection; row indices remain source addresses.
-    final rows = <({NovelVolume? volume, int? chapter})>[
-      for (final volume in _reversed ? _volumes.reversed : _volumes)
-        if (Iterable.generate(
-          volume.length,
-          (i) => volume.start + i,
-        ).any(matches.contains)) ...[
-          if (volume.title.isNotEmpty) (volume: volume, chapter: null),
-          if (volume.title.isEmpty ||
-              _expanded.contains(volume.key) ||
-              _search.text.trim().isNotEmpty)
-            for (final i in Iterable.generate(
-              volume.length,
-              (i) => _reversed ? volume.end - i - 1 : volume.start + i,
-            ))
-              if (matches.contains(i)) (volume: null, chapter: i),
-        ],
-    ];
+    final rows = _layout
+        .rows(expanded: _expanded, reversed: _reversed, matches: _matches)
+        .toList();
     Widget row(int index) => LibraryReflowPart(
       id: rows[index].volume != null
           ? ('volume', rows[index].volume!.key)
@@ -303,7 +270,12 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
                 if (!_expanded.add(volume.key)) _expanded.remove(volume.key);
               }),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 18),
+          padding: EdgeInsets.fromLTRB(
+            10 + volume.depth.clamp(0, 6) * 12.0,
+            18,
+            10,
+            18,
+          ),
           child: Row(
             children: [
               Expanded(
@@ -343,6 +315,7 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
 
   Widget _row(BuildContext context, int index) {
     final entry = _entries[index];
+    final number = _layout.numberOf(index);
     final chapter = widget.novel.chapters[entry.chapter];
     final current = index == _current;
     return Semantics(
@@ -361,7 +334,7 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
         child: Container(
           constraints: const BoxConstraints(minHeight: 52),
           padding: EdgeInsets.fromLTRB(
-            10 + entry.depth.clamp(0, 6) * 12.0,
+            10 + _layout.depthOf(index).clamp(0, 6) * 12.0,
             12,
             10,
             12,
@@ -374,18 +347,20 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
           ),
           child: Row(
             children: [
-              SizedBox(
-                width: 38,
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerLeft,
-                  child: AppText(
-                    '${index + 1}',
-                    style: const TextStyle(fontSize: 12),
+              if (number != null) ...[
+                SizedBox(
+                  width: 38,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: AppText(
+                      '$number',
+                      style: const TextStyle(fontSize: 12),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 7),
+                const SizedBox(width: 7),
+              ],
               Expanded(
                 child: AppText(
                   entry.title,
