@@ -2,7 +2,7 @@ import 'dart:ui' as ui;
 import 'dart:async';
 import 'dart:typed_data';
 import 'dart:math' as math;
-import 'package:flutter/gestures.dart' show DragStartBehavior;
+import 'package:flutter/gestures.dart' show VelocityTracker, kLongPressTimeout, kPrimaryButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'reader_preferences.dart';
@@ -132,21 +132,24 @@ class _ReadiumPaperGrab {
   final released = Completer<void>();
 }
 
+typedef _ReadiumRelease = ({bool commit, bool hadDestination});
+
 class ReadiumPageTurnController {
   _ReadiumPageSurfaceState? _owner;
-  Completer<bool>? _release;
+  Completer<_ReadiumRelease>? _release;
   double _progress = 0, _displacement = 0, _sign = 1, _width = 1, _lastDistance = 0, _velocity = 0;
   final _watch = Stopwatch();
   int _lastMicros = 0;
   double _initialSign = 1, _directionMultiplier = -1;
   double _touchY = .5, _startY = .5;
   final _shape = ValueNotifier<int>(0);
-  void beginDrag(double dx, double width, double touchY) {
+  void beginDrag(double dx, double width, double touchY, {int? direction}) {
     _touchY = _startY = touchY;
-    _release = Completer<bool>();
+    _release = Completer<_ReadiumRelease>();
     _progress = 0;
     _width = width;
     _sign = _initialSign = dx < 0 ? -1 : 1;
+    if (direction != null) _directionMultiplier = direction / _initialSign;
     _lastDistance = dx * _sign;
     _velocity = 0;
     _lastMicros = 0;
@@ -190,23 +193,30 @@ class ReadiumPageTurnController {
     _watch.stop();
     if (releaseVelocity != null) _velocity = releaseVelocity * _sign;
     if (_owner?._paperGrab != null) {
-      release.complete(false);
+      release.complete((commit: false, hadDestination: false));
       _owner?._releasePaper(cancel, _velocity);
       return;
     }
     // Very short gestures may have too few movement samples for a useful
     // release velocity. Use their native touch duration and displacement.
-    final commit = !cancel && _commitsDrag(_progress, _velocity, durationMillis);
-    release.complete(commit);
+    final commit = !cancel && _commitsDrag(_progress, _width, _velocity, durationMillis);
+    final direction = (_sign * _directionMultiplier).round();
+    release.complete((
+      commit: commit,
+      hadDestination: _owner?._neighbors.containsKey(direction) == true,
+    ));
     _owner?._finishDrag(commit);
   }
 
-  static bool _commitsDrag(double progress, double velocity, int? durationMillis) {
+  static bool _commitsDrag(double progress, double width, double velocity, int? durationMillis) {
+    // Two or three samples can yield no release velocity on a short swipe.
+    // Use event time and net displacement as a second measure of the flick.
     final shortSwipe = durationMillis != null &&
         durationMillis > 0 &&
         durationMillis <= 140 &&
-        progress >= .12 &&
-        velocity >= 0;
+        velocity >= 0 &&
+        (progress >= .12 ||
+            (progress >= .07 && progress * width * 1000 >= 700 * durationMillis));
     return (progress >= .25 || (progress > .06 && velocity > 700) || shortSwipe) &&
         velocity > -600;
   }
@@ -215,8 +225,7 @@ class ReadiumPageTurnController {
     final owner = _owner;
     if (_release?.isCompleted == false || owner == null ||
         !(owner._grabPaper(direction) || owner._addOverlap(direction))) return false;
-    beginDrag(dx, width, touchY);
-    _directionMultiplier = direction / _initialSign;
+    beginDrag(dx, width, touchY, direction: direction);
     return true;
   }
 
@@ -299,9 +308,7 @@ class ReadiumPageSurface extends StatefulWidget {
     this.onTurnAvailable,
     this.onPageTurn,
     this.coverInitialEntry = false,
-    this.showEntryProgress = true,
     this.openingPage,
-    this.openingPageReady = true,
     this.replayTap,
     this.onRetainedDrag,
     this.refreshRateLimit = 0,
@@ -320,9 +327,7 @@ class ReadiumPageSurface extends StatefulWidget {
   final VoidCallback? onTurnAvailable;
   final VoidCallback? onPageTurn;
   final bool coverInitialEntry;
-  final bool showEntryProgress;
   final ReadiumPageFrame? openingPage;
-  final bool openingPageReady;
   final Future<void> Function(Offset fraction)? replayTap;
   final ValueChanged<Map<String, dynamic>>? onRetainedDrag;
   final Future<bool> Function(int direction)? canTurn;
@@ -347,8 +352,6 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   ReaderPageEffect _entryEffect = ReaderPageEffect.staggered;
   bool _entryFromBottom = true;
   late bool _coverInitialEntry = widget.coverInitialEntry;
-  // A later seek or style update must not restore the old resume preview.
-  late bool _openingPageReady = widget.openingPageReady;
   ReadiumPageFrame? _from, _to;
   ReaderPageEffect _effect = ReaderPageEffect.none;
   double _direction = 1;
@@ -375,6 +378,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   final _edges = <int>{};
   Future<void>? _preparing;
   int? _preparingOffset;
+  Completer<void>? _neighborUpdate;
   ReadiumPageFrame? _previewCover;
   int _dragDirection = 1;
   bool _adoptingPage = false;
@@ -504,7 +508,6 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       }
     }
     if (!mounted || _busy || _routePaused || effect == ReaderPageEffect.none ||
-        (initial && widget.openingPage != null) ||
         MediaQuery.disableAnimationsOf(context)) {
       clearEntryCover();
       return;
@@ -516,7 +519,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       widget.onPrioritize?.call();
       _preparationInterrupted = true;
     }
-    ReadiumPageFrame? frame = (_presented ?? _cached)?.retain();
+    final opening = initial ? widget.openingPage : null;
+    ReadiumPageFrame? frame = (opening ?? _presented ?? _cached)?.retain();
     try {
       if (frame == null) {
         if (_warming) await _warmDone?.future;
@@ -545,7 +549,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       _entryFromBottom = effect == null;
       if (initial) {
         _coverInitialEntry = false;
-        if (widget.preview != null) _cached ??= frame!.retain();
+        if (widget.preview != null && opening == null) _cached ??= frame!.retain();
       }
     });
     if (initial) await WidgetsBinding.instance.endOfFrame;
@@ -650,20 +654,29 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         _edges.retainWhere(offsets.contains);
       }
       final batch = requiredDirection == null && widget.previewRun != null;
+      final ahead = _dragDirection;
+      // Capture the next two pages in the same native visit. The first
+      // texture is available immediately, even while the second is rendering.
+      final firstRun = [ahead, if (offsets.contains(2 * ahead)) 2 * ahead];
       final runs = batch ? [
-        for (final offset in offsets.where((offset) => offset.abs() == 1))
-          [offset],
-        for (final direction in [_dragDirection, -_dragDirection])
-          offsets.where((offset) => offset.abs() > 1 && offset.sign == direction).toList(),
+        firstRun,
+        [-ahead],
+        for (final direction in [ahead, -ahead])
+          offsets.where((offset) => offset.abs() > 1 &&
+              offset.sign == direction && !firstRun.contains(offset)).toList(),
       ] : offsets.map((offset) => [offset]);
       void keepFrame(int direction, ReadiumPageFrame? frame) {
         if (!mounted || key != widget.frameKey) {
           frame?.dispose();
-        } else if (frame == null) {
-          _edges.add(direction);
         } else {
-          _neighbors[direction]?.dispose();
-          _neighbors[direction] = frame;
+          if (frame == null) {
+            _edges.add(direction);
+          } else {
+            _neighbors[direction]?.dispose();
+            _neighbors[direction] = frame;
+          }
+          _neighborUpdate?.complete();
+          _neighborUpdate = null;
           _offerNextTurn();
         }
       }
@@ -748,7 +761,21 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _scrub();
   }
 
-  Future<void> _bufferedTurn(int direction, bool animated, Completer<bool>? gesture) async {
+  Future<void> _waitForDragTarget(
+    ReadiumPageFrame from, int requested, Completer<_ReadiumRelease> gesture,
+  ) async {
+    while (mounted && !gesture.isCompleted &&
+        !_neighbors.containsKey(requested) && !_edges.contains(requested)) {
+      final update = _neighborUpdate ??= Completer<void>();
+      final continuing = _preparing;
+      final work = continuing ?? _prepareNeighbors(from, requiredDirection: requested);
+      await Future.any([gesture.future, update.future, work]);
+      if (identical(_neighborUpdate, update)) _neighborUpdate = null;
+      if (continuing == null) return;
+    }
+  }
+
+  Future<void> _bufferedTurn(int direction, bool animated, Completer<_ReadiumRelease>? gesture) async {
     if (_busy || !mounted) return;
     _busy = true;
     _primaryCommit = _primaryAdopted = false;
@@ -769,12 +796,15 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       }
       if (from == null || !mounted) return;
       final requested = gesture == null ? direction : (widget.controller._sign * widget.controller._directionMultiplier).round();
-      if (!_neighbors.containsKey(requested) && !_edges.contains(requested)) {
+      if (gesture == null) {
         await _prepareNeighbors(from, requiredDirection: requested);
+      } else if (!gesture.isCompleted) {
+        await _waitForDragTarget(from, requested, gesture);
       }
       if (!mounted) return;
-      if (gesture?.isCompleted == true) {
-        if (await gesture!.future && _edges.contains(requested)) {
+      final release = gesture?.isCompleted == true ? await gesture!.future : null;
+      if (release != null && (!release.commit || !release.hadDestination)) {
+        if (release.commit && _edges.contains(requested)) {
           await widget.canTurn?.call(requested);
         }
         return;
@@ -801,6 +831,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       });
       _settling = null;
       _dragPrepared = gesture != null;
+      if (release != null) _finishDrag(release.commit);
       if (gesture?.isCompleted == false && _to == null && !_edges.contains(initialDirection)) {
         // The finger may have crossed back over the origin while the other
         // side was being captured.
@@ -1305,6 +1336,10 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       _trackingOverlap = null;
       _nextDragTick = null;
       overlap.finish(commit && overlap.target != null);
+      if (!overlap.committed && overlap.clock.value == 0) {
+        setState(() => _overlaps.remove(overlap));
+        _retireOverlap(overlap);
+      }
       _offerNextTurn();
       return;
     }
@@ -1344,7 +1379,6 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   @override
   void didUpdateWidget(covariant ReadiumPageSurface oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _openingPageReady |= widget.openingPageReady;
     if (oldWidget.layoutKey != widget.layoutKey) {
       _stopReturnAnimation();
       _releaseOverlayCover();
@@ -1472,7 +1506,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   Future<void> _turn(
     int direction,
     bool animated, {
-    Completer<bool>? gesture,
+    Completer<_ReadiumRelease>? gesture,
   }) async {
     if (widget.preview != null && widget.land != null) {
       return _bufferedTurn(direction, animated, gesture);
@@ -1485,7 +1519,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         !prefs.mode.paginated ||
         prefs.pageEffect == ReaderPageEffect.none ||
         MediaQuery.disableAnimationsOf(context)) {
-      if ((gesture == null || await gesture.future) && await widget.step(direction, false) && mounted) {
+      if ((gesture == null || (await gesture.future).commit) && await widget.step(direction, false) && mounted) {
         widget.onPageTurn?.call();
       }
       return;
@@ -1498,7 +1532,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       from = await _takeFrame(widget.capture);
       if (!mounted) return;
       if (from == null) {
-        if ((gesture == null || await gesture.future) && await widget.step(direction, false) && mounted) {
+        if ((gesture == null || (await gesture.future).commit) && await widget.step(direction, false) && mounted) {
           widget.onPageTurn?.call();
         }
         return;
@@ -1516,7 +1550,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       });
       _dragPrepared = gesture != null;
       if (gesture != null) _clock.value = math.min(widget.controller._progress, .92);
-      if (gesture?.isCompleted == true) _finishDrag(await gesture!.future);
+      if (gesture?.isCompleted == true) _finishDrag((await gesture!.future).commit);
       // Cover the native view before it moves. Native slide animation is disabled
       // so adjacent page edges cannot bleed through this full-page transition.
       await WidgetsBinding.instance.endOfFrame;
@@ -1548,7 +1582,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       }();
       var finish = true;
       if (gesture != null) {
-        finish = await gesture.future;
+        finish = (await gesture.future).commit;
         _finishDrag(finish);
       }
       await preparing;
@@ -1792,19 +1826,13 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         Positioned.fill(key: const ValueKey('readium-return-page'), child: IgnorePointer(child: ExcludeSemantics(
           child: RepaintBoundary(child: ClipRect(child: _entry(frame))),
         ))),
-      if (widget.openingPage case final frame? when
-          _coverInitialEntry || !_openingPageReady)
-        Positioned.fill(
-          child: IgnorePointer(child: ExcludeSemantics(child: _pageImage(frame))),
-        )
-      else if (_coverInitialEntry)
+      if (_coverInitialEntry)
         Positioned.fill(
           child: IgnorePointer(
             child: ColoredBox(
-              key: const ValueKey('readium-entry-cover'),
               color: widget.paper,
-              child: widget.showEntryProgress
-                  ? const Center(child: CircularProgressIndicator()) : null,
+              key: const ValueKey('readium-entry-cover'),
+              child: const Center(child: CircularProgressIndicator()),
             ),
           ),
         ),
@@ -1851,64 +1879,81 @@ class _ReadiumRetainedInput extends StatefulWidget {
 }
 
 class _ReadiumRetainedInputState extends State<_ReadiumRetainedInput> {
+  // Match Android's paginated touch slop on the Flutter-owned layer.
+  static const _touchSlop = 8.0;
+  int? _pointer;
   Offset _origin = Offset.zero;
-  final _elapsed = Stopwatch();
-  bool _sentStart = false;
+  Duration _downTime = Duration.zero;
+  VelocityTracker? _velocity;
+  bool _dragging = false, _interrupted = false;
 
-  void _start(DragStartDetails details) {
-    _origin = details.localPosition;
-    _sentStart = false;
-    _elapsed
-      ..reset()
-      ..start();
+  void _down(PointerDownEvent event) {
+    if (_pointer != null) {
+      if (_dragging) _send('Cancel', event);
+      _dragging = false;
+      _interrupted = true;
+      return;
+    }
+    if (event.buttons != kPrimaryButton) return;
+    _pointer = event.pointer;
+    _origin = event.localPosition;
+    _downTime = event.timeStamp;
+    _velocity = VelocityTracker.withKind(event.kind)
+      ..addPosition(event.timeStamp, event.localPosition);
+    _interrupted = false;
   }
 
-  void _send(String phase, Offset position, {double? velocity}) {
+  void _send(String phase, PointerEvent event, {double? velocity}) {
     final height = context.size?.height ?? 0;
+    final position = event.localPosition;
     widget.onDrag?.call({
       'phase': phase,
       'dx': position.dx - _origin.dx,
       'y': height > 0
           ? ((phase == 'Start' ? _origin.dy : position.dy) / height).clamp(0.0, 1.0)
           : .5,
-      'durationMillis': _elapsed.elapsedMilliseconds,
+      'durationMillis': (event.timeStamp - _downTime).inMilliseconds,
       if (velocity != null) 'velocityX': velocity,
     });
   }
 
-  void _update(DragUpdateDetails details) {
-    final position = details.localPosition;
-    if (!_sentStart) {
-      if ((position.dx - _origin.dx).abs() < 1) return;
-      _sentStart = true;
-      _send('Start', position);
+  void _move(PointerEvent event) {
+    if (event.pointer != _pointer || _interrupted) return;
+    _velocity?.addPosition(event.timeStamp, event.localPosition);
+    if (!_dragging && widget.onDrag != null &&
+        (event.localPosition.dx - _origin.dx).abs() > _touchSlop) {
+      _dragging = true;
+      _send('Start', event);
+    } else if (_dragging) {
+      _send('Move', event);
     }
-    _send('Move', position);
   }
 
-  void _end(DragEndDetails details) {
-    if (_sentStart) {
-      _send('End', details.localPosition, velocity: details.primaryVelocity);
+  void _end(PointerEvent event) {
+    if (event.pointer != _pointer) return;
+    if (event is PointerCancelEvent) {
+      if (_dragging) _send('Cancel', event);
+    } else if (!_interrupted) {
+      _move(event);
+      if (_dragging) {
+        _send('End', event, velocity: _velocity?.getVelocity().pixelsPerSecond.dx);
+      } else if ((event.localPosition - _origin).distance <= _touchSlop &&
+          event.timeStamp - _downTime < kLongPressTimeout) {
+        widget.onTap?.call(event.localPosition);
+      }
     }
-    _elapsed.stop();
-    _sentStart = false;
-  }
-
-  void _cancel() {
-    if (_sentStart) _send('Cancel', _origin);
-    _elapsed.stop();
-    _sentStart = false;
+    _pointer = null;
+    _velocity = null;
+    _dragging = false;
   }
 
   @override
-  Widget build(BuildContext context) => GestureDetector(
+  Widget build(BuildContext context) => Listener(
     behavior: HitTestBehavior.opaque,
-    dragStartBehavior: DragStartBehavior.down,
-    onHorizontalDragStart: widget.onDrag == null ? null : _start,
-    onHorizontalDragUpdate: widget.onDrag == null ? null : _update,
-    onHorizontalDragEnd: widget.onDrag == null ? null : _end,
-    onHorizontalDragCancel: widget.onDrag == null ? null : _cancel,
-    onTapUp: widget.onTap == null ? null : (details) => widget.onTap?.call(details.localPosition),
+    onPointerDown: _down,
+    onPointerMove: _move,
+    onPointerUp: _end,
+    onPointerCancel: _end,
   );
 }
 

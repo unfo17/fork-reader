@@ -220,7 +220,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     _dragInFlight = _receivingDrag = true;
     _dragLocation = null;
     onUserNavigation();
-    turns.beginDrag(start.dx, start.width, start.y);
+    turns.beginDrag(start.dx, start.width, start.y, direction: direction);
     unawaited(command(() => turns.drag(direction), waitForPreparation: false).whenComplete(_completePageRequest));
   }
 
@@ -1550,8 +1550,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     if (_suspended) return const SizedBox.expand();
     if (publication == null) {
       return Center(
-        child: error != null ? Text(error!) :
-            Platform.isAndroid ? null : const CircularProgressIndicator(),
+        child: error == null ? const CircularProgressIndicator() : Text(error!),
       );
     }
     final saved = initialLocator;
@@ -1581,9 +1580,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       step: _stepPage,
       onPageTurn: onPageTurn,
       coverInitialEntry: coverInitialEntry,
-      showEntryProgress: !Platform.isAndroid,
       openingPage: openingFrame,
-      openingPageReady: ready,
       canTurn: _canTurnPage,
       preview: useSnapshots ? _previewPage : null,
       previewRun: useSnapshots ? _previewRun : null,
@@ -1647,7 +1644,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
               ),
             ),
           ),
-          if (!_styleReady && !Platform.isAndroid)
+          if (!_styleReady && !coverInitialEntry)
             const Center(child: CircularProgressIndicator()),
         ],
       ),
