@@ -69,12 +69,17 @@ class ReadiumControlsPlugin : FlutterPlugin {
                                 result.success(null)
                             }
                             "capture" -> {
+                                val includeBands = call.argument<Boolean>("bands") == true
                                 val frame = ReadiumReader.appCapturePage(
-                                    call.argument<Boolean>("bands") == true,
+                                    includeBands,
                                     call.argument<Boolean>("vertical") == true,
                                     call.argument<Boolean>("allowLateCapture") == true,
                                     call.argument<Number>("paper")?.toInt(),
                                 )
+                                if (includeBands && android.util.Log.isLoggable("ReadiumControlTiming", android.util.Log.DEBUG)) {
+                                    val count = (frame?.get("bands") as? List<*>)?.size ?: 0
+                                    android.util.Log.d("ReadiumControlTiming", "paragraphBands $count")
+                                }
                                 // Encoding a full native-resolution RGBA reply is expensive.
                                 // MethodChannel.Result may reply from a worker thread.
                                 withContext(Dispatchers.Default) { result.success(frame) }

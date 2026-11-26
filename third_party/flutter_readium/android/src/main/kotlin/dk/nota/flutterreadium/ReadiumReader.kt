@@ -527,7 +527,7 @@ object ReadiumReader :
                             }
                             var spans=Array.from(groups,function(entry){
                                 var owner=entry[0], ink=entry[1];
-                                if(owner.tagName!=='P')return ink;
+                                if(owner.localName!=='p')return ink;
                                 // The CSS block box is the paragraph boundary.
                                 // Font ascent/descent can extend past that box,
                                 // especially with a tight line height.
