@@ -211,14 +211,15 @@ class ReadiumPageTurnController {
   static bool _commitsDrag(double progress, double width, double velocity, int? durationMillis) {
     // Two or three samples can yield no release velocity on a short swipe.
     // Use event time and net displacement as a second measure of the flick.
-    final shortSwipe = durationMillis != null &&
-        durationMillis > 0 &&
-        durationMillis <= 140 &&
-        velocity >= 0 &&
-        (progress >= .12 ||
-            (progress >= .07 && progress * width * 1000 >= 700 * durationMillis));
-    return (progress >= .25 || (progress > .06 && velocity > 700) || shortSwipe) &&
-        velocity > -600;
+    if (durationMillis != null && durationMillis > 0 && durationMillis <= 140) {
+      final travelledQuickly = progress >= .07 &&
+          progress * width * 1000 >= 700 * durationMillis;
+      // On a very short flick, trust the overall movement over a brief
+      // backwards velocity reported by the last two batched samples.
+      if (travelledQuickly && durationMillis <= 60 && velocity > -1400) return true;
+      if (velocity >= 0 && (progress >= .12 || travelledQuickly)) return true;
+    }
+    return (progress >= .25 || (progress > .06 && velocity > 700)) && velocity > -600;
   }
 
   bool beginOverlappingDrag(int direction, double dx, double width, double touchY) {
@@ -1343,9 +1344,13 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       _offerNextTurn();
       return;
     }
-    if (!commit) _handoffTarget = null;
-    if (widget.preview != null && _to == null) commit = false;
     if (!_dragPrepared || _settling != null || !mounted) return;
+    if (widget.preview != null && _to == null) {
+      final available = _neighbors[_dragDirection];
+      if (available != null) setState(() => _to = available);
+      commit = commit && available != null;
+    }
+    _handoffTarget = commit ? _to : null;
     _paintDrag();
     _dragPrepared = false;
     _nextDragTick = null;

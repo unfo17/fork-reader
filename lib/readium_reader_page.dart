@@ -15,8 +15,11 @@ import 'local_books.dart';
 import 'reader_preferences.dart';
 import 'readium_page_turn.dart';
 
+enum _ReaderDragSource { navigator, retained }
+
 class _HeldReaderDrag {
-  _HeldReaderDrag(this.start);
+  _HeldReaderDrag(this.start, this.source);
+  final _ReaderDragSource source;
   final Map<String, dynamic> start;
   Map<String, dynamic>? latest;
 }
@@ -151,31 +154,38 @@ class ReadiumReaderBridge extends ChangeNotifier {
       unawaited(native.invokeMethod<void>('interruptPreview').catchError((Object _) {}));
     }
   }
-  bool _dragInFlight = false, _receivingDrag = false;
+  bool _dragInFlight = false;
+  _ReaderDragSource? _receivingDrag;
   rd.Locator? _dragLocation;
   _HeldReaderDrag? _heldDrag;
 
-  void _pageDrag(Map<String, dynamic> event) {
+  void _pageDrag(
+    Map<String, dynamic> event, {
+    _ReaderDragSource source = _ReaderDragSource.navigator,
+  }) {
     if (_disposed || _owner != this) return;
     final phase = event['phase'];
     if (phase == 'Start') {
       if (!ready) return;
+      _heldDrag = null;
       if (!_pagePending) {
-        _startPageDrag(event);
-      } else if (_receivingDrag || !_startOverlappingDrag(event)) {
-        _heldDrag = _HeldReaderDrag(event);
+        _startPageDrag(event, source);
+      } else if (_receivingDrag != null || !_startOverlappingDrag(event, source)) {
+        _heldDrag = _HeldReaderDrag(event, source);
       }
       return;
     }
-    if (_heldDrag case final drag?) {
+    // The next pointer can reach Flutter's retained page while Readium's
+    // platform-channel End for the previous pointer is still in transit.
+    if (_receivingDrag == source) {
+      _updatePageDrag(event);
+    } else if (_heldDrag case final drag? when drag.source == source) {
       if (phase == 'End' || phase == 'Cancel') {
         _heldDrag = null;
       } else {
         drag.latest = event;
         _continueHeldDrag();
       }
-    } else if (_receivingDrag) {
-      _updatePageDrag(event);
     }
   }
 
@@ -190,34 +200,35 @@ class ReadiumReaderBridge extends ChangeNotifier {
   bool get _rightToLeft => _preferences.verticalText == true ||
       publication?.metadata.readingProgression == rd.ReadingProgression.rtl;
 
-  bool _startOverlappingDrag(Map<String, dynamic> event) {
+  bool _startOverlappingDrag(Map<String, dynamic> event, _ReaderDragSource source) {
     final start = _dragStart(event);
     if (!turns.beginOverlappingDrag(start.direction, start.dx, start.width, start.y)) return false;
     _dragInFlight = true;
-    _receivingDrag = true;
+    _receivingDrag = source;
     onUserNavigation();
     return true;
   }
 
   void _continueHeldDrag() {
     final drag = _heldDrag;
-    if (drag == null || _disposed || _owner != this || !ready || _receivingDrag) return;
+    if (drag == null || _disposed || _owner != this || !ready || _receivingDrag != null) return;
     if (_pagePending) {
-      if (!_startOverlappingDrag(drag.start)) return;
+      if (!_startOverlappingDrag(drag.start, drag.source)) return;
     } else {
-      _startPageDrag(drag.start);
+      _startPageDrag(drag.start, drag.source);
     }
     _heldDrag = null;
     if (drag.latest case final event?) _updatePageDrag(event);
   }
 
-  void _startPageDrag(Map<String, dynamic> event) {
+  void _startPageDrag(Map<String, dynamic> event, _ReaderDragSource source) {
     final start = _dragStart(event);
     final direction = start.direction;
     turns.requestTurn(direction);
     _pagePending = true;
     _pageIdle ??= Completer<void>();
-    _dragInFlight = _receivingDrag = true;
+    _dragInFlight = true;
+    _receivingDrag = source;
     _dragLocation = null;
     onUserNavigation();
     turns.beginDrag(start.dx, start.width, start.y, direction: direction);
@@ -230,17 +241,19 @@ class ReadiumReaderBridge extends ChangeNotifier {
       turns.updateDrag((event['dx'] as num).toDouble(), touchY: (event['y'] as num?)?.toDouble());
     }
     if (phase == 'End' || phase == 'Cancel') {
-      _receivingDrag = false;
+      _receivingDrag = null;
       turns.endDrag(
         cancel: phase == 'Cancel',
         releaseVelocity: (event['velocityX'] as num?)?.toDouble(),
         durationMillis: (event['durationMillis'] as num?)?.toInt(),
       );
+      _continueHeldDrag();
     }
   }
 
   void _completePageRequest() {
-    _dragInFlight = _receivingDrag = false;
+    _dragInFlight = false;
+    _receivingDrag = null;
     final at = _dragLocation;
     _dragLocation = null;
     if (at != null && !_disposed && _owner == this) _located(at);
@@ -810,7 +823,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
   Future<void> pageBy(int direction, {bool animated = true}) async {
     if (_disposed || _navigating) return;
     if (_pagePending) {
-      if (_heldDrag == null && !_receivingDrag &&
+      if (_heldDrag == null && _receivingDrag == null &&
           turns.turnExposedPage(direction, animated: animated)) {
         onUserNavigation();
       }
@@ -1591,7 +1604,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
       onPrioritize: _interruptPreview,
       onTurnAvailable: _continueHeldDrag,
       replayTap: (point) => native.invokeMethod<void>('tap', {'x': point.dx, 'y': point.dy}),
-      onRetainedDrag: useSnapshots ? _pageDrag : null,
+      onRetainedDrag: useSnapshots
+          ? (event) => _pageDrag(event, source: _ReaderDragSource.retained)
+          : null,
       child: Stack(
         fit: StackFit.expand,
         children: [
