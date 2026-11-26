@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 import 'app_ui.dart';
 import 'readium_reader_page.dart';
 import 'app_window_insets.dart';
+import 'performance_preferences.dart';
 import 'app_search_field.dart';
 import 'setting_menu.dart';
 import 'cover_images.dart';
@@ -1673,7 +1674,7 @@ class _ReaderLoaderPageState extends State<ReaderLoaderPage> {
           repository: widget.repository,
           initialChapter: chapter,
           directEntry: true,
-          animateEntry: widget.state.hasRead(book.id),
+          animateEntry: true,
         );
       }
       final preferences = _readerPreferences;
@@ -5484,6 +5485,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
     final current = _resumeDirectory == index;
     final branch = novel.navigation != null && novel.directoryHierarchy.hasChildren(index);
     final expanded = _expandedDirectory.contains(index);
+    final number = novel.directoryHierarchy.numberOf(index);
     return _cacheReactive(
       () => JellyTapSurface(
         key: ValueKey('detail-directory-entry-$index'),
@@ -5507,25 +5509,17 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              if (branch)
-                GlassIconButton(
-                  key: ValueKey('detail-toc-toggle-$index'),
-                  icon: expanded ? CupertinoIcons.chevron_down : CupertinoIcons.chevron_right,
-                  label: expanded ? '收起 ${entry.title}' : '展开 ${entry.title}',
-                  onPressed: () => _changeDirectory(() {
-                    if (!_expandedDirectory.add(index)) _expandedDirectory.remove(index);
-                  }),
-                ),
-              SizedBox(
-                width: 36,
-                child: AppText(
-                  (index + 1).toString().padLeft(2, '0'),
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+              if (number != null)
+                SizedBox(
+                  width: 36,
+                  child: AppText(
+                    number.toString().padLeft(2, '0'),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
-              ),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -5561,7 +5555,19 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                 ),
               ],
               const SizedBox(width: 12),
-              const ArchiveIcon(CupertinoIcons.chevron_right, size: 13),
+              if (branch)
+                GlassIconButton(
+                  key: ValueKey('detail-toc-toggle-$index'),
+                  icon: expanded ? CupertinoIcons.chevron_down : CupertinoIcons.chevron_right,
+                  label: expanded ? '收起 ${entry.title}' : '展开 ${entry.title}',
+                  liveGlass: false,
+                  transparent: true,
+                  onPressed: () => _changeDirectory(() {
+                    if (!_expandedDirectory.add(index)) _expandedDirectory.remove(index);
+                  }),
+                )
+              else
+                const ArchiveIcon(CupertinoIcons.chevron_right, size: 13),
             ],
           ),
         ),
@@ -5639,7 +5645,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
           state: state,
           repository: repository,
           initialChapter: chapter,
-          animateEntry: target == null && _resumeChapter != null,
+          animateEntry: target == null,
           initialPosition: target == null
               ? null
               : _bookTargetPosition(novel, target),
@@ -5739,14 +5745,37 @@ class _ReaderPageState extends State<ReaderPage>
   Object? _nativePublication;
   bool _nativeInitialRestored = false;
   bool _nativeAutoBusy = false;
+  Animation<double>? _nativeEntryRoute;
+
   void _nativeEntry() {
     if (!mounted || !widget.animateEntry) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        _readium?.turns.animateEntry(widget.state.reduceMotion || !_activityRouteCurrent
-            ? ReaderPageEffect.none : _readerPreferences.pageEffect);
+      if (!mounted) return;
+      final route = ModalRoute.of(context)?.animation;
+      if (route?.status == AnimationStatus.forward) {
+        _nativeEntryRoute = route;
+        route!.addStatusListener(_nativeEntryRouteStatus);
+      } else {
+        _playNativeEntry();
       }
     });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  void _nativeEntryRouteStatus(AnimationStatus status) {
+    if (status == AnimationStatus.forward) return;
+    _nativeEntryRoute?.removeStatusListener(_nativeEntryRouteStatus);
+    _nativeEntryRoute = null;
+    if (status == AnimationStatus.completed) _playNativeEntry();
+  }
+
+  void _playNativeEntry() {
+    if (!mounted) return;
+    _readium?.turns.animateEntry(
+      widget.state.reduceMotion || !_activityRouteCurrent
+          ? ReaderPageEffect.none
+          : _readerPreferences.pageEffect,
+    );
   }
 
   void _restoreNativePosition() {
@@ -5803,7 +5832,7 @@ class _ReaderPageState extends State<ReaderPage>
       _nativeImageTimer?.cancel();
       _nativeImageTimer = Timer(const Duration(milliseconds: 300), () async {
         if (engine.turnBusy) await engine.whenPageIdle;
-        if (!mounted || _readium != engine || _nativeImageKey != key ||
+        if (!mounted || _readium != engine || _nativeImageKey != key || engine.turns.entering ||
             _activityOverlays.isNotEmpty) return;
         final cache = _nativeImages ??= ReaderIllustrationCache(request: engine.imageBytes);
         try {
@@ -6939,6 +6968,7 @@ class _ReaderPageState extends State<ReaderPage>
   @override
   void dispose() {
     _nativeImageTimer?.cancel();
+    _nativeEntryRoute?.removeStatusListener(_nativeEntryRouteStatus);
     _nativeImages?.clearMemory();
     _readium?.removeListener(_nativeChanged);
     _readium?.controls.removeListener(_syncNativeChrome);
@@ -10046,7 +10076,12 @@ class _ReaderPageState extends State<ReaderPage>
         bookId: widget.novel.id,
         appTheme: appTheme,
         child: Builder(
-          builder: (context) => _readerScaffold(context, chapter, appDark),
+          builder: (context) {
+            final page = _readerScaffold(context, chapter, appDark);
+            return _readium != null && LocalPlatform.android
+                ? PerformanceScope.withoutBackdrop(context, page)
+                : page;
+          },
         ),
       ),
     );

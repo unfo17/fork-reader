@@ -246,13 +246,26 @@ class NovelDirectoryHierarchy {
       (parent == null ? _roots : _children[parent]).add(index);
       stack.add(index);
     }
+    _numbers = List.filled(entries.length, null);
+    for (var index = 0; index < entries.length; index++) {
+      if (_parents[index] == null && hasChildren(index)) continue;
+      _numberedEntries.add(index);
+      _numbers[index] = _numberedEntries.length;
+    }
   }
 
   final List<int> _roots = [];
   final List<int?> _parents;
   final List<List<int>> _children;
+  final List<int> _numberedEntries = [];
+  late final List<int?> _numbers;
 
   bool hasChildren(int index) => _children[index].isNotEmpty;
+  int? numberOf(int index) => _numbers[index];
+  int? indexForNumber(int number) =>
+      number > 0 && number <= _numberedEntries.length
+      ? _numberedEntries[number - 1]
+      : null;
 
   Iterable<int> ancestorsOf(int index) sync* {
     if (index < 0 || index >= _parents.length) return;

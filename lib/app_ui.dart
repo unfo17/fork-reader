@@ -2684,11 +2684,7 @@ class _GlassSheetState extends State<_GlassSheet>
                     color: previewing
                         ? Colors.transparent
                         : Theme.of(context).colorScheme.surfaceContainerHigh,
-                    child: NativeGlassGroup(
-                      enabled: false,
-                      inherit: false,
-                      child: child!,
-                    ),
+                    child: PerformanceScope.withoutBackdrop(context, child!),
                   ),
                 );
               }

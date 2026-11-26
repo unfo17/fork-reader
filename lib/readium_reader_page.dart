@@ -1433,7 +1433,6 @@ class ReadiumReaderBridge extends ChangeNotifier {
           step: _stepPage,
           onPageTurn: onPageTurn,
           coverInitialEntry: coverInitialEntry,
-          entryReady: ready,
           canTurn: _canTurnPage,
           preview: Platform.isAndroid && _appearance.mode.paginated && _appearance.pageEffect != ReaderPageEffect.none ? _previewPage : null,
           land: (frame) => _landFrame(frame),

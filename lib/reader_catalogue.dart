@@ -96,7 +96,8 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
     if (text.isEmpty) return List.generate(chapters.length, (index) => index);
     final number = int.tryParse(text);
     if (number != null) {
-      return number > 0 && number <= chapters.length ? [number - 1] : [];
+      final index = _hierarchy.indexForNumber(number);
+      return index == null ? [] : [index];
     }
     return [
       for (var index = 0; index < chapters.length; index++)
@@ -359,6 +360,7 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
     final hasChildren = widget.novel.navigation != null && _hierarchy.hasChildren(index);
     final searching = _search.text.trim().isNotEmpty;
     final expanded = searching || _expandedBranches.contains(index);
+    final number = _hierarchy.numberOf(index);
     return Semantics(
       selected: current,
       child: JellyTapSurface(
@@ -388,27 +390,20 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
           ),
           child: Row(
             children: [
-              if (hasChildren)
-                GlassIconButton(
-                  key: ValueKey('reader-toc-toggle-$index'),
-                  icon: expanded ? CupertinoIcons.chevron_down : CupertinoIcons.chevron_right,
-                  label: expanded ? '收起 ${entry.title}' : '展开 ${entry.title}',
-                  onPressed: searching ? null : () => _changeRows(() {
-                    if (!_expandedBranches.add(index)) _expandedBranches.remove(index);
-                  }),
-                ),
-              SizedBox(
-                width: 38,
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerLeft,
-                  child: AppText(
-                    '${index + 1}',
-                    style: const TextStyle(fontSize: 12),
+              if (number != null) ...[
+                SizedBox(
+                  width: 38,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: AppText(
+                      '$number',
+                      style: const TextStyle(fontSize: 12),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 7),
+                const SizedBox(width: 7),
+              ],
               Expanded(
                 child: AppText(
                   entry.title,
@@ -436,6 +431,17 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
                     ),
                 ],
               ),
+              if (hasChildren)
+                GlassIconButton(
+                  key: ValueKey('reader-toc-toggle-$index'),
+                  icon: expanded ? CupertinoIcons.chevron_down : CupertinoIcons.chevron_right,
+                  label: expanded ? '收起 ${entry.title}' : '展开 ${entry.title}',
+                  liveGlass: false,
+                  transparent: true,
+                  onPressed: searching ? null : () => _changeRows(() {
+                    if (!_expandedBranches.add(index)) _expandedBranches.remove(index);
+                  }),
+                ),
             ],
           ),
         ),

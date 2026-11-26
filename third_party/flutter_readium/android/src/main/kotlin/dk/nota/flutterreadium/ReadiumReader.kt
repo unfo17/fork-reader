@@ -493,42 +493,51 @@ object ReadiumReader :
                         if(document.fonts && document.fonts.status!=='loaded')return null;
                         if(window.__wenkuPageReady&&!window.__wenkuPageReady())return null;
                         $appGeometryScript
-                        var w=innerWidth,h=innerHeight,v=$vertical,spans=[];
-                        function add(r){
-                            if(r.right<=0||r.left>=w||r.bottom<=0||r.top>=h)return;
-                            var a=Math.max(0,(v?r.left:r.top)-.8),b=Math.min(v?w:h,(v?r.right:r.bottom)+.8);
-                            if(b>a)spans.push([a,b]);
-                        }
+                        var w=innerWidth,h=innerHeight,v=$vertical,extent=v?w:h;
+                        var gaps=[];
                         if($includeBands){
-                            var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT),node,range=document.createRange(),groups=new Set(),parents=new Set();
+                            var groups=new Map(), visible=new Map(), range=document.createRange();
+                            var block='p,h1,h2,h3,h4,h5,h6,li,pre,blockquote,figcaption,td,th,div,figure,body';
+                            function onscreen(r){return r.right>0&&r.left<w&&r.bottom>0&&r.top<h;}
+                            function add(owner,rect){
+                                if(!onscreen(rect))return;
+                                var start=Math.max(0,v?rect.left:rect.top),end=Math.min(extent,v?rect.right:rect.bottom);
+                                if(end<=start)return;
+                                var group=groups.get(owner);
+                                if(group){group[0]=Math.min(group[0],start);group[1]=Math.max(group[1],end);}
+                                else groups.set(owner,[start,end]);
+                            }
+                            var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT), node;
                             while(node=walker.nextNode()){
                                 var parent=node.parentElement;
-                                if(!parent||parents.has(parent)||!node.textContent.trim())continue;
-                                parents.add(parent);
-                                if(parent.closest('script,style,[data-readium]'))continue;
-                                var group=parent.closest('p,li,pre,h1,h2,h3,h4,h5,h6')||parent.closest('div,blockquote,body')||parent;
-                                if(groups.has(group))continue;
-                                var visible=Array.from(parent.getClientRects()).some(function(r){return r.right>0&&r.left<w&&r.bottom>0&&r.top<h;});
-                                if(!visible)continue;
-                                groups.add(group);
-                                var part=[];
-                                function flush(){if(part.length){spans.push([Math.min.apply(null,part.map(function(r){return r[0];})),Math.max.apply(null,part.map(function(r){return r[1];}))]);part=[];}}
-                                function leaf(n){
-                                    if(n.nodeType===1 && (n.tagName==='BR'||(n!==group&&/^(P|DIV|LI|BLOCKQUOTE|PRE|H[1-6])$/.test(n.tagName)))){flush();if(n.tagName==='BR')return;}
-                                    if(n.nodeType===3 && n.textContent.trim()){
-                                        range.selectNodeContents(n);Array.from(range.getClientRects()).forEach(function(r){
-                                            if(r.right>0&&r.left<w&&r.bottom>0&&r.top<h)part.push([Math.max(0,(v?r.left:r.top)-.5),Math.min(v?w:h,(v?r.right:r.bottom)+.5)]);
-                                        });
-                                    }else if(n.nodeType===1)Array.from(n.childNodes).forEach(leaf);
-                                    if(n.nodeType===1 && n!==group && /^(P|DIV|LI|BLOCKQUOTE|PRE|H[1-6])$/.test(n.tagName))flush();
+                                if(!parent||!node.textContent.trim()||parent.closest('script,style,[data-readium]'))continue;
+                                var owner=parent.closest(block)||parent;
+                                var show=visible.get(parent);
+                                if(show===undefined){
+                                    show=Array.from(parent.getClientRects()).some(onscreen);
+                                    visible.set(parent,show);
                                 }
-                                leaf(group);flush();
+                                if(!show)continue;
+                                range.selectNodeContents(node);
+                                for(var rect of range.getClientRects())add(owner,rect);
                             }
-                            document.querySelectorAll('img,svg,table,video,canvas').forEach(function(e){Array.from(e.getClientRects()).forEach(add);});
+                            for(var image of document.querySelectorAll('img,svg,table,video,canvas')){
+                                var owner=image.closest('p,figcaption,figure')||image;
+                                for(var rect of image.getClientRects())add(owner,rect);
+                            }
+                            var spans=Array.from(groups.values()).sort(function(a,b){return a[0]-b[0];});
+                            var previousEnd=-1;
+                            for(var span of spans){
+                                // CSS text boxes can touch or slightly overlap even
+                                // when two distinct paragraphs have clear pixel rows.
+                                if(previousEnd>=0&&previousEnd-span[0]<=4){
+                                    var start=Math.min(previousEnd,span[0])-1.5;
+                                    var end=Math.max(previousEnd,span[0])+1.5;
+                                    gaps.push([Math.max(0,start)/extent,Math.min(extent,end)/extent]);
+                                }
+                                previousEnd=Math.max(previousEnd,span[1]);
+                            }
                         }
-                        spans.sort(function(a,b){return a[0]-b[0]});
-                        var merged=[];spans.forEach(function(s){var last=merged[merged.length-1];if(last&&s[0]<=last[1]+.5)last[1]=Math.max(last[1],s[1]);else merged.push(s);});
-                        var gaps=[];for(var i=1;i<merged.length;i++)if(merged[i][0]>merged[i-1][1])gaps.push([merged[i-1][1]/(v?w:h),merged[i][0]/(v?w:h)]);
                         var color=getComputedStyle(document.documentElement).backgroundColor.match(/[\d.]+/g)||[255,255,255];
                         return JSON.stringify({gaps:gaps,color:color.slice(0,3).map(Number),geometry:geometry()});
                     })();

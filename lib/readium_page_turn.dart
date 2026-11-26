@@ -238,6 +238,7 @@ class ReadiumPageTurnController {
   void animateReturn() => unawaited(_owner?._animateReturn());
   void animateEntry(ReaderPageEffect effect) =>
       unawaited(_owner?._animateReturn(effect: effect));
+  bool get entering => _owner?._entering ?? false;
 
   Future<void> freezeForRoute() async => _owner?._freezeForRoute();
   Future<void> thawAfterRoute() async => _owner?._thawAfterRoute();
@@ -280,7 +281,6 @@ class ReadiumPageSurface extends StatefulWidget {
     this.onTurnAvailable,
     this.onPageTurn,
     this.coverInitialEntry = false,
-    this.entryReady = false,
     this.replayTap,
     this.refreshRateLimit = 0,
   });
@@ -297,7 +297,7 @@ class ReadiumPageSurface extends StatefulWidget {
   final VoidCallback? onPrioritize;
   final VoidCallback? onTurnAvailable;
   final VoidCallback? onPageTurn;
-  final bool coverInitialEntry, entryReady;
+  final bool coverInitialEntry;
   final Future<void> Function(Offset fraction)? replayTap;
   final Future<bool> Function(int direction)? canTurn;
   final Future<ReadiumPageFrame?> Function(int direction, ReadiumPageFrame origin)? preview;
@@ -350,10 +350,12 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   bool _preparationInterrupted = false, _routePaused = false;
   bool _overlayOpen = false;
   ReadiumPageFrame? _routeCover;
+  ReadiumPageFrame? _overlayCover;
   ReadiumPageFrame? _presented;
   int? _scrubCallback;
   Duration? _nextDragTick;
   bool _shapeChanged = false;
+  bool get _entering => _coverInitialEntry || _returnFrame != null;
 
   double _visualDirection(int direction) =>
       (widget.rightToLeft || widget.preferences.mode == ReaderMode.vertical
@@ -365,7 +367,11 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     if (open) {
       _warmTimer?.cancel();
       if (!_busy && _preparing != null) widget.onPrioritize?.call();
+      if ((_presented ?? _cached) case final frame? when !_busy) {
+        setState(() => _overlayCover = frame.retain());
+      }
     } else {
+      _releaseOverlayCover();
       final warming = _warming ? _warmDone?.future : _preparing;
       if (warming == null) {
         _warmLater();
@@ -375,6 +381,13 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         }));
       }
     }
+  }
+
+  void _releaseOverlayCover() {
+    final frame = _overlayCover;
+    if (frame == null) return;
+    setState(() => _overlayCover = null);
+    WidgetsBinding.instance.addPostFrameCallback((_) => frame.dispose());
   }
 
   Widget _pageImage(ReadiumPageFrame frame) => RawImage(
@@ -426,6 +439,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     void clearEntryCover() {
       if (initial && mounted && _coverInitialEntry) {
         setState(() => _coverInitialEntry = false);
+        _warmLater();
       }
     }
     if (!mounted || _busy || _routePaused || effect == ReaderPageEffect.none ||
@@ -435,8 +449,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     }
     _stopReturnAnimation();
     final epoch = _returnEpoch, key = widget.frameKey;
+    _warmTimer?.cancel();
     if (initial) {
-      _warmTimer?.cancel();
       widget.onPrioritize?.call();
       _preparationInterrupted = true;
     }
@@ -445,31 +459,36 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       if (frame == null) {
         if (_warming) await _warmDone?.future;
         await _preparing;
-        if (!mounted || _returnEpoch != epoch || _busy) return;
-        frame = (_presented ?? _cached)?.retain() ?? await widget.capture();
+        if (mounted && _returnEpoch == epoch && !_busy) {
+          frame = (_presented ?? _cached)?.retain() ?? await widget.capture();
+        }
       }
     } catch (_) {
-      return;
+      // An unavailable snapshot should still reveal the live reader.
     } finally {
-      clearEntryCover();
-      if (initial && mounted && _returnEpoch == epoch && !_busy) {
-        _preparationInterrupted = false;
-        _warmLater();
-      }
+      if (initial && mounted && _returnEpoch == epoch) _preparationInterrupted = false;
     }
-    if (frame == null) return;
-    if (!mounted || _returnEpoch != epoch || key != widget.frameKey || _busy || _routePaused) {
-      frame.dispose();
+    if (frame == null || !mounted || _returnEpoch != epoch || key != widget.frameKey || _busy || _routePaused) {
+      frame?.dispose();
+      clearEntryCover();
+      if (mounted && _returnEpoch == epoch) _warmLater();
       return;
     }
     final entryEffect = effect ?? ReaderPageEffect.staggered;
     _returnClock.duration = widget.preferences.pageSpeed.durationFor(entryEffect);
+    _returnClock.value = 0;
     setState(() {
       _returnFrame = frame;
       _entryEffect = entryEffect;
       _entryFromBottom = effect == null;
+      if (initial) {
+        _coverInitialEntry = false;
+        if (widget.preview != null) _cached ??= frame!.retain();
+      }
     });
-    unawaited(_returnClock.forward(from: 0).orCancel.then((_) {
+    if (initial) await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || _returnEpoch != epoch) return;
+    unawaited(_returnClock.forward().orCancel.then((_) {
       if (mounted && _returnEpoch == epoch) _stopReturnAnimation();
     }).catchError((Object error) {
       if (error is! TickerCanceled) throw error;
@@ -483,6 +502,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _returnClock.stop();
     setState(() => _returnFrame = null);
     WidgetsBinding.instance.addPostFrameCallback((_) => frame.dispose());
+    _warmLater();
   }
 
   Future<void> _freezeForRoute() async {
@@ -1085,7 +1105,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   void _warmLater() {
     _warmTimer?.cancel();
     _warmTimer = Timer(Duration(milliseconds: _cached == null ? 48 : 32), () async {
-      if (!mounted || _busy || _warming || _routePaused || _overlayOpen ||
+      if (!mounted || _busy || _warming || _routePaused || _overlayOpen || _entering ||
           _preparationInterrupted) return;
       if ((_cached != null && (widget.preview == null || _windowComplete)) ||
           !widget.preferences.mode.paginated || widget.preferences.pageEffect == ReaderPageEffect.none) {
@@ -1231,7 +1251,10 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   @override
   void didUpdateWidget(covariant ReadiumPageSurface oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.layoutKey != widget.layoutKey) _stopReturnAnimation();
+    if (oldWidget.layoutKey != widget.layoutKey) {
+      _stopReturnAnimation();
+      _releaseOverlayCover();
+    }
     if (oldWidget.frameKey != widget.frameKey) {
       _warmRetries = 0;
       if (_adoptingPage && oldWidget.layoutKey == widget.layoutKey) {
@@ -1593,6 +1616,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     children: [
       Opacity(
         opacity: _routeCover != null ||
+                (_overlayCover != null && _previewCover == null) || _returnFrame != null ||
                 (_sceneCoversPage && widget.preview != null && _previewCover == null)
             ? 0 : 1,
         child: widget.child,
@@ -1601,6 +1625,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         Positioned.fill(child: IgnorePointer(child: _pageImage(frame))),
       if (_routeCover case final cover?)
         Positioned.fill(child: IgnorePointer(child: RawImage(image: cover.image, fit: BoxFit.fill, filterQuality: FilterQuality.none))),
+      if (_overlayCover case final cover?)
+        Positioned.fill(child: IgnorePointer(child: _pageImage(cover))),
       if (_previewCover case final cover?)
         Positioned.fill(child: GestureDetector(
           behavior: HitTestBehavior.translucent,
@@ -1669,9 +1695,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
             child: ColoredBox(
               key: const ValueKey('readium-entry-cover'),
               color: widget.paper,
-              child: widget.entryReady
-                  ? null
-                  : const Center(child: CircularProgressIndicator()),
+              child: const Center(child: CircularProgressIndicator()),
             ),
           ),
         ),
@@ -1686,6 +1710,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     if (_scrubCallback case final callback?) SchedulerBinding.instance.cancelFrameCallbackWithId(callback);
     _presented?.dispose();
     _returnFrame?.dispose();
+    _overlayCover?.dispose();
     _cached?.dispose();
     _routeCover?.dispose(); _routeCover = null;
     _clearNeighbors();
