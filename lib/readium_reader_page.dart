@@ -15,6 +15,8 @@ import 'local_books.dart';
 import 'reader_preferences.dart';
 import 'readium_page_turn.dart';
 
+export 'readium_page_turn.dart' show ReadiumLoadingIndicator;
+
 enum _ReaderDragSource { navigator, retained }
 
 class _HeldReaderDrag {
@@ -33,6 +35,54 @@ typedef _ParkedPublication = ({
   rd.Publication publication,
   _ResumePage? page,
 });
+
+class ReadiumReaderEntrance extends StatefulWidget {
+  const ReadiumReaderEntrance({super.key, required this.placeholder, required this.reader});
+
+  final Widget placeholder;
+  final Widget reader;
+
+  @override
+  State<ReadiumReaderEntrance> createState() => _ReadiumReaderEntranceState();
+}
+
+class _ReadiumReaderEntranceState extends State<ReadiumReaderEntrance> {
+  Animation<double>? _route;
+  bool _showReader = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _route = ModalRoute.of(context)?.animation;
+      _route?.addStatusListener(_routeChanged);
+      _routeChanged(_route?.status ?? AnimationStatus.completed);
+    });
+  }
+
+  void _routeChanged(AnimationStatus status) {
+    if (status == AnimationStatus.dismissed) _route?.removeStatusListener(_routeChanged);
+    if (status != AnimationStatus.completed) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _showReader ||
+          (_route != null && _route!.status != AnimationStatus.completed) ||
+          ModalRoute.of(context)?.isActive == false) return;
+      _route?.removeStatusListener(_routeChanged);
+      setState(() => _showReader = true);
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  @override
+  Widget build(BuildContext context) => _showReader ? widget.reader : widget.placeholder;
+
+  @override
+  void dispose() {
+    _route?.removeStatusListener(_routeChanged);
+    super.dispose();
+  }
+}
 
 /// Engine adapter only. ReaderPage retains every Flutter control and panel.
 class ReadiumReaderBridge extends ChangeNotifier {
@@ -1562,9 +1612,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
     _resumeLayout = resumeLayout;
     if (_suspended) return const SizedBox.expand();
     if (publication == null) {
-      return Center(
-        child: error == null ? const CircularProgressIndicator() : Text(error!),
-      );
+      if (error case final message?) return Center(child: Text(message));
+      return const ReadiumLoadingIndicator();
     }
     final saved = initialLocator;
     final opening = _openingPage;
@@ -1660,7 +1709,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
             ),
           ),
           if (!_styleReady && !coverInitialEntry)
-            const Center(child: CircularProgressIndicator()),
+            const ReadiumLoadingIndicator(),
         ],
       ),
     );

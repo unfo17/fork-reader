@@ -9,6 +9,22 @@ import 'reader_preferences.dart';
 import 'reader_sheet_motion.dart';
 import 'reader_turn_motion.dart';
 
+class ReadiumLoadingIndicator extends StatelessWidget {
+  const ReadiumLoadingIndicator({super.key});
+
+  @override
+  Widget build(BuildContext context) => const Center(
+    child: RepaintBoundary(
+      child: CircularProgressIndicator(
+        // The pinned Flutter SDK still defaults to the older Material 3 style.
+        // ignore: deprecated_member_use
+        year2023: false,
+        semanticsLabel: '正在加载阅读页面',
+      ),
+    ),
+  );
+}
+
 /// A retained image of Readium's rendered page, never re-typeset Flutter text.
 class ReadiumPageFrame {
   ReadiumPageFrame(this.image, this.location, this.bands, this.paper, {
@@ -64,6 +80,7 @@ class _ReadiumOverlap {
   final shape = _ReadiumMotionShape();
   final released = Completer<void>();
   final landed = Completer<bool>();
+  final continued = Completer<void>();
   Future<void>? settling;
   Future<void>? preparing;
   bool _commitAcknowledged = false;
@@ -109,6 +126,7 @@ class _ReadiumOverlap {
   void abandon() {
     if (!released.isCompleted) released.complete();
     if (!landed.isCompleted) landed.complete(false);
+    if (!continued.isCompleted) continued.complete();
     clock.stop();
   }
 
@@ -362,6 +380,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   bool _dragPrepared = false;
   Future<void>? _settling;
   bool _primaryCommit = false, _primaryAdopted = false;
+  bool _primaryLandingStarted = false;
+  Completer<void>? _primaryContinued;
   double _primaryTouchY = .5, _primaryStartY = .5;
   final _overlaps = <_ReadiumOverlap>[];
   _ReadiumOverlap? _trackingOverlap;
@@ -654,12 +674,12 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         });
         _edges.retainWhere(offsets.contains);
       }
-      final batch = requiredDirection == null && widget.previewRun != null;
+      final batch = widget.previewRun != null;
       final ahead = _dragDirection;
       // Capture the next two pages in the same native visit. The first
       // texture is available immediately, even while the second is rendering.
       final firstRun = [ahead, if (offsets.contains(2 * ahead)) 2 * ahead];
-      final runs = batch ? [
+      final runs = requiredDirection != null ? [[requiredDirection]] : batch ? [
         firstRun,
         [-ahead],
         for (final direction in [ahead, -ahead])
@@ -675,6 +695,14 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
           } else {
             _neighbors[direction]?.dispose();
             _neighbors[direction] = frame;
+            final track = _trackingOverlap;
+            if (track != null) {
+              final side = direction - _exposedOffset;
+              if (side.abs() == 1) {
+                setState(() => track.attachTarget(side, frame));
+                _scrub();
+              }
+            }
           }
           _neighborUpdate?.complete();
           _neighborUpdate = null;
@@ -779,7 +807,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   Future<void> _bufferedTurn(int direction, bool animated, Completer<_ReadiumRelease>? gesture) async {
     if (_busy || !mounted) return;
     _busy = true;
-    _primaryCommit = _primaryAdopted = false;
+    _primaryCommit = _primaryAdopted = _primaryLandingStarted = false;
+    final continued = _primaryContinued = Completer<void>();
     _primaryCommitAcknowledged = false;
     _overlapLandingFailed = false;
     _previewHandedOff = false;
@@ -850,6 +879,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       }
       final origin = from;
       Future<bool> adopt(ReadiumPageFrame target) async {
+        _primaryLandingStarted = true;
         _adoptingPage = true;
         try {
           await _preparing;
@@ -867,7 +897,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
           return false;
         }
       }
-      final landing = finish && target != null && !_deferNativeLanding
+      var landing = finish && target != null && !_deferNativeLanding
           ? adopt(target)
           : null;
       if (gesture != null) {
@@ -880,7 +910,21 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
           animated ? widget.preferences.pageSpeed.durationFor(_effect) : Duration.zero,
           Curves.easeInOutCubic);
       }
-      await _waitForCurrentSettle(() => _settling);
+      if (finish && target != null && widget.previewRun != null &&
+          _preparing == null && !_previewHandedOff && !_primaryLandingStarted) {
+        // If the next sheet wasn't captured before the first turn, use this
+        // release animation to prepare it from the still-current native page.
+        final following = 2 * _dragDirection;
+        if (!_neighbors.containsKey(following) && !_edges.contains(following)) {
+          unawaited(_prepareNeighbors(origin, requiredDirection: following));
+        }
+      }
+      final settled = _waitForCurrentSettle(() => _settling);
+      if (finish && target != null && landing == null) {
+        await Future.any([settled, continued.future]);
+        if (mounted && _primaryCommit) landing = adopt(target);
+      }
+      await settled;
       if (_effect == ReaderPageEffect.paper) finish = _primaryCommit && target != null;
       if (!finish) {
         _handoffTarget = null;
@@ -913,7 +957,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     } finally {
       _dragPrepared = false;
       _settling = null;
-      _primaryCommit = _primaryAdopted = false;
+      _primaryCommit = _primaryAdopted = _primaryLandingStarted = false;
+      _primaryContinued = null;
       _refilledFrom = null;
       _releaseAbandonedGrab();
       _clearOverlaps();
@@ -946,17 +991,23 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     }
   }
 
+  // Offset of the last committed visual sheet from Readium's native page.
+  int get _exposedOffset => (_primaryAdopted ? 0 : _dragDirection) +
+      _overlaps.where((turn) => turn.committed && !turn.landed.isCompleted)
+          .fold<int>(0, (position, turn) => position + turn.direction);
+
   bool _addOverlap(int direction, {bool drag = true, bool animated = true}) {
     if (!mounted || !_primaryCommit || _routePaused || _overlapLandingFailed ||
         _overlaps.length >= 4) return false;
-    final tail = _overlaps.lastOrNull;
+    final last = _overlaps.lastOrNull;
+    final cancelled = last != null && last.released.isCompleted && !last.committed ? last : null;
+    final tail = cancelled == null ? last
+        : _overlaps.length > 1 ? _overlaps[_overlaps.length - 2] : null;
     final origin = tail == null ? (_to ?? (_primaryAdopted ? _cached : null)) : tail.target;
     if (origin == null || (tail != null && !tail.committed)) return false;
     // The offsets are relative to the last native page that has been adopted.
     // The cache moves only when Readium confirms the corresponding locator.
-    final offset = (_primaryAdopted ? 0 : _dragDirection) +
-        _overlaps.where((turn) => !turn.landed.isCompleted)
-            .fold<int>(0, (position, turn) => position + turn.direction);
+    final offset = _exposedOffset;
     ReadiumPageFrame? at(int index) =>
         index == 0 ? _cached ?? _from : _neighbors[index];
     final previous = at(offset - 1), next = at(offset + 1);
@@ -976,9 +1027,15 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       onCommit: widget.onPageTurn,
     );
     setState(() {
+      if (cancelled != null) _overlaps.remove(cancelled);
       _overlaps.add(overlap);
       if (drag) _trackingOverlap = overlap;
     });
+    if (cancelled != null) _retireOverlap(cancelled);
+    // Once the reader moves on to the following sheet, the earlier sheet can
+    // be adopted by Readium whilst its independent animation finishes.
+    final continued = tail?.continued ?? _primaryContinued;
+    if (continued != null && !continued.isCompleted) continued.complete();
     _prepareExposedPage(overlap);
     if (!drag) overlap.finish(true);
     _startNativeOverlaps();
@@ -998,8 +1055,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     final currentDirection = overlap?.direction ?? _dragDirection;
     if (direction != -currentDirection || clock.value <= 0 || clock.value >= 1) return false;
     if (overlap == null) {
-      if (_from == null || _to == null || _settling == null || _primaryAdopted) return false;
-    } else if (overlap.target == null || overlap.settling == null || overlap.landed.isCompleted) {
+      if (_from == null || _to == null || _settling == null || _primaryLandingStarted) return false;
+    } else if (overlap.target == null || overlap.settling == null || overlap.continued.isCompleted || overlap.landed.isCompleted) {
       return false;
     }
     final grab = _ReadiumPaperGrab(
@@ -1145,7 +1202,10 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       overlap.settle();
       final target = overlap.committed ? overlap.target : null;
       if (target != null && _deferNativeLanding) {
-        await _waitForCurrentSettle(() => overlap.settling);
+        await Future.any([
+          _waitForCurrentSettle(() => overlap.settling),
+          overlap.continued.future,
+        ]);
         if (!mounted || overlap.landed.isCompleted) return;
       }
       // A paper turn may have been taken back during the settling animation.
@@ -1368,8 +1428,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     widget.onPageTurn?.call();
   }
 
-  // Keep WebView layout and lookahead capture off the release animation.
-  // Prepared Flutter textures still accept another swipe while Readium waits.
+  // A single turn can finish visually before Readium lands. A subsequent
+  // swipe can advance Readium earlier while both retained sheets keep moving.
   bool get _deferNativeLanding =>
       _effect == ReaderPageEffect.paper ||
       _effect == ReaderPageEffect.staggered;
@@ -1837,7 +1897,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
             child: ColoredBox(
               color: widget.paper,
               key: const ValueKey('readium-entry-cover'),
-              child: const Center(child: CircularProgressIndicator()),
+              child: const ReadiumLoadingIndicator(),
             ),
           ),
         ),

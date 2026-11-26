@@ -1674,7 +1674,7 @@ class _ReaderLoaderPageState extends State<ReaderLoaderPage> {
           initialChapter: chapter,
           directEntry: true,
           animateEntry: true,
-        );
+        )._withReadiumEntrance(Theme.of(context));
       }
       final preferences = _readerPreferences;
       final chromeVisible = widget.state.readerChromeVisible;
@@ -5656,7 +5656,8 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
           initialPosition: target == null
               ? null
               : _bookTargetPosition(novel, target),
-        ),
+        )._withReadiumEntrance(Theme.of(context)),
+        slot: ReaderPage,
         reduceMotion: state.reduceMotion,
       );
     } finally {
@@ -5718,6 +5719,21 @@ class ReaderPage extends StatefulWidget {
   /// Deterministic monotonic clock for causal reader integration fixtures.
   @visibleForTesting
   final Duration Function()? verifiedReadingElapsed;
+
+  Widget _withReadiumEntrance(ThemeData appTheme) {
+    final source = repository;
+    if (!LocalPlatform.android || source is! OfflineNovelRepository ||
+        source.local?.isReadiumEpub(novel.id) != true) return this;
+    return ReadiumReaderEntrance(
+      reader: this,
+      placeholder: ReaderAppearance(
+        state: state,
+        bookId: novel.id,
+        appTheme: appTheme,
+        child: const Scaffold(body: ReadiumLoadingIndicator()),
+      ),
+    );
+  }
 
   @override
   State<ReaderPage> createState() => _ReaderPageState();
