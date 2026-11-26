@@ -4461,6 +4461,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
       _routeAnimation = animation;
       animation?.addStatusListener(_routeChanged);
     }
+    _prepareReadium();
     if (_reduceMotion) {
       _intro.stop();
       _contentIntro.stop();
@@ -4468,9 +4469,6 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
       _contentIntro.value = 1;
       _introStarted = true;
       _contentStarted = !isLoading;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _prepareReadium();
-      });
     } else if (animation == null ||
         animation.status == AnimationStatus.completed) {
       // A newly installed route's proxy can briefly report completed before
@@ -4510,7 +4508,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
     final id = novel.id;
     if (books == null || !books.isReadiumEpub(id)) return;
     _readiumPreparation?.cancel();
-    _readiumPreparation = Timer(NovelMotion.enter, () {
+    _readiumPreparation = Timer(const Duration(milliseconds: 60), () {
       if (!mounted || novel.id != id || ModalRoute.of(context)?.isCurrent != true) return;
       _preparedReadiumBook = id;
       unawaited(ReadiumReaderBridge.preparePublication(books, id));
@@ -5478,6 +5476,8 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                     expanded: expanded,
                     reduceMotion: _reduceMotion,
                     onTap: toggle,
+                    iconSize: 13,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                   )
                 else AnimatedRotation(
                   turns: expanded ? .25 : 0,
@@ -5513,11 +5513,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
               : null,
         ),
         child: Container(
-          padding: EdgeInsets.only(
-            left: layout.depthOf(index).clamp(0, 6) * 12.0,
-            top: 16,
-            bottom: 16,
-          ),
+          padding: const EdgeInsets.symmetric(vertical: 16),
           decoration: BoxDecoration(
             border: Border(
               bottom: BorderSide(
@@ -5541,28 +5537,31 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                   ),
                 ),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    AppText(
-                      entry.title,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w500,
-                        fontSize: 14,
-                        height: 1.5,
-                      ),
-                    ),
-                    if (current) ...[
-                      const SizedBox(height: 4),
+                child: Padding(
+                  padding: EdgeInsets.only(left: layout.depthOf(index).clamp(0, 6) * 12.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       AppText(
-                        '上次阅读',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        entry.title,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w500,
+                          fontSize: 14,
+                          height: 1.5,
                         ),
                       ),
+                      if (current) ...[
+                        const SizedBox(height: 4),
+                        AppText(
+                          '上次阅读',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
               ),
               if (_isCached(entry.target.chapterId)) ...[
@@ -6118,10 +6117,10 @@ class _ReaderPageState extends State<ReaderPage>
       );
       unawaited(
         () async {
-          final font = await widget.state.fonts.readerFile(_readerFontId);
-          final background = await widget.state.backgrounds.file(
-            prefs.backgroundImage,
-          );
+          final [font, background] = await Future.wait([
+            widget.state.fonts.readerFile(_readerFontId),
+            widget.state.backgrounds.file(prefs.backgroundImage),
+          ]);
           if (!mounted || _nativePreferencesKey != key) return;
           await bridge.preferences(
             prefs,

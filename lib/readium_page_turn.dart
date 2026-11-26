@@ -196,17 +196,19 @@ class ReadiumPageTurnController {
     }
     // Very short gestures may have too few movement samples for a useful
     // release velocity. Use their native touch duration and displacement.
+    final commit = !cancel && commitsDrag(_progress, _velocity, durationMillis);
+    release.complete(commit);
+    _owner?._finishDrag(commit);
+  }
+
+  static bool commitsDrag(double progress, double velocity, int? durationMillis) {
     final shortSwipe = durationMillis != null &&
         durationMillis > 0 &&
         durationMillis <= 140 &&
-        _progress >= .12 &&
-        _velocity >= 0;
-    final commit =
-        !cancel &&
-        (_progress >= .25 || (_progress > .06 && _velocity > 700) || shortSwipe) &&
-        _velocity > -600;
-    release.complete(commit);
-    _owner?._finishDrag(commit);
+        progress >= .12 &&
+        velocity >= 0;
+    return (progress >= .25 || (progress > .06 && velocity > 700) || shortSwipe) &&
+        velocity > -600;
   }
 
   bool beginOverlappingDrag(int direction, double dx, double width, double touchY) {
@@ -456,6 +458,10 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     final bytes = frame.image.width * frame.image.height * 4;
     final slots = ((96 * 1024 * 1024 ~/ bytes) - 1)
         .clamp(2, math.max(2, 2 * widget.lookAhead));
+    if (widget.preferences.pageEffect == ReaderPageEffect.paper &&
+        widget.lookAhead >= 3 && slots == 4) {
+      return [ahead, behind, 2 * ahead, 3 * ahead];
+    }
     return [for (var slot = 0; slot < slots; slot++)
       (slot ~/ 2 + 1) * (slot.isEven ? ahead : behind)];
   }

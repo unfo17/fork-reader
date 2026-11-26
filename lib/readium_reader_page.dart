@@ -20,6 +20,7 @@ class _PendingReaderDrag {
   _PendingReaderDrag(this.start);
   final Map<String, dynamic> start;
   Map<String, dynamic>? latest;
+  Duration? expires;
 }
 
 typedef _ParkedPublication = ({
@@ -149,6 +150,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
   }
   bool _dragInFlight = false, _receivingDrag = false;
   rd.Locator? _dragLocation;
+  final _inputTime = Stopwatch()..start();
   final _pendingDrags = Queue<_PendingReaderDrag>();
   _PendingReaderDrag? _queuedPointer;
   ({int direction, bool animated})? _pendingTap;
@@ -158,9 +160,11 @@ class ReadiumReaderBridge extends ChangeNotifier {
     if (event['phase'] == 'Start') {
       if (!ready) return;
       if (_pagePending) {
+        _discardInvalidDrags();
         if (_pendingDrags.isEmpty && !_receivingDrag && _startOverlappingDrag(event)) return;
         final drag = _queuedPointer = _PendingReaderDrag(event);
-        if (_pendingDrags.length < 6) _pendingDrags.addLast(drag);
+        final paper = _appearance.pageEffect == ReaderPageEffect.paper;
+        if (_pendingDrags.length < (paper ? 2 : 6)) _pendingDrags.addLast(drag);
         _pendingTap = null;
       } else {
         _startPageDrag(event);
@@ -170,9 +174,23 @@ class ReadiumReaderBridge extends ChangeNotifier {
     if (_queuedPointer case final pending?) {
       pending.latest = event;
       if (event['phase'] == 'End' || event['phase'] == 'Cancel') {
-        // A paper swipe that could not start while held has no sheet to settle.
-        if (_appearance.pageEffect == ReaderPageEffect.paper) _pendingDrags.remove(pending);
         _queuedPointer = null;
+        if (_appearance.pageEffect == ReaderPageEffect.paper) {
+          final start = _dragStart(pending.start);
+          final dx = (event['dx'] as num).toDouble();
+          final velocity = (event['velocityX'] as num?)?.toDouble() ?? 0;
+          final duration = (event['durationMillis'] as num?)?.toInt();
+          if (event['phase'] == 'Cancel' || !ReadiumPageTurnController.commitsDrag(
+            dx.abs() / start.width, velocity * dx.sign, duration,
+          )) {
+            _pendingDrags.remove(pending);
+          } else {
+            // Keep a brief continuation across the handoff between two sheets.
+            // A stalled WebView must not play the user's old swipes in a burst.
+            pending.expires = _inputTime.elapsed + const Duration(milliseconds: 750);
+            _continueQueuedDrag();
+          }
+        }
       }
     } else if (_receivingDrag) {
       _updatePageDrag(event);
@@ -202,7 +220,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
 
   void _continueQueuedDrag() {
     if (_disposed || _owner != this || !ready || !_pagePending || _receivingDrag) return;
-    _discardCancelledDrags();
+    _discardInvalidDrags();
     if (_pendingDrags.firstOrNull case final drag?) {
       if (!_startOverlappingDrag(drag.start)) return;
       _pendingDrags.removeFirst();
@@ -210,10 +228,12 @@ class ReadiumReaderBridge extends ChangeNotifier {
     }
   }
 
-  void _discardCancelledDrags() {
-    while (_pendingDrags.firstOrNull?.latest?['phase'] == 'Cancel') {
-      _pendingDrags.removeFirst();
-    }
+  void _discardInvalidDrags() {
+    final now = _inputTime.elapsed;
+    _pendingDrags.removeWhere((drag) =>
+      drag.latest?['phase'] == 'Cancel' ||
+      (drag.expires != null && drag.expires! <= now),
+    );
   }
 
   void _replayDrag(_PendingReaderDrag drag) {
@@ -258,7 +278,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     final tap = _pendingTap;
     _pendingTap = null;
     if (!_disposed && _owner == this && ready) {
-      _discardCancelledDrags();
+      _discardInvalidDrags();
       if (_pendingDrags.isNotEmpty) {
         final drag = _pendingDrags.removeFirst();
         _startPageDrag(drag.start);
@@ -780,7 +800,13 @@ class ReadiumReaderBridge extends ChangeNotifier {
       return false;
     }
     final fragments = target.toJson()['fragments'] as List?;
-    if (fragments?.isNotEmpty == true || (saved.text?.highlight ?? '').isNotEmpty) {
+    final visibleFragments = at.toJson()['fragments'] as List?;
+    if (fragments?.isNotEmpty == true &&
+        !fragments!.every((fragment) => visibleFragments?.contains(fragment) == true)) {
+      return false;
+    }
+    final highlight = saved.text?.highlight;
+    if (highlight?.isNotEmpty == true && highlight != visible.text?.highlight) {
       return false;
     }
     return ((at.progression ?? -1) - target.progression!).abs() < 0.00001;
@@ -1376,7 +1402,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
                 var root=document.documentElement,body=document.body;
                 if(!body)return;
                 if(!window.__wenkuPageReady)window.__wenkuPageReady=function(){
-                  if(document.readyState!=='complete')return false;
+                  // Off-screen images in this chapter can finish independently.
+                  if(document.readyState==='loading')return false;
                   var ready=true,w=innerWidth,h=innerHeight;
                   for(var img of Array.from(document.images)){
                     var r=img.getBoundingClientRect();

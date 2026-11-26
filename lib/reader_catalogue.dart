@@ -305,6 +305,7 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
                   expanded: expanded,
                   reduceMotion: widget.reduceMotion,
                   onTap: toggle,
+                  iconSize: 12,
                 )
               else
                 AnimatedRotation(
@@ -350,12 +351,7 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
         onTap: () => _selectEntry(context, index),
         child: Container(
           constraints: const BoxConstraints(minHeight: 52),
-          padding: EdgeInsets.fromLTRB(
-            10 + _layout.depthOf(index).clamp(0, 6) * 12.0,
-            12,
-            10,
-            12,
-          ),
+          padding: const EdgeInsets.fromLTRB(10, 12, 10, 12),
           decoration: BoxDecoration(
             color: current
                 ? Theme.of(context).colorScheme.onSurface.withValues(alpha: .06)
@@ -379,9 +375,14 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
                 const SizedBox(width: 7),
               ],
               Expanded(
-                child: AppText(
-                  entry.title,
-                  style: const TextStyle(fontSize: 14, height: 1.45),
+                child: Padding(
+                  padding: EdgeInsets.only(
+                    left: _layout.depthOf(index).clamp(0, 6) * 12.0,
+                  ),
+                  child: AppText(
+                    entry.title,
+                    style: const TextStyle(fontSize: 14, height: 1.45),
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
@@ -420,11 +421,15 @@ class DirectoryGroupChevron extends StatelessWidget {
     required this.expanded,
     required this.reduceMotion,
     required this.onTap,
+    required this.iconSize,
+    this.color,
   });
 
   final String title;
   final bool expanded, reduceMotion;
   final VoidCallback? onTap;
+  final double iconSize;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) => GlassIconButton.custom(
@@ -432,14 +437,19 @@ class DirectoryGroupChevron extends StatelessWidget {
     onPressed: onTap,
     liveGlass: false,
     transparent: true,
-    child: Center(
+    child: Align(
+      alignment: Alignment.centerRight,
       child: AnimatedRotation(
         turns: expanded ? .25 : 0,
         duration: reduceMotion || MediaQuery.disableAnimationsOf(context)
             ? Duration.zero
             : NovelMotion.enter,
         curve: NovelMotion.ease,
-        child: const ArchiveIcon(CupertinoIcons.chevron_right, size: 13),
+        child: ArchiveIcon(
+          CupertinoIcons.chevron_right,
+          size: iconSize,
+          color: color,
+        ),
       ),
     ),
   );
