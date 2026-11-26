@@ -255,6 +255,7 @@ docs/READING_STATISTICS.md
 docs/READING_WIDGETS.md
 docs/RELEASING.md
 docs/SEARCH.md
+docs/SETTINGS_AUDIT.md
 docs/THIRD_PARTY.md
 docs/TOUCH_FINGERPRINT.md
 docs/images/discovery.png
@@ -376,6 +377,7 @@ lib/app_ui.dart
 lib/app_window_insets.dart
 lib/archive_carousel.dart
 lib/archive_design.dart
+lib/archive_feature_ui.dart
 lib/archive_icon_art.dart
 lib/archive_icon_fold_art.dart
 lib/archive_icon_motion.dart
@@ -655,6 +657,7 @@ lib/route_identity.dart
 lib/s3_book_documents.dart
 lib/scroll_edge_blur.dart
 lib/setting_menu.dart
+lib/settings_page.dart
 lib/tag_catalogue.dart
 lib/touch_sampling.dart
 lib/ui_notifiers.dart

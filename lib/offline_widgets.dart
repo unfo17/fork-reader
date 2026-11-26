@@ -593,7 +593,7 @@ class _OfflineCachePageState extends State<OfflineCachePage> {
                               ),
                               const SizedBox(height: 12),
                               const AppText(
-                                '已缓存正文与插图可离线阅读。清理缓存不会移出书架，也不会删除阅读进度。',
+                                '已缓存的正文与插图可离线阅读。清理离线副本会保留本地图书和阅读进度。',
                                 style: TextStyle(fontSize: 13, height: 1.7),
                               ),
                               if (snapshot.hasError ||
@@ -610,7 +610,7 @@ class _OfflineCachePageState extends State<OfflineCachePage> {
                               ] else if (!loading && count == 0)
                                 const Padding(
                                   padding: EdgeInsets.only(top: 24),
-                                  child: AppText('暂无离线缓存，在图书详情中缓存章节。'),
+                                  child: AppText('暂无离线缓存。'),
                                 ),
                             ],
                           ),

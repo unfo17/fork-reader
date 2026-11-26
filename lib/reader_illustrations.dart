@@ -331,6 +331,14 @@ class ReaderIllustrationCache {
 
   void clearMemory() {
     _epoch++;
+    for (final cached in _cache.values) {
+      final decodes = _decodes[cached.bytes];
+      if (decodes == null) continue;
+      final imageCache = PaintingBinding.instance.imageCache;
+      for (final entry in decodes.entries.values) {
+        imageCache.evict(entry.key, includeLive: false);
+      }
+    }
     _decodes = Expando<_IllustrationDecodes>('illustration-decodes');
     _cache.clear();
     _pending.clear();

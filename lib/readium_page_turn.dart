@@ -1294,7 +1294,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       if (!mounted || _busy || _warming || _routePaused || _overlayOpen ||
           _chromeAnimating || _entering ||
           _preparationInterrupted) return;
-      if ((_cached != null && (widget.preview == null || _windowComplete)) ||
+      if (MediaQuery.disableAnimationsOf(context) ||
+          (_cached != null && (widget.preview == null || _windowComplete)) ||
           !widget.preferences.mode.paginated || widget.preferences.pageEffect == ReaderPageEffect.none) {
         if (_presented != null) setState(_releasePresentedPage);
         return;
@@ -1585,17 +1586,25 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     bool animated, {
     Completer<_ReadiumRelease>? gesture,
   }) async {
-    if (widget.preview != null && widget.land != null) {
+    if (_busy || !mounted) return;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    if (!reduceMotion && widget.preview != null && widget.land != null) {
       return _bufferedTurn(direction, animated, gesture);
     }
-    if (_busy || !mounted) return;
+    // A setting change can arrive while the old lookahead is still returning
+    // the native view to its saved anchor.
+    if (reduceMotion && _preparing != null) {
+      await _preparing;
+      if (!mounted || _busy) return;
+    }
+    if (reduceMotion && _presented != null) setState(_releasePresentedPage);
     if (widget.canTurn != null && !await widget.canTurn!(direction)) return;
     if (!mounted || _busy) return;
     final prefs = widget.preferences;
     if (!animated ||
         !prefs.mode.paginated ||
         prefs.pageEffect == ReaderPageEffect.none ||
-        MediaQuery.disableAnimationsOf(context)) {
+        reduceMotion) {
       if ((gesture == null || (await gesture.future).commit) && await widget.step(direction, false) && mounted) {
         widget.onPageTurn?.call();
       }

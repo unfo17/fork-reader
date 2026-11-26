@@ -40,6 +40,8 @@ flutter analyze
 避免上游着色器的 GPU 导数函数阻止资源打包。
 APK 由 `.github/workflows/preview-apk.yml` 编译、校验签名，并发布到 GitHub 预览 Release。
 
+菜单与设置的验收步骤、模块边界见 [设置维护与验收](docs/SETTINGS_AUDIT.md)。
+
 ## 原阅读控件与 Readium 正文（预览版 3）
 
 `ReaderPage` 继续使用原来的 Flutter 顶栏、底栏、目录、阅读设置、搜索、书签编辑器与听书面板；`ReadiumReaderBridge` 只替换正文引擎，不再另建一套阅读页面。独立 EPUB 的包解析、正文布局和渲染均由 Readium 处理，直接加载原书 XHTML、CSS、内嵌字体和图片。原书样式默认保留。

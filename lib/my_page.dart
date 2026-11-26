@@ -7,10 +7,10 @@ import 'bookmark_library_page.dart';
 import 'reading_statistics_page.dart';
 import 'catalog.dart';
 import 'dock_layout.dart';
-import 'feature_pages.dart';
+import 'archive_feature_ui.dart';
 import 'library_state.dart';
 import 'offline_repository.dart';
-import 'pages.dart' show SettingsPage;
+import 'settings_page.dart';
 import 'ui_notifiers.dart';
 import 'updates/app_updates.dart';
 import 'updates/update_page.dart';
@@ -20,10 +20,14 @@ class MyPage extends StatelessWidget {
     super.key,
     required this.state,
     required this.repository,
+    this.onOpenReadingHistory,
+    this.cachePageBuilder,
     this.showHeader = true,
   });
   final LibraryState state;
   final NovelRepository repository;
+  final void Function(BuildContext)? onOpenReadingHistory;
+  final WidgetBuilder? cachePageBuilder;
   final bool showHeader;
 
   Widget buildHeader(BuildContext context) => const Align(
@@ -94,7 +98,8 @@ class MyPage extends StatelessWidget {
                     code: 'SYSTEM / PREFERENCES',
                     child: SettingsPage(
                       state: state,
-                      repository: repository,
+                      onOpenReadingHistory: onOpenReadingHistory,
+                      cachePageBuilder: cachePageBuilder,
                       showHeader: false,
                     ),
                   ),

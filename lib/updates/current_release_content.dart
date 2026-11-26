@@ -6,8 +6,8 @@ class ReleaseSection {
   final List<String> items;
 }
 
-const _opening = '点击阅读立即准备 EPUB。等待时显示 Material 3 Expressive 变形加载动画。';
-const _swipes = '连续短滑各自翻页。续读过渡使用恢复排版后的当前页。';
+const _opening = '点书直读开关与本地图书的实际行为一致。';
+const _swipes = 'Readium 翻页遵循减少动态效果设置，插图清理明确针对临时内存。';
 const _androidInstall = '已安装本仓库固定签名版的 Android 用户可以直接覆盖更新，书籍和阅读记录会保留。';
 
 const publicReleaseNotes =

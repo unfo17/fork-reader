@@ -10,5 +10,4 @@ abstract final class LegacyTransport {
     String url, {
     bool cacheForViewing = true,
   }) => illustrationReader(url);
-  static Future<void> clearIllustrations() async {}
 }
