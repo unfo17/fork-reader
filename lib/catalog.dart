@@ -328,9 +328,11 @@ class NovelDirectoryLayout {
           ];
     _numbers = List.filled(_entries.length, null);
     for (var i = 0; i < _entries.length; i++) {
-      if (_branches.containsKey(i)) continue;
-      _numbered.add(i);
-      _numbers[i] = _numbered.length;
+      if (!_branches.containsKey(i)) {
+        _numbered.add(i);
+        _numbers[i] = _numbered.length;
+      }
+      _chapterTotals.add(_numbered.length);
     }
   }
 
@@ -341,13 +343,18 @@ class NovelDirectoryLayout {
   final _depths = <int>[];
   final _branches = <int, NovelVolume>{};
   final _numbered = <int>[];
+  final _chapterTotals = <int>[0];
   late final List<int?> _numbers;
   late final List<NovelVolume> volumes;
 
   int? numberOf(int index) => _numbers[index];
 
-  int depthOf(int index) =>
-      _depths[index] + (_branches.containsKey(index) ? 1 : 0);
+  int depthOf(int index) => _depths[index];
+
+  int get chapterCount => _numbered.length;
+
+  int chapterCountIn(NovelVolume volume) =>
+      _chapterTotals[volume.end] - _chapterTotals[volume.start];
 
   Set<int>? matches(String query) {
     final text = query.trim().toLowerCase();
@@ -406,11 +413,8 @@ class NovelDirectoryLayout {
           continue;
         }
         if (!selected && !containsMatch(group)) continue;
-        yield (volume: group, chapter: null);
+        yield (volume: group, chapter: index);
         if (matches != null || expanded.contains(group.key)) {
-          // Fold the original target into the group like a chapter in a volume.
-          // A group link is selectable even though it has no chapter number.
-          if (selected) yield (volume: null, chapter: index);
           yield* walk(
             _children[index]!,
             listAll || (matches?.contains(index) ?? false),

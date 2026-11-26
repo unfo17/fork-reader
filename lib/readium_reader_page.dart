@@ -887,16 +887,27 @@ class ReadiumReaderBridge extends ChangeNotifier {
   }
 
   Future<ReadiumPageFrame?> _previewPage(int direction, ReadiumPageFrame origin) async {
-    final frames = await _previewRun([direction], origin);
-    if (!frames.containsKey(direction)) throw StateError('相邻页未能就绪');
-    return frames[direction];
+    ReadiumPageFrame? frame;
+    var delivered = false;
+    try {
+      await _previewRun([direction], origin, (_, value) {
+        frame = value;
+        delivered = true;
+      });
+      if (!delivered) throw StateError('相邻页未能就绪');
+      return frame;
+    } catch (_) {
+      frame?.dispose();
+      rethrow;
+    }
   }
 
-  Future<Map<int, ReadiumPageFrame?>> _previewRun(
-    List<int> offsets, ReadiumPageFrame origin,
+  Future<void> _previewRun(
+    List<int> offsets,
+    ReadiumPageFrame origin,
+    void Function(int offset, ReadiumPageFrame? frame) onFrame,
   ) async {
-    final frames = <int, ReadiumPageFrame?>{};
-    if (_disposed || origin.anchor == null) return frames;
+    if (_disposed || origin.anchor == null) return;
     final epoch = _previewEpoch;
     final direction = offsets.first.sign;
     var travelled = 0;
@@ -908,31 +919,31 @@ class ReadiumReaderBridge extends ChangeNotifier {
         final version = await native.invokeMethod<int>('previewVersion');
         for (final offset in offsets) {
           while (travelled < offset.abs() && !atEdge) {
-            if (_disposed || epoch != _previewEpoch) return frames;
+            if (_disposed || epoch != _previewEpoch) return;
             atEdge = await native.invokeMethod<bool>('canTurn', {'direction': direction}) == false;
-            if (_disposed || epoch != _previewEpoch) return frames;
+            if (_disposed || epoch != _previewEpoch) return;
             if (atEdge) break;
             restorePosition = true;
             final result = await native.invokeMapMethod<String, dynamic>('page', {
               'direction': direction,
               'animated': false,
             });
-            if (result?['moved'] != true) return frames;
+            if (result?['moved'] != true) return;
             travelled++;
-            if (_disposed || epoch != _previewEpoch) return frames;
+            if (_disposed || epoch != _previewEpoch) return;
             if (travelled == offset.abs() || result?['resourceChanged'] == true) {
               await _waitForPageReady(previewVersion: version, stable: true, waitForPaint: false);
             }
           }
           if (atEdge) {
-            frames[offset] = null;
+            onFrame(offset, null);
             continue;
           }
           for (var attempt = 0; attempt < 3; attempt++) {
-            if (_disposed || epoch != _previewEpoch) return frames;
+            if (_disposed || epoch != _previewEpoch) return;
             final captured = await _capturePage();
             if (captured != null && captured.location != origin.location) {
-              frames[offset] = captured;
+              onFrame(offset, captured);
               break;
             }
             captured?.dispose();
@@ -950,15 +961,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
           if (destination != null) turns.previewHandedOff();
         }
       }
-    } catch (_) {
-      for (final frame in frames.values) {
-        frame?.dispose();
-      }
-      rethrow;
     } finally {
       _previewing = false;
     }
-    return frames;
   }
 
   Future<void> _waitForPageReady({
@@ -1057,7 +1062,6 @@ class ReadiumReaderBridge extends ChangeNotifier {
       anchor: pixels['anchor'] as String?,
       returnBottoms: (pixels['returnBottoms'] as List?)?.cast<double>() ?? const [],
       sampled: pixels['sampled'] == true,
-      hasIllustration: pixels['hasIllustration'] == true,
     );
   }
 
@@ -1572,6 +1576,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
           onPrioritize: _interruptPreview,
           onTurnAvailable: _continueQueuedDrag,
           replayTap: (point) => native.invokeMethod<void>('tap', {'x': point.dx, 'y': point.dy}),
+          onRetainedDrag: useSnapshots ? _pageDrag : null,
           child: Stack(
             fit: StackFit.expand,
             children: [

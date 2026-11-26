@@ -4706,6 +4706,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                     ? _volumeRow(
                                         context,
                                         directory[index].volume!,
+                                        chapter: directory[index].chapter,
                                       )
                                     : _chapterRow(
                                         context,
@@ -5357,8 +5358,9 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
   }
 
   String get _directoryCountLabel {
-    final count = novel.directory.length;
-    final volumes = novel.directoryLayout.volumes
+    final layout = novel.directoryLayout;
+    final count = layout.chapterCount;
+    final volumes = layout.volumes
         .where((volume) => volume.title.isNotEmpty && volume.depth == 0).length;
     final unit = novel.navigation?.entries.isNotEmpty == true ? '项' : '章';
     return '${volumes > 0 ? '$volumes 卷 · ' : ''}$count $unit';
@@ -5399,8 +5401,13 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
         : '未缓存';
   }
 
-  Widget _volumeRow(BuildContext context, NovelVolume volume) {
+  Widget _volumeRow(BuildContext context, NovelVolume volume, {int? chapter}) {
     final expanded = _expandedVolumes.contains(volume.key);
+    final entry = chapter == null ? null : novel.directory[chapter];
+    final count = novel.directoryLayout.chapterCountIn(volume);
+    void toggle() => _changeDirectory(() {
+      if (!_expandedVolumes.add(volume.key)) _expandedVolumes.remove(volume.key);
+    });
     final ids = novel.directory
         .skip(volume.start)
         .take(volume.length)
@@ -5412,11 +5419,9 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
         expanded: expanded,
         child: JellyTapSurface(
           key: ValueKey('detail-volume-${volume.key}'),
-          onTap: () => _changeDirectory(() {
-            if (!_expandedVolumes.add(volume.key)) {
-              _expandedVolumes.remove(volume.key);
-            }
-          }),
+          onTap: entry == null
+              ? toggle
+              : () => _openReader(context, entry.chapter, target: entry.target),
           child: Container(
             padding: EdgeInsets.only(
               left: volume.depth.clamp(0, 6) * 12.0,
@@ -5447,7 +5452,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                       ),
                       const SizedBox(height: 5),
                       AppText(
-                        '${volume.length} ${novel.navigation?.entries.isNotEmpty == true ? '项' : '章'}${cached == null ? '' : ' · $cached'}',
+                        '$count ${novel.navigation?.entries.isNotEmpty == true ? '项' : '章'}${cached == null ? '' : ' · $cached'}',
                         style: TextStyle(
                           fontSize: 13,
                           height: 1.5,
@@ -5467,7 +5472,14 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                   ),
                 ],
                 const SizedBox(width: 14),
-                AnimatedRotation(
+                if (entry != null)
+                  DirectoryGroupChevron(
+                    title: volume.title,
+                    expanded: expanded,
+                    reduceMotion: _reduceMotion,
+                    onTap: toggle,
+                  )
+                else AnimatedRotation(
                   turns: expanded ? .25 : 0,
                   duration: _reduceMotion ? Duration.zero : NovelMotion.enter,
                   curve: NovelMotion.ease,

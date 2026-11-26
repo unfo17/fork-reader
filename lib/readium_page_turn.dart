@@ -2,6 +2,7 @@ import 'dart:ui' as ui;
 import 'dart:async';
 import 'dart:typed_data';
 import 'dart:math' as math;
+import 'package:flutter/gestures.dart' show DragStartBehavior;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'reader_preferences.dart';
@@ -12,7 +13,6 @@ import 'reader_turn_motion.dart';
 class ReadiumPageFrame {
   ReadiumPageFrame(this.image, this.location, this.bands, this.paper, {
     this.anchor, this.returnBottoms = const [], this.sampled = false,
-    this.hasIllustration = false,
   });
   final ui.Image image;
   final String location;
@@ -21,7 +21,6 @@ class ReadiumPageFrame {
   final Color paper;
   final String? anchor;
   final bool sampled;
-  final bool hasIllustration;
   FilterQuality get filterQuality => sampled ? FilterQuality.low : FilterQuality.none;
   int _references = 1;
   ReadiumPageFrame retain() { _references++; return this; }
@@ -225,12 +224,13 @@ class ReadiumPageTurnController {
   }
 
   Future<void> drag(int direction) async {
+    final release = _release;
     try {
       requestTurn(direction);
       _directionMultiplier = direction / _initialSign;
-      await _owner?._turn(direction, true, gesture: _release);
+      await _owner?._turn(direction, true, gesture: release);
     } finally {
-      _release = null;
+      if (identical(_release, release)) _release = null;
     }
   }
 
@@ -298,6 +298,7 @@ class ReadiumPageSurface extends StatefulWidget {
     this.onPageTurn,
     this.coverInitialEntry = false,
     this.replayTap,
+    this.onRetainedDrag,
     this.refreshRateLimit = 0,
   });
   final ReadiumPageTurnController controller;
@@ -315,10 +316,13 @@ class ReadiumPageSurface extends StatefulWidget {
   final VoidCallback? onPageTurn;
   final bool coverInitialEntry;
   final Future<void> Function(Offset fraction)? replayTap;
+  final ValueChanged<Map<String, dynamic>>? onRetainedDrag;
   final Future<bool> Function(int direction)? canTurn;
   final Future<ReadiumPageFrame?> Function(int direction, ReadiumPageFrame origin)? preview;
-  final Future<Map<int, ReadiumPageFrame?>> Function(
-    List<int> offsets, ReadiumPageFrame origin,
+  final Future<void> Function(
+    List<int> offsets,
+    ReadiumPageFrame origin,
+    void Function(int offset, ReadiumPageFrame? frame) onFrame,
   )? previewRun;
   final Future<bool> Function(ReadiumPageFrame frame)? land;
   final Widget child;
@@ -630,6 +634,17 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         for (final direction in [_dragDirection, -_dragDirection])
           offsets.where((offset) => offset.abs() > 1 && offset.sign == direction).toList(),
       ] : offsets.map((offset) => [offset]);
+      void keepFrame(int direction, ReadiumPageFrame? frame) {
+        if (!mounted || key != widget.frameKey) {
+          frame?.dispose();
+        } else if (frame == null) {
+          _edges.add(direction);
+        } else {
+          _neighbors[direction]?.dispose();
+          _neighbors[direction] = frame;
+          _offerNextTurn();
+        }
+      }
       for (final run in runs) {
         if (!mounted || key != widget.frameKey || _routePaused ||
             (requiredDirection == null &&
@@ -643,23 +658,14 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         _preparingOffset = missing.first;
         for (var attempt = 0; attempt < (requiredDirection == null || _refilling ? 1 : 2); attempt++) {
           if (!mounted || key != widget.frameKey || _routePaused) break;
-          final Map<int, ReadiumPageFrame?> frames;
           try {
-            frames = missing.length > 1
-                ? await widget.previewRun!(missing, origin)
-                : {missing.first: await widget.preview!(missing.first, origin)};
+            if (batch) {
+              await widget.previewRun!(missing, origin, keepFrame);
+            } else {
+              keepFrame(missing.first, await widget.preview!(missing.first, origin));
+            }
           } catch (_) {
             continue;
-          }
-          for (final MapEntry(key: direction, value: frame) in frames.entries) {
-            if (!mounted || key != widget.frameKey) {
-              frame?.dispose();
-            } else if (frame == null) {
-              _edges.add(direction);
-            } else {
-              _neighbors[direction]?.dispose();
-              _neighbors[direction] = frame;
-            }
           }
           break;
         }
@@ -742,25 +748,10 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       }
       if (from == null || !mounted) return;
       final requested = gesture == null ? direction : (widget.controller._sign * widget.controller._directionMultiplier).round();
-      final missing = !_neighbors.containsKey(requested) && !_edges.contains(requested);
-      final preparation = _prepareNeighbors(from, requiredDirection: requested);
-      if (paper && gesture != null && missing) {
-        final readyWhileHeld = await Future.any([
-          preparation.then((_) => true),
-          gesture.future.then((_) =>
-              _neighbors.containsKey(requested) || _edges.contains(requested)),
-        ]);
-        if (!readyWhileHeld) {
-          // Keep warming the neighbour for the next touch. The released
-          // gesture must not start an animation when the bitmap arrives.
-          await preparation;
-          if (mounted && _edges.contains(requested)) await widget.canTurn?.call(requested);
-          return;
-        }
-      } else {
-        await preparation;
-      }
+      await _prepareNeighbors(from, requiredDirection: requested);
       if (!mounted) return;
+      final releasedBeforeFrame = gesture?.isCompleted == true;
+      if (releasedBeforeFrame && !await gesture!.future) return;
       // Keep both neighbours alive through frame-key changes during landing.
       for (final frame in _neighbors.values) { held.add(frame.retain()); }
       final initialDirection = gesture == null ? direction : (widget.controller._sign * widget.controller._directionMultiplier).round();
@@ -776,7 +767,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         _direction = _visualDirection(initialDirection);
         _destinationReady = true;
         _liveDestination = false;
-        _clock.value = gesture == null || _to == null ? 0 : math.min(widget.controller._progress, .85);
+        _clock.value = gesture == null || _to == null || releasedBeforeFrame
+            ? 0 : math.min(widget.controller._progress, .85);
         _primaryTouchY = widget.controller._touchY;
         _primaryStartY = widget.controller._startY;
       });
@@ -816,11 +808,11 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
           return false;
         }
       }
-      final landing = finish && target != null && !_deferNativeLanding(origin, target)
+      final landing = finish && target != null && !_deferNativeLanding
           ? adopt(target)
           : null;
       if (gesture != null) {
-        if (_settling == null) _finishDrag(finish);
+        if (_settling == null) _finishDrag(finish, sampleFinger: !releasedBeforeFrame);
       } else {
         _primaryCommit = finish && target != null;
         _acknowledgePrimaryCommit();
@@ -928,6 +920,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       _overlaps.add(overlap);
       if (drag) _trackingOverlap = overlap;
     });
+    _prepareExposedPage(overlap);
     if (!drag) overlap.finish(true);
     _startNativeOverlaps();
     return true;
@@ -1091,7 +1084,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       if (!mounted || overlap.landed.isCompleted) return;
       overlap.settle();
       final target = overlap.committed ? overlap.target : null;
-      if (target != null && _deferNativeLanding(overlap.from, target)) {
+      if (target != null && _deferNativeLanding) {
         await _waitForCurrentSettle(() => overlap.settling);
         if (!mounted || overlap.landed.isCompleted) return;
       }
@@ -1278,12 +1271,15 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         : math.min(widget.controller._progress, maxProgress);
   }
 
-  void _finishDrag(bool commit) {
+  void _finishDrag(bool commit, {bool sampleFinger = true}) {
     if (_trackingOverlap case final overlap?) {
       _paintDrag();
       _trackingOverlap = null;
       _nextDragTick = null;
-      overlap.finish(commit && (_effect != ReaderPageEffect.paper || overlap.target != null));
+      // Once a visible page has accepted the drag, remember at most that one
+      // destination while its frame arrives. A further drag still needs a
+      // visible page to become its origin.
+      overlap.finish(commit);
       _offerNextTurn();
       return;
     }
@@ -1293,7 +1289,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       commit = false;
     }
     if (!_dragPrepared || _settling != null || !mounted) return;
-    _paintDrag();
+    if (sampleFinger) _paintDrag();
     _dragPrepared = false;
     _nextDragTick = null;
     final target = commit ? (_destinationReady ? 1.0 : .92) : 0.0;
@@ -1310,12 +1306,11 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     widget.onPageTurn?.call();
   }
 
-  // Reopening an illustrated resource can compete with the Flutter animator.
-  // The prepared textures still accept another swipe while Readium waits.
-  bool _deferNativeLanding(ReadiumPageFrame origin, ReadiumPageFrame target) =>
+  // Keep WebView layout and lookahead capture off the release animation.
+  // Prepared Flutter textures still accept another swipe while Readium waits.
+  bool get _deferNativeLanding =>
       _effect == ReaderPageEffect.paper ||
-      (_effect == ReaderPageEffect.staggered &&
-          (origin.hasIllustration || target.hasIllustration));
+      _effect == ReaderPageEffect.staggered;
 
   @override
   void initState() {
@@ -1703,12 +1698,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         Positioned.fill(child: IgnorePointer(child: _pageImage(cover))),
       if (_overlayCover case final cover?)
         Positioned.fill(child: IgnorePointer(child: _pageImage(cover))),
-      if (_previewCover case final cover?)
-        Positioned.fill(child: GestureDetector(
-          behavior: HitTestBehavior.translucent,
-          onTapUp: widget.replayTap == null ? null : (details) => unawaited(_replayPreviewTap(details.localPosition)),
-          child: IgnorePointer(child: _sceneCoversPage ? const SizedBox.expand() : _pageImage(cover)),
-        )),
+      if (_previewCover case final cover? when !_sceneCoversPage)
+        Positioned.fill(child: IgnorePointer(child: _pageImage(cover))),
       if (_overlaps.isNotEmpty ||
           (_from != null && _effect == ReaderPageEffect.staggered && widget.preview != null))
         Positioned.fill(child: IgnorePointer(child: ExcludeSemantics(
@@ -1761,6 +1752,19 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
             ),
           ),
         ),
+      if (widget.onRetainedDrag != null || widget.replayTap != null)
+        Positioned.fill(
+          child: IgnorePointer(
+            ignoring: _previewCover == null &&
+                !(_sceneCoversPage && widget.onRetainedDrag != null),
+            child: _ReadiumRetainedInput(
+              onDrag: widget.onRetainedDrag,
+              onTap: widget.replayTap == null ? null : (position) {
+                if (_previewCover != null) unawaited(_replayPreviewTap(position));
+              },
+            ),
+          ),
+        ),
       if (_returnFrame case final frame?)
         Positioned.fill(key: const ValueKey('readium-return-page'), child: IgnorePointer(child: ExcludeSemantics(
           child: RepaintBoundary(child: ClipRect(child: _entry(frame))),
@@ -1802,6 +1806,81 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _returnClock.dispose();
     super.dispose();
   }
+}
+
+/// A retained frame may cover a native view that Flutter is no longer painting.
+/// Keep this recognizer mounted through the transition back to the live page
+/// so a second pointer can finish the gesture it started on the frame.
+class _ReadiumRetainedInput extends StatefulWidget {
+  const _ReadiumRetainedInput({required this.onDrag, required this.onTap});
+
+  final ValueChanged<Map<String, dynamic>>? onDrag;
+  final ValueChanged<Offset>? onTap;
+
+  @override
+  State<_ReadiumRetainedInput> createState() => _ReadiumRetainedInputState();
+}
+
+class _ReadiumRetainedInputState extends State<_ReadiumRetainedInput> {
+  Offset _origin = Offset.zero;
+  final _elapsed = Stopwatch();
+  bool _sentStart = false;
+
+  void _start(DragStartDetails details) {
+    _origin = details.localPosition;
+    _sentStart = false;
+    _elapsed
+      ..reset()
+      ..start();
+  }
+
+  void _send(String phase, Offset position, {double? velocity}) {
+    final height = context.size?.height ?? 0;
+    widget.onDrag?.call({
+      'phase': phase,
+      'dx': position.dx - _origin.dx,
+      'y': height > 0
+          ? ((phase == 'Start' ? _origin.dy : position.dy) / height).clamp(0.0, 1.0)
+          : .5,
+      'durationMillis': _elapsed.elapsedMilliseconds,
+      if (velocity != null) 'velocityX': velocity,
+    });
+  }
+
+  void _update(DragUpdateDetails details) {
+    final position = details.localPosition;
+    if (!_sentStart) {
+      if ((position.dx - _origin.dx).abs() < 1) return;
+      _sentStart = true;
+      _send('Start', position);
+    }
+    _send('Move', position);
+  }
+
+  void _end(DragEndDetails details) {
+    if (_sentStart) {
+      _send('End', details.localPosition, velocity: details.primaryVelocity);
+    }
+    _elapsed.stop();
+    _sentStart = false;
+  }
+
+  void _cancel() {
+    if (_sentStart) _send('Cancel', _origin);
+    _elapsed.stop();
+    _sentStart = false;
+  }
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    behavior: HitTestBehavior.opaque,
+    dragStartBehavior: DragStartBehavior.down,
+    onHorizontalDragStart: widget.onDrag == null ? null : _start,
+    onHorizontalDragUpdate: widget.onDrag == null ? null : _update,
+    onHorizontalDragEnd: widget.onDrag == null ? null : _end,
+    onHorizontalDragCancel: widget.onDrag == null ? null : _cancel,
+    onTapUp: widget.onTap == null ? null : (details) => widget.onTap?.call(details.localPosition),
+  );
 }
 
 void _drawReadiumPage(Canvas canvas, Size size, ReadiumPageFrame frame) {

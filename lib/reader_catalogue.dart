@@ -222,7 +222,11 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
           ? ('volume', rows[index].volume!.key)
           : ('chapter', rows[index].chapter!),
       child: rows[index].volume != null
-          ? _volumeRow(context, rows[index].volume!)
+          ? _volumeRow(
+              context,
+              rows[index].volume!,
+              chapter: rows[index].chapter,
+            )
           : _row(context, rows[index].chapter!),
     );
     final current = rows.indexWhere((row) => row.chapter == _current);
@@ -257,24 +261,26 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
     );
   }
 
-  Widget _volumeRow(BuildContext context, NovelVolume volume) {
+  Widget _volumeRow(BuildContext context, NovelVolume volume, {int? chapter}) {
     final expanded =
         _expanded.contains(volume.key) || _search.text.trim().isNotEmpty;
+    final searching = _matches != null;
+    final VoidCallback? toggle = searching
+        ? null
+        : () => _changeRows(() {
+            if (!_expanded.add(volume.key)) _expanded.remove(volume.key);
+          });
     return Semantics(
       expanded: expanded,
       child: JellyTapSurface(
         key: ValueKey('reader-volume-${volume.key}'),
-        onTap: _search.text.trim().isNotEmpty
-            ? null
-            : () => _changeRows(() {
-                if (!_expanded.add(volume.key)) _expanded.remove(volume.key);
-              }),
+        onTap: chapter == null ? toggle : () => _selectEntry(context, chapter),
         child: Padding(
           padding: EdgeInsets.fromLTRB(
             10 + volume.depth.clamp(0, 6) * 12.0,
-            18,
+            chapter == null ? 18 : 4,
             10,
-            18,
+            chapter == null ? 18 : 4,
           ),
           child: Row(
             children: [
@@ -289,27 +295,46 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
               ),
               const SizedBox(width: 8),
               AppText(
-                '${volume.length} 章',
+                '${_layout.chapterCountIn(volume)} 章',
                 style: const TextStyle(fontSize: 11),
               ),
               const SizedBox(width: 10),
-              AnimatedRotation(
-                turns: expanded ? .25 : 0,
-                duration:
-                    widget.reduceMotion ||
-                        MediaQuery.disableAnimationsOf(context)
-                    ? Duration.zero
-                    : NovelMotion.enter,
-                curve: NovelMotion.ease,
-                child: const ArchiveIcon(
-                  CupertinoIcons.chevron_right,
-                  size: 12,
+              if (chapter != null)
+                DirectoryGroupChevron(
+                  title: volume.title,
+                  expanded: expanded,
+                  reduceMotion: widget.reduceMotion,
+                  onTap: toggle,
+                )
+              else
+                AnimatedRotation(
+                  turns: expanded ? .25 : 0,
+                  duration:
+                      widget.reduceMotion ||
+                          MediaQuery.disableAnimationsOf(context)
+                      ? Duration.zero
+                      : NovelMotion.enter,
+                  curve: NovelMotion.ease,
+                  child: const ArchiveIcon(
+                    CupertinoIcons.chevron_right,
+                    size: 12,
+                  ),
                 ),
-              ),
             ],
           ),
         ),
       ),
+    );
+  }
+
+  void _selectEntry(BuildContext context, int index) {
+    final entry = _entries[index];
+    FocusScope.of(context).unfocus();
+    Navigator.pop(
+      context,
+      widget.novel.navigation?.entries.isNotEmpty == true
+          ? entry.target
+          : entry.chapter,
     );
   }
 
@@ -322,15 +347,7 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
       selected: current,
       child: JellyTapSurface(
         key: ValueKey('reader-chapter-$index'),
-        onTap: () {
-          FocusScope.of(context).unfocus();
-          Navigator.pop(
-            context,
-            widget.novel.navigation?.entries.isNotEmpty == true
-                ? entry.target
-                : entry.chapter,
-          );
-        },
+        onTap: () => _selectEntry(context, index),
         child: Container(
           constraints: const BoxConstraints(minHeight: 52),
           padding: EdgeInsets.fromLTRB(
@@ -394,4 +411,36 @@ class _ReaderCatalogueState extends State<ReaderCatalogue>
       ),
     );
   }
+}
+
+class DirectoryGroupChevron extends StatelessWidget {
+  const DirectoryGroupChevron({
+    super.key,
+    required this.title,
+    required this.expanded,
+    required this.reduceMotion,
+    required this.onTap,
+  });
+
+  final String title;
+  final bool expanded, reduceMotion;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) => GlassIconButton.custom(
+    label: expanded ? '收起$title' : '展开$title',
+    onPressed: onTap,
+    liveGlass: false,
+    transparent: true,
+    child: Center(
+      child: AnimatedRotation(
+        turns: expanded ? .25 : 0,
+        duration: reduceMotion || MediaQuery.disableAnimationsOf(context)
+            ? Duration.zero
+            : NovelMotion.enter,
+        curve: NovelMotion.ease,
+        child: const ArchiveIcon(CupertinoIcons.chevron_right, size: 13),
+      ),
+    ),
+  );
 }

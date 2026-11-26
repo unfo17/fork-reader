@@ -6,30 +6,27 @@ class ReleaseSection {
   final List<String> items;
 }
 
-const _menus = '恢复原版阅读控件的磨砂效果、菜单位置与展开动画。';
-const _insets = '阅读正文保持上下边距，菜单动画期间暂停后台预载。';
-const _swipes = '减少插图与文字之间段落接续的卡顿，翻页确认时震动。';
-const _catalogue = '原版折叠分组行显示 EPUB 多级目录，图书详情和阅读页共用目录结构。';
+const _catalogue = 'EPUB 分组只占一行。点标题跳转，点行尾箭头展开，分组不计入章节编号与项数。';
+const _relay = '减少段落接续松手后的停顿。';
+const _swipes = '仿真翻页动画可以接收紧接着的滑动。';
 const _androidInstall = '已安装本仓库固定签名版的 Android 用户可以直接覆盖更新，书籍和阅读记录会保留。';
 
 const publicReleaseNotes =
     '''
 ### $appDisplayName · Android 预览
 
-- $_menus
-- $_insets
-- $_swipes
 - $_catalogue
+- $_relay
+- $_swipes
 
 $_androidInstall
 ''';
 const currentReleaseNotes = publicReleaseNotes;
 const currentReleaseSummary = [
   currentReleaseSourcePolicy,
-  _menus,
-  _insets,
-  _swipes,
   _catalogue,
+  _relay,
+  _swipes,
 ];
 const currentReleaseSections = [
   ReleaseSection('欢迎使用$appDisplayName', [
@@ -39,10 +36,9 @@ const currentReleaseSections = [
     projectDataNotice,
   ]),
   ReleaseSection('本次更新', [
-    _menus,
-    _insets,
-    _swipes,
     _catalogue,
+    _relay,
+    _swipes,
     _androidInstall,
   ]),
 ];
