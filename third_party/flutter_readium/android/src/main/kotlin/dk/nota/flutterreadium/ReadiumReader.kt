@@ -573,21 +573,37 @@ object ReadiumReader :
                 bitmap.copyPixelsToBuffer(java.nio.ByteBuffer.wrap(rgba))
                 val length = if (vertical) width else height
                 val breadth = if (vertical) height else width
+                val lineStride = if (vertical) 4 else width * 4
+                val pixelStride = if (vertical) width * 4 else 4
                 val empty = ByteArray(length) { -1 }
+                fun differs(a: Int, b: Int): Boolean =
+                    kotlin.math.abs((rgba[a].toInt() and 255) - (rgba[b].toInt() and 255)) > 12 ||
+                    kotlin.math.abs((rgba[a+1].toInt() and 255) - (rgba[b+1].toInt() and 255)) > 12 ||
+                    kotlin.math.abs((rgba[a+2].toInt() and 255) - (rgba[b+2].toInt() and 255)) > 12
                 fun blank(line: Int): Boolean {
                     if (line !in 0 until length) return false
                     if (empty[line] >= 0) return empty[line].toInt() == 1
-                    val first = if (vertical) line * 4 else line * width * 4
-                    val r = rgba[first].toInt() and 255
-                    val g = rgba[first+1].toInt() and 255
-                    val b = rgba[first+2].toInt() and 255
+                    val first = line * lineStride
                     for (i in 1 until breadth) {
-                        val offset = if (vertical) (i * width + line) * 4 else (line * width + i) * 4
-                        if (kotlin.math.abs((rgba[offset].toInt() and 255)-r)>12 || kotlin.math.abs((rgba[offset+1].toInt() and 255)-g)>12 || kotlin.math.abs((rgba[offset+2].toInt() and 255)-b)>12) {
+                        if (differs(first + i * pixelStride, first)) {
                             empty[line]=0; return false
                         }
                     }
                     empty[line]=1; return true
+                }
+                fun separatesInk(line: Int): Boolean {
+                    if (blank(line - 1) || blank(line)) return true
+                    val above = (line - 1) * lineStride
+                    val below = line * lineStride
+                    // A tight layout may leave no entirely blank row. Accept a
+                    // DOM boundary only if no ink is connected across the cut.
+                    for (i in 1 until breadth) {
+                        if (!differs(above + i * pixelStride, above)) continue
+                        for (j in maxOf(0, i - 1)..minOf(breadth - 1, i + 1)) {
+                            if (differs(below + j * pixelStride, below)) return false
+                        }
+                    }
+                    return true
                 }
                 val cuts = mutableListOf(0.0)
                 val gaps = info.getJSONArray("gaps")
@@ -600,7 +616,7 @@ object ReadiumReader :
                     var found = -1
                     for (distance in 0..(high-low)) {
                         for (line in intArrayOf(middle-distance,middle+distance)) {
-                            if (line in low..high && blank(line-1) && blank(line)) { found=line; break }
+                            if (line in low..high && separatesInk(line)) { found=line; break }
                         }
                         if (found >= 0) break
                     }

@@ -1887,12 +1887,13 @@ class _ReadiumParagraphTurn extends CustomPainter {
     _size = size;
     _scaleX = size.width / frame.image.width;
     _scaleY = size.height / frame.image.height;
+    const relayCurve = Cubic(.22, .1, .28, 1);
     final motion = ReaderTurnScope(
       animation: clock,
       direction: direction,
       outgoing: !incoming,
       relay: true,
-      relayCurve: const Cubic(.22, .1, .28, 1),
+      relayCurve: relayCurve,
       vertical: vertical,
       leafSize: size,
       child: const SizedBox(),
@@ -1905,6 +1906,21 @@ class _ReadiumParagraphTurn extends CustomPainter {
         : frame.bands.isEmpty || enterFromBottom
         ? [const Rect.fromLTRB(0, 0, 1, 1)]
         : frame.bands;
+    Interval timingFor(int index) {
+      final band = bands[index];
+      if (!enterFromBottom && !vertical && bands.length > 1) {
+        // Nearby short paragraphs still need distinct phases. Keep a spatial
+        // component so long paragraphs follow their position on the page.
+        final order = index / (bands.length - 1);
+        final position = incoming ? band.bottom : band.top;
+        final start = .02 + .22 * (.55 * position + .45 * order);
+        return Interval(start, start + .75, curve: relayCurve);
+      }
+      return motion.relayIntervalFor(index, bands.length, bounds: Rect.fromLTRB(
+        band.left * size.width, band.top * size.height,
+        band.right * size.width, band.bottom * size.height,
+      ));
+    }
     _parts = [
       for (var index = 0; index < bands.length; index++)
         (
@@ -1914,10 +1930,7 @@ class _ReadiumParagraphTurn extends CustomPainter {
             (bands[index].right * frame.image.width).roundToDouble(),
             (bands[index].bottom * frame.image.height).roundToDouble(),
           ),
-          timing: motion.relayIntervalFor(index, bands.length, bounds: Rect.fromLTRB(
-            bands[index].left * size.width, bands[index].top * size.height,
-            bands[index].right * size.width, bands[index].bottom * size.height,
-          )),
+          timing: timingFor(index),
         ),
     ];
     _transforms = Float32List(_parts.length * 4);
