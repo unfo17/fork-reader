@@ -189,7 +189,6 @@ class HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
     2 => _localSearch,
     _ => _searchFeed,
   };
-  final _localLibrary = LocalLibraryController();
   List<Widget> _pageWidgets = const [];
   List<WidgetBuilder> _headers = const [];
   int _tab = 0;
@@ -260,46 +259,26 @@ class HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
           : null,
       showHeader: false,
     );
-    final local = widget.repository is OfflineNovelRepository
-        ? (widget.repository as OfflineNovelRepository).local
-        : null;
-    final localPage = local == null
-        ? null
-        : LocalLibraryPage(
-            books: local,
-            state: widget.state,
-            controller: _localLibrary,
-            showHeader: false,
-            compactMainPageControls: true,
-            onSearch: _openSearch,
-            onOpen: (page, book) => openDetail(
-              page,
-              book,
-              widget.state,
-              widget.repository,
-              entry: ReadingEntry.local,
-            ),
-            onOpenWithCover: (page, book, tag) => openDetail(
-              page,
-              book,
-              widget.state,
-              widget.repository,
-              coverHeroTag: tag,
-              entry: ReadingEntry.local,
-            ),
-          );
+    final shelf = ShelfPage(
+      books: const [],
+      state: widget.state,
+      repository: repository,
+      showHeader: false,
+      compactMainPageControls: true,
+      onSearch: _openSearch,
+      navigation: _navigation,
+    );
     _headers = [
       (_) => const SizedBox.shrink(),
+      shelf.buildHeader,
       (_) => const SizedBox.shrink(),
-      localPage?.buildHeader ??
-          (_) => const ArchiveMasthead(title: '本地', code: '03 / LOCAL ARCHIVE'),
       settings.buildHeader,
     ];
     _pageWidgets =
         [
               const SizedBox.shrink(),
+              shelf,
               const SizedBox.shrink(),
-              localPage ?? const Center(child: AppText('当前演示数据源未启用本地书库')),
               settings,
             ].indexed
             .map(
@@ -378,7 +357,6 @@ class HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
     _searchFeed.dispose();
     _shelfSearch.dispose();
     _localSearch.dispose();
-    _localLibrary.dispose();
     for (final scroll in _tabScrolls) {
       scroll.dispose();
     }
@@ -505,7 +483,6 @@ class HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
 
   void _selectTab(int index) {
     if (index == _tab || !_visibleTabs.contains(index)) return;
-    if (index == 2) _localLibrary.refresh?.call();
     FocusManager.instance.primaryFocus?.unfocus();
     final reduceMotion =
         widget.state.reduceMotion || MediaQuery.disableAnimationsOf(context);
@@ -633,6 +610,11 @@ class HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
                                   fromCache:
                                       _searchScope == 1 &&
                                       _navigation.readableShelfOnly,
+                                  entry: switch (_searchScope) {
+                                    1 => ReadingEntry.shelf,
+                                    2 => ReadingEntry.local,
+                                    _ => ReadingEntry.discovery,
+                                  },
                                   onRecall: _searchScope == 0
                                       ? _recallSearch
                                       : null,
@@ -1551,7 +1533,12 @@ void openDetail(
   bool forceDetails = false,
   ReadingEntry entry = ReadingEntry.discovery,
 }) {
-  if (state.directReadingOn(entry) && !forceDetails) {
+  final local = isLocalBook(novel.id);
+  final cached = fromCache && !local;
+  final readingEntry = entry == ReadingEntry.shelf && local
+      ? ReadingEntry.local
+      : entry;
+  if (state.directReadingOn(readingEntry) && !forceDetails) {
     unawaited(
       pushNovelPage<void>(
         context,
@@ -1559,7 +1546,7 @@ void openDetail(
           novel: novel,
           state: state,
           repository: repository,
-          fromCache: fromCache,
+          fromCache: cached,
         ),
         reduceMotion: state.reduceMotion,
         slot: ('reader-entry', novel.id),
@@ -1570,7 +1557,7 @@ void openDetail(
   if (LibraryWorkspace.open(
     context,
     novel.id,
-    (_) => fromCache
+    (_) => cached
         ? DetailPage(
             novel: novel,
             state: state,
@@ -1584,7 +1571,7 @@ void openDetail(
   unawaited(
     pushNovelPage<void>(
       context,
-      fromCache
+      cached
           ? DetailPage(
               novel: novel,
               state: state,
@@ -1654,7 +1641,7 @@ class _ReaderLoaderPageState extends State<ReaderLoaderPage> {
       if (snapshot.data case final book?) {
         var chapter = widget.state.chapterForNovel(book);
         if (widget.repository case final OfflineNovelRepository offline) {
-          if (offline.offline &&
+          if ((widget.fromCache || offline.offline) &&
               !isLocalBook(book.id) &&
               offline.cache
                       .book(book.id)
@@ -1891,29 +1878,8 @@ class ShelfPage extends StatefulWidget {
                 LocalBookImportButton(
                   books: local,
                   library: state,
-                  onManage: () => pushNovelPage<void>(
-                    context,
-                    LocalLibraryPage(
-                      books: local,
-                      state: state,
-                      onOpen: (page, book) => openDetail(
-                        page,
-                        book,
-                        state,
-                        repository,
-                        entry: ReadingEntry.local,
-                      ),
-                      onOpenWithCover: (page, book, tag) => openDetail(
-                        page,
-                        book,
-                        state,
-                        repository,
-                        coverHeroTag: tag,
-                        entry: ReadingEntry.local,
-                      ),
-                    ),
-                    reduceMotion: state.reduceMotion,
-                  ),
+                  onManage: () =>
+                      openLocalLibrary(context, local, state, repository),
                 ),
             GlassIconButton(
               key: const ValueKey('shelf-search-entry'),
@@ -2158,6 +2124,7 @@ class _ShelfPageState extends State<ShelfPage>
         state,
         widget.repository,
         coverHeroTag: tag,
+        fromCache: _cacheOnly,
         entry: ReadingEntry.shelf,
       ),
     );
@@ -2331,7 +2298,9 @@ class _ShelfPageState extends State<ShelfPage>
     listenable: _changes,
     builder: (context) {
       final (:all, :saved, :featured) = _projectBooks();
+      final hasLocalBooks = _offline?.local?.books.isNotEmpty ?? false;
       final cacheLoading =
+          !hasLocalBooks &&
           (_cacheOnly || state.combinedShelf) &&
           _offline?.cache.loaded == false &&
           _offline?.cacheError == null;
@@ -2373,7 +2342,8 @@ class _ShelfPageState extends State<ShelfPage>
                   grid: grid,
                   gridDensity: state.shelfGridDensity,
                 )
-              : _cacheOnly &&
+              : !hasLocalBooks &&
+                    _cacheOnly &&
                     _offline?.cache.loaded == false &&
                     _offline?.cacheError != null
               ? ContentNotice(
@@ -2623,7 +2593,6 @@ class _ShelfPageState extends State<ShelfPage>
                   'all': '全部来源',
                   'local': '本地导入',
                   'cached': '已缓存',
-                  'online': '在线收藏',
                 }
               : const {},
           hint: '只调整立体书架，下方列表保留自己的分类、筛选和排序。',
@@ -2849,7 +2818,6 @@ class _ShelfPageState extends State<ShelfPage>
                     'all': '全部来源',
                     'local': '本地导入',
                     'cached': '已缓存',
-                    'online': '在线收藏',
                   }
                 : const {},
             shelfContentHint: '仅调整上方立体书架；下方继续使用页面上的分类、筛选和排序。',
@@ -3008,6 +2976,7 @@ class InlineSearchResults extends StatelessWidget {
     this.showSources = false,
     this.fromCache = false,
     this.allowBlockedTags = false,
+    this.entry = ReadingEntry.discovery,
   });
   final LibraryState state;
   final NovelRepository repository;
@@ -3016,6 +2985,7 @@ class InlineSearchResults extends StatelessWidget {
   final ValueChanged<String>? onRecall;
   final String emptyQueryTitle;
   final bool showSources, fromCache, allowBlockedTags;
+  final ReadingEntry entry;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -3164,6 +3134,7 @@ class InlineSearchResults extends StatelessWidget {
                                   repository,
                                   coverHeroTag: hero,
                                   fromCache: fromCache,
+                                  entry: entry,
                                 );
                               },
                             ),
@@ -3395,6 +3366,7 @@ class InlineSearchResults extends StatelessWidget {
                     repository,
                     coverHeroTag: CoverHeroTag(context, book.id),
                     fromCache: fromCache,
+                    entry: entry,
                   );
                 },
               ),
@@ -5420,6 +5392,7 @@ class _ReaderPageState extends State<ReaderPage>
     final theme = Theme.of(context);
     final dark = theme.brightness == Brightness.dark;
     final scheme = readerFollowsSystemPalette(widget.state, prefs) ? theme.colorScheme : null;
+    final selectionColor = theme.textSelectionTheme.selectionColor!;
     bridge.motionPreferences(prefs, dark, systemPalette: scheme);
     final hidden = widget.state.hiddenReaderLanguagesFor(widget.novel.id);
     final only = widget.state.onlyReaderLanguageFor(widget.novel.id);
@@ -5440,7 +5413,7 @@ class _ReaderPageState extends State<ReaderPage>
           ReaderScrollLocation.extentOf(context),
     );
     final key =
-        '$pageInsets|$statusBand|${prefs.layoutKey}|${prefs.paper.name}|${prefs.nightTextBrightness}|${prefs.backgroundImage}|${prefs.backgroundOpacity}|${prefs.backgroundFit}|$_fontSize|$_lineHeight|$_readerFontId|$dark|${scheme?.surface.toARGB32()}|${scheme?.onSurface.toARGB32()}|$hidden|$only';
+        '$pageInsets|$statusBand|${prefs.layoutKey}|${prefs.paper.name}|${prefs.nightTextBrightness}|${prefs.backgroundImage}|${prefs.backgroundOpacity}|${prefs.backgroundFit}|$_fontSize|$_lineHeight|$_readerFontId|$dark|${scheme?.surface.toARGB32()}|${scheme?.onSurface.toARGB32()}|${selectionColor.toARGB32()}|$hidden|$only';
     if (_activityForeground && key != _nativePreferencesKey) {
       _nativePreferencesKey = key;
       // Supply initial defaults synchronously, before creating the native view.
@@ -5450,6 +5423,7 @@ class _ReaderPageState extends State<ReaderPage>
           fontSize: _fontSize,
           lineHeight: _lineHeight,
           dark: dark,
+          selectionColor: selectionColor,
           systemPalette: scheme,
           fontFamily: null,
           pageInsets: pageInsets,
@@ -5469,6 +5443,7 @@ class _ReaderPageState extends State<ReaderPage>
             fontSize: _fontSize,
             lineHeight: _lineHeight,
             dark: dark,
+            selectionColor: selectionColor,
             systemPalette: scheme,
             fontFamily: _readerFontFamily,
             pageInsets: pageInsets,
@@ -5486,6 +5461,7 @@ class _ReaderPageState extends State<ReaderPage>
             fontSize: _fontSize,
             lineHeight: _lineHeight,
             dark: dark,
+            selectionColor: selectionColor,
             systemPalette: scheme,
             fontFamily: null,
             pageInsets: pageInsets,

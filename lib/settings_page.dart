@@ -199,9 +199,15 @@ class SettingsPage extends StatelessWidget {
             title: '点书直接阅读',
             description: '点按本地图书，从上次的位置继续阅读',
             value: state.directReadingOn(ReadingEntry.local),
-            onChanged: (enabled) => state.setDirectReadingPages(
-              enabled ? const {ReadingEntry.local} : const {},
-            ),
+            onChanged: (enabled) {
+              final entries = {...state.directReadingPages};
+              if (enabled) {
+                entries.add(ReadingEntry.local);
+              } else {
+                entries.remove(ReadingEntry.local);
+              }
+              return state.setDirectReadingPages(entries);
+            },
           ),
           const Divider(height: 22),
           const Row(
@@ -215,7 +221,7 @@ class SettingsPage extends StatelessWidget {
                   style: TextStyle(fontWeight: FontWeight.w600),
                 ),
               ),
-              AppText('本地'),
+              AppText('书架'),
             ],
           ),
           const Divider(height: 22),

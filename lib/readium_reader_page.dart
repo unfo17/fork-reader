@@ -1258,6 +1258,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     required double fontSize,
     required double lineHeight,
     required bool dark,
+    required Color selectionColor,
     ColorScheme? systemPalette,
     required String? fontFamily,
     required EdgeInsets pageInsets,
@@ -1392,11 +1393,26 @@ class ReadiumReaderBridge extends ChangeNotifier {
             backgroundFile != null ||
             prefs.paper != ReaderPaper.system ||
             prefs.darkPaper(dark);
+        final selectionInk =
+            'rgba(${(selectionColor.r * 255).round()},'
+            '${(selectionColor.g * 255).round()},'
+            '${(selectionColor.b * 255).round()},${selectionColor.a})';
+        final selectionCss =
+            '::selection,body *::selection{background-color:$selectionInk !important;}';
         await native.invokeMethod<String>('style', {
           'script':
               '''(function(){
                 var root=document.documentElement,body=document.body;
                 if(!body)return;
+                var tint=document.getElementById('wenku-reader-selection');
+                if(!tint){
+                  tint=document.createElement('style');
+                  tint.id='wenku-reader-selection';
+                  (document.head||root).appendChild(tint);
+                }
+                var selectionCss=${jsonEncode(selectionCss)};
+                if(tint.textContent!==selectionCss)tint.textContent=selectionCss;
+                if(${_fixedLayout == true})return;
                 if(!window.__wenkuPageReady)window.__wenkuPageReady=function(){
                   // Off-screen images in this chapter can finish independently.
                   if(document.readyState==='loading')return false;

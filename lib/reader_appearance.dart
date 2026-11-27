@@ -23,6 +23,10 @@ ThemeData readerTheme(
   // Dim only the article's ink. Sliders, buttons and text selection retain
   // their readable control contrast while a user previews night text levels.
   final ink = systemPaper ? app.colorScheme.onSurface : preferences.controlForeground(appDark);
+  final selectionAccent = systemPaper ? app.colorScheme.primary : ink;
+  final selectionColor = selectionAccent.withValues(
+    alpha: systemPaper ? (dark ? .38 : .27) : (dark ? .20 : .18),
+  );
   Color raised(double amount) => Color.lerp(paper, ink, amount)!;
   final scheme = base.colorScheme.copyWith(
     surface: paper,
@@ -57,9 +61,14 @@ ThemeData readerTheme(
     inputDecorationTheme: base.inputDecorationTheme.copyWith(
       fillColor: scheme.surfaceContainerLow,
     ),
+    textSelectionTheme: TextSelectionThemeData(
+      cursorColor: selectionAccent,
+      selectionColor: selectionColor,
+      selectionHandleColor: selectionAccent,
+    ),
     cupertinoOverrideTheme: CupertinoThemeData(
       brightness: brightness,
-      primaryColor: ink,
+      primaryColor: selectionAccent,
       primaryContrastingColor: paper,
       scaffoldBackgroundColor: paper,
     ),
@@ -118,14 +127,14 @@ class _ReaderAppearanceState extends State<ReaderAppearance> {
   ThemeData? _base, _theme;
   ReaderPaper? _paper;
   String? _family;
-  (Color, Color)? _systemPalette;
+  (Color, Color, Color)? _systemPalette;
   ThemeData _resolve() {
     final preferences = widget.state.readerPreferencesFor(widget.bookId);
     final paper = preferences.paper;
     final family = widget.state.readerFontFamilyFor(widget.bookId);
     final scheme = widget.appTheme.colorScheme;
     final systemPalette = readerFollowsSystemPalette(widget.state, preferences)
-        ? (scheme.surface, scheme.onSurface)
+        ? (scheme.surface, scheme.onSurface, scheme.primary)
         : null;
     if (_base?.brightness != widget.appTheme.brightness ||
         _paper != paper ||
@@ -155,9 +164,8 @@ class _ReaderAppearanceState extends State<ReaderAppearance> {
           // Theme alone does not replace MaterialApp's DefaultSelectionStyle.
           // Its app-light dark tint would disappear on a separately dark paper.
           child: DefaultSelectionStyle.merge(
-            selectionColor: theme.brightness == Brightness.dark
-                ? Colors.white.withValues(alpha: .20)
-                : Colors.black.withValues(alpha: .18),
+            selectionColor: theme.textSelectionTheme.selectionColor,
+            cursorColor: theme.textSelectionTheme.cursorColor,
             child: DefaultTextStyle(
               style: theme.textTheme.bodyMedium!,
               child: IconTheme(data: theme.iconTheme, child: child!),

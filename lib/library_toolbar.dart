@@ -271,7 +271,6 @@ class LibraryViewOptions extends StatelessWidget {
               'all': '全部',
               'local': '本地导入',
               'cached': '已缓存',
-              'online': '在线收藏',
             },
             source!,
             onSource!,

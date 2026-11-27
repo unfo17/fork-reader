@@ -487,7 +487,6 @@ object ReadiumReader :
     }
     suspend fun appApplyStyle(script: String): String? {
         appReaderStyleScript = script
-        if (currentPublication?.metadata?.layout == org.readium.r2.shared.publication.Layout.FIXED) return null
         appEvaluateAllWebViews(script)
         return null
     }
