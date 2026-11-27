@@ -582,6 +582,7 @@ class _ReportArtwork extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.all(22),
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(
