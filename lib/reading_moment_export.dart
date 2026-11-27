@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -51,6 +52,36 @@ Future<Uint8List> renderReadingArtworkPng(
   BuildContext context,
   Widget artwork, {
   required String name,
+}) => _withReadingArtwork(
+  context,
+  artwork,
+  name: name,
+  paint: true,
+  finish: (boundary) => renderReadingMomentPng(boundary, name: name),
+);
+
+Future<Size> measureReadingArtworkPng(BuildContext context, Widget artwork) =>
+    _withReadingArtwork(
+      context,
+      artwork,
+      name: '报告',
+      paint: false,
+      finish: (boundary) {
+        final size = boundary.size;
+        final ratio = _imageScale(size);
+        return Size(
+          (size.width * ratio).ceilToDouble(),
+          (size.height * ratio).ceilToDouble(),
+        );
+      },
+    );
+
+Future<T> _withReadingArtwork<T>(
+  BuildContext context,
+  Widget artwork, {
+  required String name,
+  required bool paint,
+  required FutureOr<T> Function(RenderRepaintBoundary) finish,
 }) async {
   const canvas = Size(386, 8192);
   final theme = Theme.of(context);
@@ -113,19 +144,23 @@ Future<Uint8List> renderReadingArtworkPng(
   void flush() {
     owner.buildScope(root);
     pipeline.flushLayout();
-    pipeline.flushCompositingBits();
-    pipeline.flushPaint();
+    if (paint) {
+      pipeline.flushCompositingBits();
+      pipeline.flushPaint();
+    }
   }
 
   try {
     flush();
-    // Cached image streams may finish attaching after the first build.
-    await Future<void>.delayed(Duration.zero);
-    flush();
+    if (paint) {
+      // Cached image streams may finish attaching after the first build.
+      await Future<void>.delayed(Duration.zero);
+      flush();
+    }
     if (boundary.size.height >= canvas.height) {
       throw FormatException('$name内容过长，无法完整生成图片');
     }
-    return await renderReadingMomentPng(boundary, name: name);
+    return await finish(boundary);
   } finally {
     owner.buildScope(
       root,
@@ -152,15 +187,7 @@ Future<Uint8List> renderReadingMomentPng(
   String name = '纪念',
 }) async {
   if (content.debugNeedsPaint) await WidgetsBinding.instance.endOfFrame;
-  final size = content.size;
-  final ratio = math.min(
-    1080 / size.width,
-    math.min(
-      8192 / size.height,
-      math.sqrt(12000000 / (size.width * size.height)),
-    ),
-  );
-  final image = await content.toImage(pixelRatio: ratio);
+  final image = await content.toImage(pixelRatio: _imageScale(content.size));
   try {
     final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
     if (bytes == null) throw FormatException('$name图片未能生成');
@@ -173,3 +200,11 @@ Future<Uint8List> renderReadingMomentPng(
     image.dispose();
   }
 }
+
+double _imageScale(Size size) => math.min(
+  1080 / size.width,
+  math.min(
+    8192 / size.height,
+    math.sqrt(12000000 / (size.width * size.height)),
+  ),
+);

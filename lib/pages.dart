@@ -189,6 +189,7 @@ class HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
     2 => _localSearch,
     _ => _searchFeed,
   };
+  final _localLibrary = LocalLibraryController();
   List<Widget> _pageWidgets = const [];
   List<WidgetBuilder> _headers = const [];
   int _tab = 0;
@@ -268,17 +269,46 @@ class HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
       onSearch: _openSearch,
       navigation: _navigation,
     );
+    final local = widget.repository is OfflineNovelRepository
+        ? (widget.repository as OfflineNovelRepository).local
+        : null;
+    final localPage = local == null
+        ? null
+        : LocalLibraryPage(
+            books: local,
+            state: widget.state,
+            controller: _localLibrary,
+            showHeader: false,
+            compactMainPageControls: true,
+            onSearch: _openSearch,
+            onOpen: (page, book) => openDetail(
+              page,
+              book,
+              widget.state,
+              widget.repository,
+              entry: ReadingEntry.local,
+            ),
+            onOpenWithCover: (page, book, tag) => openDetail(
+              page,
+              book,
+              widget.state,
+              widget.repository,
+              coverHeroTag: tag,
+              entry: ReadingEntry.local,
+            ),
+          );
     _headers = [
       (_) => const SizedBox.shrink(),
       shelf.buildHeader,
-      (_) => const SizedBox.shrink(),
+      localPage?.buildHeader ??
+          (_) => const ArchiveMasthead(title: '本地', code: '03 / LOCAL ARCHIVE'),
       settings.buildHeader,
     ];
     _pageWidgets =
         [
               const SizedBox.shrink(),
               shelf,
-              const SizedBox.shrink(),
+              localPage ?? const Center(child: AppText('当前数据源未启用本地书库')),
               settings,
             ].indexed
             .map(
@@ -357,6 +387,7 @@ class HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
     _searchFeed.dispose();
     _shelfSearch.dispose();
     _localSearch.dispose();
+    _localLibrary.dispose();
     for (final scroll in _tabScrolls) {
       scroll.dispose();
     }
@@ -483,6 +514,7 @@ class HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
 
   void _selectTab(int index) {
     if (index == _tab || !_visibleTabs.contains(index)) return;
+    if (index == 2) _localLibrary.refresh?.call();
     FocusManager.instance.primaryFocus?.unfocus();
     final reduceMotion =
         widget.state.reduceMotion || MediaQuery.disableAnimationsOf(context);
@@ -1535,10 +1567,7 @@ void openDetail(
 }) {
   final local = isLocalBook(novel.id);
   final cached = fromCache && !local;
-  final readingEntry = entry == ReadingEntry.shelf && local
-      ? ReadingEntry.local
-      : entry;
-  if (state.directReadingOn(readingEntry) && !forceDetails) {
+  if (state.directReadingOn(entry) && !forceDetails) {
     unawaited(
       pushNovelPage<void>(
         context,

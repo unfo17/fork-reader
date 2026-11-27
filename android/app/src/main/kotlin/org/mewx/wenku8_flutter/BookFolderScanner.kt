@@ -12,10 +12,10 @@ import java.util.UUID
 /** Explicitly authorized SAF trees and optional shared storage only. */
 internal class BookFolderScanner(private val activity: Activity) {
     private val prefs = activity.getSharedPreferences("book_scan_folders", 0)
-    private data class Entry(val uri: Uri, val name: String, val size: Long, val modified: Long, val grant: Uri?)
+    private data class Entry(val uri: Uri, val name: String, val size: Long, val modified: Long, val grant: Uri?, val folder: String)
     private val pending = linkedMapOf<String, Entry>()
-    fun formats(): Set<String> = prefs.getStringSet("formats", setOf("txt", "epub", "zip"))!!.toSet()
-    fun setFormats(values: List<String>) { check(prefs.edit().putStringSet("formats", values.filter { it in setOf("txt", "epub", "zip") }.toSet()).commit()) }
+    fun formats(): Set<String> = prefs.getStringSet("formats", BookArchiveImport.extensions)!!.toSet()
+    fun setFormats(values: List<String>) { check(prefs.edit().putStringSet("formats", values.filter { it in BookArchiveImport.extensions }.toSet()).commit()) }
     fun setAutomatic(value: Boolean) { check(prefs.edit().putBoolean("automatic", value).commit()) }
     fun canReadAll() = if (Build.VERSION.SDK_INT >= 30) Environment.isExternalStorageManager() else
         activity.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -44,8 +44,9 @@ internal class BookFolderScanner(private val activity: Activity) {
         check(info()?.get("readable") == true) { "请先选择并授权扫描文件夹" }
         pending.clear(); var total = 0; var unchanged = 0; var examined = 0
         val warnings = mutableListOf<String>()
+        val activeFormats = formats()
         fun add(entry: Entry) {
-            if (!formats().contains(entry.name.substringAfterLast('.').lowercase())) return
+            if (BookArchiveImport.extension(entry.name) !in activeFormats) return
             if (!BookArchiveImport.supported(entry.name)) return
             total++
             val signature = "${entry.size}:${entry.modified}"
@@ -54,28 +55,28 @@ internal class BookFolderScanner(private val activity: Activity) {
         }
         val tree = prefs.getString("tree", null)?.let(Uri::parse)
         if (tree != null) {
-            val queue = java.util.ArrayDeque<Pair<String, Int>>()
-            queue.add(DocumentsContract.getTreeDocumentId(tree) to 0)
+            val queue = java.util.ArrayDeque<Triple<String, Int, String>>()
+            queue.add(Triple(DocumentsContract.getTreeDocumentId(tree), 0, ""))
             while (!queue.isEmpty() && examined < 12000) {
-                val (id, depth) = queue.removeFirst()
+                val (id, depth, folder) = queue.removeFirst()
                 if (depth > 24) continue
                 val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, id)
                 activity.contentResolver.query(children, arrayOf("document_id", "_display_name", "mime_type", "_size", "last_modified"), null, null, null)?.use { cursor ->
                     while (cursor.moveToNext() && examined++ < 12000) {
                         val child = cursor.getString(0); val name = cursor.getString(1) ?: continue
-                        if (cursor.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR) queue.add(child to depth + 1)
-                        else add(Entry(DocumentsContract.buildDocumentUriUsingTree(tree, child), name, cursor.getLong(3), cursor.getLong(4), tree))
+                        if (cursor.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR) queue.add(Triple(child, depth + 1, listOf(folder, name).filter(String::isNotEmpty).joinToString("/")))
+                        else add(Entry(DocumentsContract.buildDocumentUriUsingTree(tree, child), name, cursor.getLong(3), cursor.getLong(4), tree, folder))
                     }
                 }
             }
         } else {
             @Suppress("DEPRECATION") val root = Environment.getExternalStorageDirectory()
             root.walkTopDown().maxDepth(24).onEnter { !it.name.startsWith('.') && it.name != "Android" }.take(12000).forEach { file ->
-                examined++; if (file.isFile && file.canRead()) add(Entry(Uri.fromFile(file), file.name, file.length(), file.lastModified(), null))
+                examined++; if (file.isFile && file.canRead()) add(Entry(Uri.fromFile(file), file.name, file.length(), file.lastModified(), null, file.parentFile?.relativeTo(root)?.invariantSeparatorsPath.orEmpty()))
             }
         }
         if (examined >= 12000) warnings += "扫描达到 12000 项上限，请选择较小的文件夹"
-        return mapOf("books" to pending.map { (token, entry) -> mapOf("token" to token, "name" to entry.name, "size" to entry.size, "folder" to "") }, "total" to total, "unchanged" to unchanged, "warnings" to warnings)
+        return mapOf("books" to pending.map { (token, entry) -> mapOf("token" to token, "name" to entry.name, "size" to entry.size, "folder" to entry.folder) }, "total" to total, "unchanged" to unchanged, "warnings" to warnings)
     }
     fun stage(token: String, root: File, copy: (Uri, File, Long) -> Unit): Map<String, String> {
         val entry = checkNotNull(pending[token]) { "扫描结果已过期" }; root.mkdirs()

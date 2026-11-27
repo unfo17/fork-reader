@@ -548,6 +548,7 @@ class LibraryState extends ChangeNotifier {
         _prefs.get('directReading') == true && _directReadingPages.isNotEmpty;
     _openRecentOnLaunch = _prefs.get('openRecentOnLaunch') == true;
     _startPage = AppStartPage.parseOrDefault(_prefs.get('startPage'));
+    _combinedShelf = _prefs.get('combinedShelf') != false;
     _blockedTags = BlockedTags.fromRecord(
       _prefs.get(BlockedTags.preferenceKey),
     );
@@ -775,6 +776,7 @@ class LibraryState extends ChangeNotifier {
   bool _directReadingEnabled = false;
   bool _openRecentOnLaunch = false;
   AppStartPage _startPage = AppStartPage.local;
+  bool _combinedShelf = true;
   ReaderPreferences _readerPreferences = const ReaderPreferences();
   final _bookReaderStyles = <int, ReaderBookStyle>{};
   int _metadataEncodes = 0;
@@ -958,8 +960,7 @@ class LibraryState extends ChangeNotifier {
       Set.unmodifiable(_directReadingPages);
   bool directReadingOn(ReadingEntry page) =>
       directReading && _directReadingPages.contains(page);
-  // Imports and the saved shelf share the same home page in this edition.
-  bool get combinedShelf => true;
+  bool get combinedShelf => _combinedShelf;
   List<String> get recentSearches => List.unmodifiable(_recentSearches);
   String get shelfSort => _shelfSort;
   String get shelfFilter => _shelfFilter;
@@ -1426,28 +1427,34 @@ class LibraryState extends ChangeNotifier {
   Future<void> setNavigationMode({
     bool? adaptWhenOffline,
     bool? localReaderMode,
+    bool? combinedShelf,
   }) async {
     if (_restoreBarrier case final barrier?) {
       return barrier.future.then(
         (_) => setNavigationMode(
           adaptWhenOffline: adaptWhenOffline,
           localReaderMode: localReaderMode,
+          combinedShelf: combinedShelf,
         ),
       );
     }
     await _queuePositionWrite(() async {
       final offline = adaptWhenOffline ?? _adaptWhenOffline;
       final local = localReaderMode ?? _localReaderMode;
+      final combined = combinedShelf ?? _combinedShelf;
       if (offline == _adaptWhenOffline &&
-          local == _localReaderMode) {
+          local == _localReaderMode &&
+          combined == _combinedShelf) {
         return;
       }
       await _commitLibraryRecords({
         'adaptWhenOffline': offline,
         'localReaderMode': local,
+        'combinedShelf': combined,
       });
       _adaptWhenOffline = offline;
       _localReaderMode = local;
+      _combinedShelf = combined;
       if (!_disposed) {
         _navigationChanges.notifyListeners();
         _shelfViewChanges.notifyListeners();
@@ -3805,6 +3812,9 @@ class LibraryState extends ChangeNotifier {
           }
           if (records['startPage'] case final String value) {
             _startPage = AppStartPage.parseOrDefault(value);
+          }
+          if (records['combinedShelf'] case final bool value) {
+            _combinedShelf = value;
           }
           if (records.containsKey('directReadingPages') ||
               records.containsKey('directReading')) {

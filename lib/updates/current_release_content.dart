@@ -6,8 +6,8 @@ class ReleaseSection {
   final List<String> items;
 }
 
-const _opening = '恢复图片阅读报告的日期、主题、内容、隐私、完整预览、保存和分享。';
-const _swipes = '统一设置首页卡片间距，并对齐阅读与外观、使用方式中的设置行。';
+const _opening = '按原版流程调整图片报告：同页编辑、即时更新、完整缩放预览、保存与分享。';
+const _swipes = '恢复原版的书架与启动设置控件，补齐本地书籍的扫描、筛选和多格式导入。';
 const _androidInstall = '已安装本仓库固定签名版的 Android 用户可以直接覆盖更新，书籍和阅读记录会保留。';
 
 const publicReleaseNotes =

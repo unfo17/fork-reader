@@ -5,6 +5,7 @@ import 'app_interactions.dart';
 import 'app_ui.dart';
 import 'archive_feature_ui.dart';
 import 'backup_page.dart';
+import 'book_collection_mode.dart';
 import 'dictionary_sheet.dart';
 import 'font_settings_page.dart';
 import 'frame_rate_settings.dart';
@@ -52,7 +53,7 @@ class SettingsPage extends StatelessWidget {
           context,
           id: 'usage',
           title: '使用方式',
-          subtitle: '启动与续读、阅读偏好',
+          subtitle: '启动与续读、书架及阅读器模式',
           code: 'SYSTEM / USAGE',
           icon: CupertinoIcons.square_grid_2x2,
           options: _usageOptions,
@@ -182,60 +183,124 @@ class SettingsPage extends StatelessWidget {
     ),
   );
 
-  List<Widget> _usageOptions(BuildContext context) => [
-    ContentPanel(
-      child: Column(
-        children: [
-          if (LocalPlatform.readerAppearance) ...[
+  List<Widget> _usageOptions(BuildContext context) {
+    const scopes = {ReadingEntry.shelf, ReadingEntry.local};
+    final direct = scopes.any(state.directReadingOn);
+    final startup = state.combinedShelf
+        ? AppStartPage.shelf
+        : state.localReaderMode
+        ? AppStartPage.local
+        : state.startPage == AppStartPage.discovery
+        ? AppStartPage.shelf
+        : state.startPage;
+    return [
+      ContentPanel(
+        child: Column(
+          children: [
+            if (LocalPlatform.readerAppearance) ...[
+              _toggleSetting(
+                context,
+                keyName: 'settings-force-portrait',
+                icon: CupertinoIcons.lock_rotation,
+                title: '强制竖屏',
+                description: '仅本 App 固定竖屏，关闭后跟随系统',
+                value: state.forcePortrait,
+                onChanged: state.setForcePortrait,
+              ),
+              const Divider(height: 22),
+            ],
             _toggleSetting(
               context,
-              keyName: 'settings-force-portrait',
-              icon: CupertinoIcons.lock_rotation,
-              title: '强制竖屏',
-              description: '仅本 App 固定竖屏，关闭后跟随系统',
-              value: state.forcePortrait,
-              onChanged: state.setForcePortrait,
+              keyName: 'settings-direct-reading',
+              icon: CupertinoIcons.book_fill,
+              title: '点书直接阅读',
+              description: '选择适用页面（可多选），从上次位置继续',
+              value: direct,
+              onChanged: (enabled) {
+                if (!enabled) return state.setDirectReading(false);
+                final saved = state.directReadingPages.intersection(scopes);
+                return state.setDirectReadingPages(
+                  saved.isEmpty ? scopes : saved,
+                );
+              },
+            ),
+            if (direct)
+              Padding(
+                padding: const EdgeInsets.only(top: 8, left: 36),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final page in scopes)
+                      GlassTextButton(
+                        key: ValueKey('settings-direct-reading-${page.name}'),
+                        selected: state.directReadingOn(page),
+                        onPressed: () => _savePreference(
+                          context,
+                          () => state.setDirectReadingPages({
+                            ...state.directReadingPages.where(
+                              (p) => p != page && scopes.contains(p),
+                            ),
+                            if (!state.directReadingOn(page)) page,
+                          }),
+                        ),
+                        child: AppText(page.label),
+                      ),
+                  ],
+                ),
+              ),
+            const Divider(height: 22),
+            GlassSettingMenu<AppStartPage>(
+              key: const ValueKey('settings-start-page'),
+              icon: CupertinoIcons.house,
+              label: '启动页面',
+              value: startup,
+              options: {
+                if (!state.localReaderMode || state.combinedShelf)
+                  AppStartPage.shelf: '书架',
+                if (!state.combinedShelf) AppStartPage.local: '本地',
+              },
+              reduceMotion: state.reduceMotion,
+              onChanged: (page) =>
+                  _savePreference(context, () => state.setStartPage(page)),
             ),
             const Divider(height: 22),
+            _toggleSetting(
+              context,
+              keyName: 'settings-open-recent-on-launch',
+              icon: CupertinoIcons.clock,
+              title: '启动时继续阅读',
+              description: '打开应用后进入最近读过的书',
+              value: state.openRecentOnLaunch,
+              onChanged: state.setOpenRecentOnLaunch,
+            ),
+            const Divider(height: 22),
+            _toggleSetting(
+              context,
+              keyName: 'settings-combined-shelf',
+              icon: CupertinoIcons.square_stack,
+              title: '合并书架',
+              description: '已缓存的收藏与本地书统一显示在书架',
+              value: state.combinedShelf,
+              onChanged: (value) =>
+                  state.setNavigationMode(combinedShelf: value),
+            ),
+            const Divider(height: 22),
+            _toggleSetting(
+              context,
+              keyName: 'settings-local-reader-mode',
+              icon: CupertinoIcons.book,
+              title: '阅读器模式',
+              description: state.combinedShelf ? '只显示合并书架和我的' : '只显示本地和我的',
+              value: state.localReaderMode,
+              onChanged: (value) =>
+                  state.setNavigationMode(localReaderMode: value),
+            ),
           ],
-          _toggleSetting(
-            context,
-            keyName: 'settings-direct-reading',
-            icon: CupertinoIcons.book_fill,
-            title: '点书直接阅读',
-            description: '点按本地图书，从上次的位置继续阅读',
-            value: state.directReadingOn(ReadingEntry.local),
-            onChanged: (enabled) {
-              final entries = {...state.directReadingPages};
-              if (enabled) {
-                entries.add(ReadingEntry.local);
-              } else {
-                entries.remove(ReadingEntry.local);
-              }
-              return state.setDirectReadingPages(entries);
-            },
-          ),
-          const Divider(height: 22),
-          const _SettingsRow(
-            key: ValueKey('settings-start-page'),
-            icon: CupertinoIcons.house,
-            title: '启动页面',
-            trailing: AppText('书架'),
-          ),
-          const Divider(height: 22),
-          _toggleSetting(
-            context,
-            keyName: 'settings-open-recent-on-launch',
-            icon: CupertinoIcons.clock,
-            title: '启动时继续阅读',
-            description: '打开应用后进入最近读过的书',
-            value: state.openRecentOnLaunch,
-            onChanged: state.setOpenRecentOnLaunch,
-          ),
-        ],
+        ),
       ),
-    ),
-  ];
+    ];
+  }
 
   List<Widget> _readingOptions(BuildContext context) => [
     FeatureEntry(
@@ -535,7 +600,7 @@ class SettingsPage extends StatelessWidget {
       ),
       const SizedBox(height: 14),
       FeatureEntry(
-        title: '清理插图内存',
+        title: '清理插图缓存',
         icon: CupertinoIcons.photo,
         subtitle: '释放临时插图内存，保留图书和阅读记录',
         onTap: () async {
@@ -653,16 +718,10 @@ class SettingsPage extends StatelessWidget {
 }
 
 class _SettingsRow extends StatelessWidget {
-  const _SettingsRow({
-    super.key,
-    required this.icon,
-    required this.title,
-    this.trailing = const ArchiveIcon(CupertinoIcons.chevron_forward, size: 14),
-  });
+  const _SettingsRow({required this.icon, required this.title});
 
   final IconData icon;
   final String title;
-  final Widget trailing;
 
   @override
   Widget build(BuildContext context) => ConstrainedBox(
@@ -678,7 +737,7 @@ class _SettingsRow extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 12),
-        trailing,
+        const ArchiveIcon(CupertinoIcons.chevron_forward, size: 14),
       ],
     ),
   );

@@ -7,47 +7,98 @@ import java.io.InputStream
 internal class BookArchiveImport(private val root: File) {
     companion object {
         const val MAX_ARCHIVE = 512L * 1024 * 1024
-        fun supported(name: String) = name.substringAfterLast('.').lowercase() in setOf("txt", "epub", "zip")
-        fun limit(name: String) = if (name.endsWith(".txt", true)) 128L * 1024 * 1024 else MAX_ARCHIVE
+        val extensions = setOf(
+            "txt", "epub", "zip", "mobi", "azw", "azw3", "prc", "pdf", "fb2",
+            "docx", "doc", "rtf", "html", "htm", "xhtml", "md", "markdown",
+        )
+        fun extension(name: String) = name.substringAfterLast('.').lowercase()
+        fun supported(name: String) = extension(name) in extensions
+        fun limit(name: String) = when (extension(name)) {
+            "epub", "pdf", "docx", "zip" -> MAX_ARCHIVE
+            "mobi", "azw", "azw3", "prc" -> 256L * 1024 * 1024
+            "html", "htm", "xhtml", "md", "markdown" -> 32L * 1024 * 1024
+            else -> 128L * 1024 * 1024
+        }
     }
+
     fun prepare(name: String, file: File) = prepare(name, BookDocumentInput(file))
+
     fun prepare(name: String, input: BookDocumentInput): List<Map<String, String>> {
-        require(supported(name)) { "预览版支持 EPUB、TXT 和 ZIP，请先转换其他文档" }
+        require(supported(name)) { "请选择支持的电子书或文档" }
         require(input.length() in 1..limit(name)) { "书籍为空或超过大小限制" }
         root.mkdirs()
-        if (!name.endsWith(".zip", true)) {
-            val target = File.createTempFile("prepared-", ".source", root)
-            try { input.inputStream().use { copy(it, target, limit(name)) } }
-            catch (error: Exception) { target.delete(); throw error }
-            return listOf(mapOf("name" to name, "path" to target.path))
+        if (extension(name) != "zip") {
+            return listOf(input.inputStream().use { prepareOne(name, it) })
         }
+
         val created = mutableListOf<File>()
         try {
-            val result = mutableListOf<Map<String, String>>()
             var total = 0L
             input.zip().use { zip ->
                 require(zip.entries.size <= 12000) { "ZIP 文件过多" }
-                for (entry in zip.entries) {
-                    if (entry.isDirectory) continue
-                    val display = entry.name.replace('\\', '/').substringAfterLast('/')
-                    if (!(display.endsWith(".txt", true) || display.endsWith(".epub", true))) continue
-                    require(result.size < 256) { "一次最多导入 256 本书" }
-                    val target = File.createTempFile("prepared-", ".source", root)
-                    created += target
-                    try {
-                        zip.getInputStream(entry).use { copy(it, target, limit(display)) { count ->
-                            total += count; require(total <= 1024L * 1024 * 1024) { "ZIP 展开后超过 1 GiB" }
-                        } }
-                        result += mapOf("name" to display, "path" to target.path)
-                    } catch (error: Exception) {
-                        target.delete()
-                        result += mapOf("name" to display, "error" to (error.message ?: "压缩文件损坏"))
+                val entries = zip.entries.filter { !it.isDirectory && supported(it.name) && extension(it.name) != "zip" }
+                require(entries.size <= 200) { "一次最多导入 200 本书" }
+                val byName = zip.entries.associateBy { it.name.replace('\\', '/') }
+                fun resource(parent: String, source: String): InputStream? {
+                    if (source.startsWith('/') || source.contains(':') || source.contains('\\')) return null
+                    val base = parent.substringBeforeLast('/', "")
+                    val relative = "$base/$source".trimStart('/')
+                    val parts = ArrayDeque<String>()
+                    for (part in relative.split('/')) {
+                        when (part) {
+                            "." -> Unit
+                            ".." -> if (parts.isEmpty()) return null else parts.removeLast()
+                            else -> parts.addLast(part)
+                        }
+                    }
+                    return byName[parts.joinToString("/")]?.let { entry ->
+                        if (entry.size > 8L * 1024 * 1024) return null
+                        zip.getInputStream(entry)
                     }
                 }
+                return entries.map { entry ->
+                    val relative = entry.name.replace('\\', '/')
+                    val display = relative.substringAfterLast('/')
+                    try {
+                        zip.getInputStream(entry).use { data ->
+                            prepareOne(display, data, { count ->
+                                total += count
+                                require(total <= 1024L * 1024 * 1024) { "ZIP 展开后超过 1 GiB" }
+                            }) { source -> resource(relative, source) }
+                        }.also { created += File(it.getValue("path")) }
+                    } catch (error: Exception) {
+                        if (total > 1024L * 1024 * 1024) throw error
+                        mapOf("name" to display, "error" to (error.message ?: "文档未能解析"))
+                    }
+                }.also { require(it.isNotEmpty()) { "ZIP 中未找到支持的电子书或文档" } }
             }
-            require(result.isNotEmpty()) { "ZIP 中未找到 TXT 或 EPUB" }
-            return result
-        } catch (error: Exception) { created.forEach { it.delete() }; throw error }
+        } catch (error: Exception) {
+            created.forEach(File::delete)
+            throw error
+        }
+    }
+
+    private fun prepareOne(name: String, data: InputStream, onBytes: (Int) -> Unit = {},
+                           resource: ((String) -> InputStream?)? = null): Map<String, String> {
+        val target = File.createTempFile("prepared-", ".source", root)
+        try {
+            if (extension(name) in setOf("txt", "epub")) {
+                copy(data, target, limit(name), onBytes)
+                return mapOf("name" to name, "path" to target.path)
+            }
+            val work = java.nio.file.Files.createTempDirectory(root.toPath(), "book-convert-").toFile()
+            try {
+                val source = File(work, "source")
+                copy(data, source, limit(name), onBytes)
+                BookDocumentConversion(work).convert(name, source, target, resource)
+                return mapOf("name" to "${name.substringBeforeLast('.')}.epub", "path" to target.path)
+            } finally {
+                work.deleteRecursively()
+            }
+        } catch (error: Exception) {
+            target.delete()
+            throw error
+        }
     }
     private fun copy(input: InputStream, output: File, maximum: Long, onBytes: (Int) -> Unit = {}) {
         output.outputStream().use { sink ->

@@ -79,6 +79,7 @@ class LocalBookImporter extends ChangeNotifier {
   LocalBookImporter({
     required this.books,
     required this.library,
+    this.useShelfCategory = false,
     BookDocuments? documents,
     CloudSourceSettings? cloudSettings,
   }) : documents = documents ?? BookDocuments(),
@@ -86,6 +87,7 @@ class LocalBookImporter extends ChangeNotifier {
        _ownsCloud = cloudSettings == null;
   final LocalBookStore books;
   final LibraryState library;
+  final bool useShelfCategory;
   final BookDocuments documents;
   final CloudSourceSettings _cloud;
   final bool _ownsCloud;
@@ -290,7 +292,7 @@ class LocalBookImporter extends ChangeNotifier {
         final book = parent == null ? imported : books.book(parent.id)!;
         if (parent != null) await reconcileLocalSeries(books, library);
         await library.setShelfMembership(book.id, false, novel: book);
-        final group = library.combinedShelf
+        final group = useShelfCategory
             ? organization!.shelfSelected
             : organization!.selected;
         if (group != LocalLibraryPreferences.all &&
@@ -669,6 +671,7 @@ class _LocalBookImportButtonState extends State<LocalBookImportButton>
   late final importer = LocalBookImporter(
     books: widget.books,
     library: widget.library,
+    useShelfCategory: true,
   );
   bool _active = false;
   @override

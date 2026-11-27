@@ -170,6 +170,7 @@ class BookDocuments internal constructor(
             "prepareLinkedDocument" -> background(result, linked = true) {
                 val lease = links.openDocument(call.argument<String>("reference") ?: "")
                 try {
+                    com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(activity.applicationContext)
                     BookArchiveImport(importRoot)
                         .prepare(call.argument<String>("name") ?: "", if (lease["descriptor"] is Int)
                             BookDocumentInput(lease["descriptor"] as Int, lease["size"] as Long)
@@ -197,6 +198,7 @@ class BookDocuments internal constructor(
             "prepareBook" -> background(result) {
                 val source = bookTextFile(call.argument<String>("path") ?: "")
                 val staging = if (imports.initialized && source.parentFile == importRoot.canonicalFile) importRoot else root
+                com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(activity.applicationContext)
                 BookArchiveImport(staging)
                     .prepare(call.argument<String>("name") ?: "", source)
             }

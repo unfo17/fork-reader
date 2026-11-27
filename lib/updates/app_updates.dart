@@ -19,8 +19,8 @@ const updateRepository = String.fromEnvironment(
   'UPDATE_REPOSITORY',
   defaultValue: readiumUpdateRepository,
 );
-const currentAppVersion = '0.5.6-readium-preview.40';
-const currentAppBuild = 2348;
+const currentAppVersion = '0.5.6-readium-preview.41';
+const currentAppBuild = 2349;
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {
   const ReleaseVersion(

@@ -28,9 +28,13 @@ class HomeNavigation extends ChangeNotifier {
   // The preview ships the local library and saved chapters. Its remote
   // repository cannot load books that have not been cached.
   bool get readableShelfOnly => true;
-  List<int> get tabs => const [1, 3];
+  List<int> get tabs => combinedShelf
+      ? const [1, 3]
+      : localReader
+      ? const [2, 3]
+      : const [1, 2, 3];
 
-  int destination(int current) => tabs.contains(current) ? current : 1;
+  int destination(int current) => tabs.contains(current) ? current : tabs.first;
 
   void _changed() {
     final next = _read();

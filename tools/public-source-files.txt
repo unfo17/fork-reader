@@ -25,6 +25,7 @@ android/app/src/main/cpp/mobi_jni.c
 android/app/src/main/kotlin/org/mewx/wenku8_flutter/AppHapticsPlugin.kt
 android/app/src/main/kotlin/org/mewx/wenku8_flutter/AppUpdatePlugin.kt
 android/app/src/main/kotlin/org/mewx/wenku8_flutter/BookArchiveImport.kt
+android/app/src/main/kotlin/org/mewx/wenku8_flutter/BookDocumentConversion.kt
 android/app/src/main/kotlin/org/mewx/wenku8_flutter/BookDocumentInput.kt
 android/app/src/main/kotlin/org/mewx/wenku8_flutter/BookDocuments.kt
 android/app/src/main/kotlin/org/mewx/wenku8_flutter/BookEpubWriter.kt
