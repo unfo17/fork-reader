@@ -51,8 +51,9 @@ class ArchiveFeaturePage extends StatelessWidget {
     required this.child,
     this.actions = const [],
     this.canPop = true,
+    this.backLabel = '返回',
   });
-  final String title, code;
+  final String title, code, backLabel;
   final Widget child;
   final List<Widget> actions;
   final bool canPop;
@@ -64,7 +65,7 @@ class ArchiveFeaturePage extends StatelessWidget {
           header: ArchiveHeaderBar(
             leading: GlassIconButton(
               icon: CupertinoIcons.back,
-              label: '返回',
+              label: backLabel,
               onPressed: canPop ? () => Navigator.pop(context) : null,
             ),
             title: ArchiveRouteTitle(title: title, code: code),
@@ -152,4 +153,72 @@ class FeatureError extends StatelessWidget {
             ),
           ),
         );
+}
+
+/// Keeps confirmation controls in view while the selection list scrolls.
+class FeatureActionLayout extends StatelessWidget {
+  const FeatureActionLayout({
+    super.key,
+    required this.actions,
+    required this.builder,
+  });
+  final List<Widget> actions;
+  final Widget Function(BuildContext, double bottomPadding) builder;
+
+  @override
+  Widget build(BuildContext context) {
+    final safeBottom = MediaQuery.paddingOf(context).bottom;
+    final actionsHeight =
+        64.0 * MediaQuery.textScalerOf(context).scale(14) / 14;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        builder(context, safeBottom + actionsHeight + 20),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: Stack(
+            alignment: Alignment.bottomCenter,
+            children: [
+              DockUnderlay(contentHeight: actionsHeight),
+              Padding(
+                padding: EdgeInsets.fromLTRB(24, 0, 24, safeBottom + 12),
+                child: Row(children: actions),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class FeatureActionLabel extends StatelessWidget {
+  const FeatureActionLabel(this.icon, this.label, {super.key});
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      ExcludeSemantics(child: ArchiveIcon(icon, size: 18)),
+      const SizedBox(width: 8),
+      Flexible(child: AppText(label, textAlign: TextAlign.center)),
+    ],
+  );
+}
+
+class FeatureSelectionMark extends StatelessWidget {
+  const FeatureSelectionMark({super.key, required this.selected});
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) => ExcludeSemantics(
+    child: ArchiveIcon(
+      selected ? CupertinoIcons.check_mark_circled : CupertinoIcons.circle,
+      size: 21,
+    ),
+  );
 }

@@ -635,6 +635,7 @@ lib/reading_moment_reveal.dart
 lib/reading_moments.dart
 lib/reading_moments_settings_page.dart
 lib/reading_moments_ui.dart
+lib/reading_report_artwork.dart
 lib/reading_report_dimensions.dart
 lib/reading_report_fonts.dart
 lib/reading_report_options.dart

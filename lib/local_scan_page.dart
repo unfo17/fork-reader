@@ -1,5 +1,4 @@
 import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
 
 import 'app_ui.dart';
 import 'archive_feature_ui.dart';
@@ -78,15 +77,22 @@ class _LocalScanPageState extends State<LocalScanPage> {
     _formats = value;
   });
 
+  void _saveAutomatic(bool value) => _change(() async {
+    await widget.documents.setScanAutomatic(value);
+    _folder = await widget.documents.scanFolderInfo();
+  });
+
   @override
   Widget build(BuildContext context) => ArchiveFeaturePage(
     title: '扫描本地书籍',
-    code: 'LOCAL / SCAN',
+    code: 'LOCAL / FOLDER SCAN',
+    backLabel: '返回书库',
     child: ListenableBuilder(
       listenable: widget.changes,
       builder: (context, _) {
         final available = bookFormatLabels;
         final selected = _formats ?? const <String>{};
+        final allFormats = selected.containsAll(available.keys);
         final busy = _changing || widget.isBusy();
         final folder = _folder;
         final result = widget.result();
@@ -112,7 +118,7 @@ class _LocalScanPageState extends State<LocalScanPage> {
                         children: [
                           GlassTextButton(
                             compact: true,
-                            selected: selected.containsAll(available.keys),
+                            selected: allFormats,
                             onPressed: busy
                                 ? null
                                 : () => _saveFormats(available.keys.toSet()),
@@ -121,14 +127,21 @@ class _LocalScanPageState extends State<LocalScanPage> {
                           for (final entry in available.entries)
                             GlassTextButton(
                               compact: true,
-                              selected: selected.contains(entry.key),
+                              selected:
+                                  !allFormats && selected.contains(entry.key),
                               onPressed: busy
                                   ? null
                                   : () {
-                                      final next = {...selected};
+                                      final next = allFormats
+                                          ? <String>{}
+                                          : {...selected};
                                       next.remove(entry.key) ||
                                           next.add(entry.key);
-                                      _saveFormats(next);
+                                      _saveFormats(
+                                        next.isEmpty
+                                            ? available.keys.toSet()
+                                            : next,
+                                      );
                                     },
                               child: AppText(entry.value),
                             ),
@@ -142,8 +155,12 @@ class _LocalScanPageState extends State<LocalScanPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const AppText(
-                        '选择扫描范围',
+                      AppText(
+                        folder?.allStorage == true
+                            ? '全部共享存储'
+                            : folder?.readable == true
+                            ? folder!.name
+                            : '选择扫描范围',
                         style: TextStyle(fontWeight: FontWeight.w700),
                       ),
                       const SizedBox(height: 8),
@@ -155,62 +172,75 @@ class _LocalScanPageState extends State<LocalScanPage> {
                         onPressed: busy || selected.isEmpty
                             ? null
                             : () => _choose(all: true),
-                        child: const AppText('全部扫描'),
+                        child: const FeatureActionLabel(
+                          CupertinoIcons.search,
+                          '全部扫描',
+                        ),
                       ),
                       const SizedBox(height: 10),
                       GlassTextButton(
                         onPressed: busy || selected.isEmpty
                             ? null
                             : () => _choose(all: false),
-                        child: const AppText('指定文件夹扫描'),
+                        child: const FeatureActionLabel(
+                          CupertinoIcons.folder,
+                          '指定文件夹扫描',
+                        ),
                       ),
-                      if (folder != null) ...[
+                      if (folder != null && !folder.readable) ...[
                         const SizedBox(height: 14),
-                        AppText(
-                          folder.readable
-                              ? folder.name
-                              : '${folder.name} · 需要重新授权',
-                        ),
-                        if (folder.readable) ...[
-                          const SizedBox(height: 8),
-                          GlassTextButton(
-                            onPressed: busy || selected.isEmpty
-                                ? null
-                                : () => widget.onScan(context),
-                            child: const AppText('重新扫描'),
-                          ),
-                          Row(
-                            children: [
-                              const Expanded(child: AppText('自动扫描新增书籍')),
-                              AppControls.toggle(
-                                context,
-                                value: folder.automatic,
-                                onChanged: busy
-                                    ? null
-                                    : (enabled) => _change(() async {
-                                        await widget.documents.setScanAutomatic(
-                                          enabled,
-                                        );
-                                        _folder = await widget.documents
-                                            .scanFolderInfo();
-                                      }),
-                              ),
-                            ],
-                          ),
-                        ],
-                        GlassTextButton(
-                          onPressed: busy
-                              ? null
-                              : () => _change(() async {
-                                  await widget.documents.disconnectScanFolder();
-                                  _folder = null;
-                                }),
-                          child: const AppText('断开扫描范围'),
-                        ),
+                        AppText('${folder.name} · 需要重新授权'),
                       ],
                     ],
                   ),
                 ),
+                if (folder != null && folder.readable) ...[
+                  const SizedBox(height: 18),
+                  ContentPanel(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Expanded(
+                              child: AppText(
+                                '自动扫描新增书籍',
+                                style: TextStyle(fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                            AppControls.toggle(
+                              context,
+                              value: folder.automatic,
+                              onChanged: busy ? null : _saveAutomatic,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        const AppText('进入书库时只查找新增和更新的文件。扫描后由你勾选，不会自动导入。'),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  GlassTextButton(
+                    onPressed: busy || selected.isEmpty
+                        ? null
+                        : () => widget.onScan(context),
+                    child: const FeatureActionLabel(
+                      CupertinoIcons.refresh,
+                      '立即扫描',
+                    ),
+                  ),
+                  GlassTextButton(
+                    onPressed: busy
+                        ? null
+                        : () => _change(() async {
+                            await widget.documents.disconnectScanFolder();
+                            _folder = null;
+                            _formats = await widget.documents.scanFormats();
+                          }),
+                    child: const AppText('停止自动扫描'),
+                  ),
+                ],
                 if (busy) ...[
                   const SizedBox(height: 14),
                   RefreshProgress(

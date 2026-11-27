@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/cupertino.dart';
@@ -15,11 +16,11 @@ import 'reading_export_theme.dart';
 import 'reading_moment_export.dart';
 import 'reading_report_options.dart';
 import 'reading_report_range.dart';
-import 'reading_statistics_analysis.dart';
 import 'reading_statistics_charts.dart';
 import 'reading_statistics_data.dart';
-import 'reading_statistics_shared_charts.dart';
 import 'reading_visual_theme_picker.dart';
+
+part 'reading_report_artwork.dart';
 
 class ReadingReportPage extends StatefulWidget {
   const ReadingReportPage({
@@ -173,10 +174,7 @@ class _ReadingReportPageState extends State<ReadingReportPage> {
       if (preview) {
         await pushNovelPage<void>(
           context,
-          _ReportPreview(
-            bytes,
-            "${_options!.title}，${_day(_data.analysis.start)}至${_day(_data.analysis.end)}",
-          ),
+          _ReportPreview(bytes, _reportPreviewDescription(_options!, _data)),
           reduceMotion: widget.state.reduceMotion,
         );
       } else if (share) {
@@ -677,10 +675,49 @@ class _ReportCover extends StatelessWidget {
       fontWeight: FontWeight.w800,
       fontFamily: style.prefersSerif ? 'ReadingSerifDisplay' : null,
     );
+    final fullWidthArt = switch (options.template) {
+      ReadingReportTemplate.archive || ReadingReportTemplate.signal => false,
+      _ => true,
+    };
+    final art = ClipRRect(
+      borderRadius: BorderRadius.circular(fullWidthArt ? 2 : 8),
+      child: Image.asset(
+        _reportArt(options, data),
+        fit: BoxFit.cover,
+        alignment: style.previewAlignment,
+        excludeFromSemantics: true,
+        errorBuilder: (_, _, _) => ColoredBox(
+          color: style.secondary,
+          child: Icon(CupertinoIcons.book, color: tint, size: 42),
+        ),
+      ),
+    );
+    final title = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          options.title.trim().isEmpty ? '阅读报告' : options.title,
+          style: heading,
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+        ),
+        const SizedBox(height: 10),
+        Text(
+          options.nickname.trim().isEmpty ? '一位读者' : options.nickname,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+        const SizedBox(height: 5),
+        Text(
+          '${_reportDate(data.analysis.start)} — ${_reportDate(data.analysis.end)}',
+          style: TextStyle(color: style.muted, fontSize: 11),
+        ),
+      ],
+    );
     return ColoredBox(
       color: style.background,
       child: Padding(
-        padding: const EdgeInsets.all(18),
+        padding: const EdgeInsets.only(top: 5, bottom: 12),
         child: DefaultTextStyle(
           style: Theme.of(
             context,
@@ -691,372 +728,63 @@ class _ReportCover extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Icon(CupertinoIcons.book, color: tint, size: 19),
-                  const SizedBox(width: 6),
                   Expanded(
-                    child: Text(
-                      readingExportBrandName,
-                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          readingExportBrandName,
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        Text(
+                          'PERSONAL READING REPORT',
+                          style: TextStyle(
+                            fontSize: 9,
+                            letterSpacing: 1.1,
+                            color: style.muted,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   Text(
                     '${data.analysis.end.year}',
                     style: TextStyle(
                       color: tint,
-                      fontSize: 18,
+                      fontSize: 21,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 14),
-              Row(
-                children: [
-                  Expanded(
-                    flex: 6,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          options.title.trim().isEmpty ? '阅读报告' : options.title,
-                          style: heading,
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 14),
-                        Text(
-                          options.nickname.trim().isEmpty
-                              ? '一位读者'
-                              : options.nickname,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 5),
-                        Text(
-                          '${_day(data.analysis.start)} — ${_day(data.analysis.end)}',
-                          style: TextStyle(color: style.muted, fontSize: 11),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    flex: 5,
-                    child: AspectRatio(
-                      aspectRatio: 1,
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Image.asset(
-                          _reportArt(options, data),
-                          fit: BoxFit.cover,
-                          alignment: style.previewAlignment,
-                          excludeFromSemantics: true,
-                          errorBuilder: (_, _, _) => ColoredBox(
-                            color: style.secondary,
-                            child: Icon(
-                              CupertinoIcons.book,
-                              color: tint,
-                              size: 42,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ReportArtwork extends StatelessWidget {
-  const _ReportArtwork({required this.options, required this.data});
-  final ReadingReportOptions options;
-  final ReadingStatisticsData data;
-
-  Widget _metrics(List<(String, String)> values) => Wrap(
-    spacing: 18,
-    runSpacing: 9,
-    children: [
-      for (final (label, value) in values)
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              value,
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-            ),
-            Text(label, style: const TextStyle(fontSize: 12)),
-          ],
-        ),
-    ],
-  );
-
-  Widget _module(ReadingReportModule module) => switch (module) {
-    ReadingReportModule.rhythm =>
-      options.template == ReadingReportTemplate.archive
-          ? ReadingMonthlyChart(
-              dates: [for (final month in data.months) month.date],
-              seconds: [for (final month in data.months) month.seconds],
-              reduceMotion: true,
-            )
-          : ReadingRhythmChart(
-              dates: data.dates,
-              minutes: data.minutes,
-              averageMinutes: data.averageMinutes,
-              selectedIndex: data.dates.length - 1,
-              onSelected: (_) {},
-              reduceMotion: true,
-            ),
-    ReadingReportModule.days => _metrics([
-      ('活跃天数', '${data.activeDays} 天'),
-      ('最长连续阅读', '${data.analysis.longestStreak.days} 天'),
-      ('日均阅读', statisticsDuration(data.averageSeconds)),
-      ('记录覆盖', '${data.observedDays} / ${data.period} 天'),
-      if (data.peakDate case final day?)
-        ('最长的一日', '${_day(day)} · ${statisticsDuration(data.peakSeconds)}'),
-    ]),
-    ReadingReportModule.calendar =>
-      data.period > 93
-          ? ReadingActivityCalendar(
-              dates: data.dates,
-              seconds: data.seconds,
-              selectedDate: null,
-              onSelected: (_) {},
-              showDateAnchors: true,
-              reduceMotion: true,
-            )
-          : _ReportCalendar(data: data),
-    ReadingReportModule.books => Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (final (index, book) in _rankedReportBooks(
-          data,
-        ).take(options.bookLimit).indexed)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Text(
-              [
-                options.hideBookTitles ? '书籍 ${index + 1}' : book.title,
-                if (!options.hideAuthorNames &&
-                    book.book?.author.isNotEmpty == true)
-                  book.book!.author,
-                if (book.seconds case final duration?)
-                  statisticsDuration(duration)
-                else
-                  '阅读 ${book.activeDates.length} 天',
-              ].join(' · '),
-            ),
-          ),
-      ],
-    ),
-    ReadingReportModule.progress => _metrics([
-      ('有阅读记录', '${data.readingBooks} 本'),
-      ('读完', '${data.finishedBooks} 本'),
-      if (data.unknownProgress > 0) ('未知进度', '${data.unknownProgress} 本'),
-    ]),
-    ReadingReportModule.collection => _metrics([
-      ('本地书籍', '${data.localBooks} 本'),
-      if (data.onlineBooks > 0) ('收藏', '${data.onlineBooks} 本'),
-      if (!options.hideAuthorNames && data.authorCount > 0)
-        ('作者', '${data.authorCount} 位'),
-    ]),
-    ReadingReportModule.excerpts => Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _metrics([
-          ('书签', '${data.bookmarks} 条'),
-          ('划线', '${data.underlines} 条'),
-        ]),
-        for (final excerpt in data.excerpts.take(3))
-          Padding(
-            padding: const EdgeInsets.only(top: 10),
-            child: Text(
-              [
-                excerpt.quote,
-                if (!options.hideBookTitles &&
-                    excerpt.title.isNotEmpty &&
-                    excerpt.title != '书名待读取')
-                  excerpt.title,
-                if (options.includeNotes && excerpt.note.isNotEmpty)
-                  excerpt.note,
-              ].join('\n'),
-              maxLines: 8,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-      ],
-    ),
-  };
-
-  @override
-  Widget build(BuildContext context) {
-    final style = readingExportTheme(options.template.theme);
-    final tint = _reportTint(options);
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme.copyWith(
-      brightness: style.isDark ? Brightness.dark : Brightness.light,
-      surface: style.background,
-      onSurface: style.foreground,
-      onSurfaceVariant: style.muted,
-      primary: tint,
-      outline: Color.lerp(style.background, style.foreground, .35),
-      outlineVariant: Color.lerp(style.background, style.foreground, .18),
-    );
-    final available = _availableModules(data);
-    return Theme(
-      data: theme.copyWith(colorScheme: scheme),
-      child: Material(
-        color: style.background,
-        child: DefaultTextStyle(
-          style: theme.textTheme.bodyMedium!.copyWith(
-            color: style.foreground,
-            height: 1.45,
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(22),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _ReportCover(options: options, data: data),
-                if (options.note.trim().isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  Text(options.note, style: TextStyle(color: style.muted)),
-                ],
-                const SizedBox(height: 18),
-                if (data.observedDays > 0 ||
-                    data.analysis.coverage.hasTimeDetail)
-                  _metrics([
-                    (
-                      '阅读时长',
-                      _reportDuration(
-                        data.observedDays > 0
-                            ? data.periodSeconds
-                            : data.analysis.measuredSeconds,
-                      ),
-                    ),
-                    if (data.periodBooks > 0) ('读过的书', '${data.periodBooks} 本'),
-                  ])
-                else
-                  const Text('本期暂无阅读时长记录'),
-                for (final module in options.orderedModules)
-                  if (available.contains(module)) ...[
-                    const SizedBox(height: 22),
-                    Divider(height: 1, color: scheme.outlineVariant),
-                    const SizedBox(height: 12),
-                    Text(
-                      module.label,
-                      style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w700,
-                        color: tint,
-                      ),
-                    ),
-                    if (module == ReadingReportModule.progress ||
-                        module == ReadingReportModule.collection ||
-                        module == ReadingReportModule.excerpts)
-                      Text(
-                        '当前快照 · ${_day(data.analysis.snapshotAt)}',
-                        style: TextStyle(color: style.muted, fontSize: 11),
-                      ),
-                    const SizedBox(height: 8),
-                    _module(module),
-                  ],
-                if (options.signature) ...[
-                  const SizedBox(height: 12),
-                  const Text(
-                    readingExportBrandName,
-                    style: TextStyle(fontSize: 12),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ReportCalendar extends StatelessWidget {
-  const _ReportCalendar({required this.data});
-  final ReadingStatisticsData data;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final dates = {
-      for (final (i, date) in data.dates.indexed)
-        (date.year, date.month, date.day): data.seconds[i],
-    };
-    final months = {for (final date in data.dates) (date.year, date.month)};
-    final maximum = data.peakSeconds;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (final (year, month) in months) ...[
-          Padding(
-            padding: const EdgeInsets.only(top: 6, bottom: 4),
-            child: Text('$year 年 $month 月'),
-          ),
-          Table(
-            children: [
-              TableRow(
-                children: [
-                  for (final day in ['一', '二', '三', '四', '五', '六', '日'])
-                    Text(day, textAlign: TextAlign.center),
-                ],
-              ),
-              for (
-                var start = 2 - DateTime(year, month).weekday;
-                start <= DateUtils.getDaysInMonth(year, month);
-                start += 7
-              )
-                TableRow(
+              if (fullWidthArt) ...[
+                AspectRatio(
+                  aspectRatio: switch (options.template) {
+                    ReadingReportTemplate.editorial => 1.65,
+                    ReadingReportTemplate.shelf ||
+                    ReadingReportTemplate.ink => 2.1,
+                    _ => 2.35,
+                  },
+                  child: art,
+                ),
+                const SizedBox(height: 12),
+                title,
+              ] else
+                Row(
                   children: [
-                    for (var day = start; day < start + 7; day++)
-                      if (day < 1 ||
-                          day > DateUtils.getDaysInMonth(year, month))
-                        const SizedBox.shrink()
-                      else
-                        Padding(
-                          padding: const EdgeInsets.all(2),
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: switch (dates[(year, month, day)]) {
-                                null => null,
-                                0 => colors.outlineVariant,
-                                final seconds => colors.primary.withValues(
-                                  alpha: maximum <= 0
-                                      ? .20
-                                      : .20 + .32 * seconds / maximum,
-                                ),
-                              },
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              '$day',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: dates[(year, month, day)] == null
-                                    ? colors.onSurfaceVariant
-                                    : colors.onSurface,
-                              ),
-                            ),
-                          ),
-                        ),
+                    Expanded(flex: 6, child: title),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      flex: 5,
+                      child: AspectRatio(aspectRatio: .9, child: art),
+                    ),
                   ],
                 ),
             ],
           ),
-        ],
-      ],
+        ),
+      ),
     );
   }
 }
