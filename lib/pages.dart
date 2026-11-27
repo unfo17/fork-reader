@@ -63,7 +63,8 @@ import 'local_book_importer.dart';
 import 'local_text_reference.dart';
 import 'local_text_recovery.dart';
 import 'native_effects.dart' show NativeGlassGroup;
-import 'nearby_reading_page.dart';
+import 'lan_handoff_widgets.dart';
+import 'lan_reading_sync.dart';
 import 'network_status.dart';
 import 'novel_feed_controller.dart';
 import 'offline_repository.dart';
@@ -9443,7 +9444,7 @@ class _ReaderPageState extends State<ReaderPage>
   }
 
   bool _canHandoff(BuildContext context) {
-    final books = NearbyReadingScope.maybeOf(context)?.books;
+    final books = LanSyncScope.maybeOf(context)?.books;
     return books?.book(widget.novel.id) != null &&
         books?.isIncompleteBook(widget.novel.id) != true;
   }
@@ -11096,9 +11097,9 @@ class _ReaderPageState extends State<ReaderPage>
 
   Future<void> _openHandoff() async {
     if (_toolsOpen || _catalogueOpen || _findOpen || _detailsOpen) return;
-    final books = NearbyReadingScope.maybeOf(context)?.books;
+    final sync = LanSyncScope.maybeOf(context);
     final position = _currentPosition();
-    if (books == null || position == null || !_canHandoff(context)) return;
+    if (sync == null || position == null || !_canHandoff(context)) return;
     _cancelExitRequest();
     _selection.clear();
     _stopAutoScroll();
@@ -11110,11 +11111,12 @@ class _ReaderPageState extends State<ReaderPage>
         context: context,
         reduceMotion: widget.state.reduceMotion,
         surfaceWrapper: _readerSurface,
-        builder: (_) => NearbyReadingSendSheet(
-          books: books,
-          bookId: widget.novel.id,
+        builder: (_) => LanSendBookSheet(
+          sync: sync,
+          book: _sourceBook,
           position: position,
           locator: _readium?.locator?.toJson(),
+          reduceMotion: widget.state.reduceMotion,
         ),
       );
     } finally {

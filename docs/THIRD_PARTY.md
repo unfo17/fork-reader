@@ -44,7 +44,7 @@ OpenJDK 兼容库通过 Gradle 依赖引入，源码与构建脚本见 [google/d
 
 旧编码 TXT 检测使用 [juniversalchardet 2.0.4](https://github.com/albfernandez/juniversalchardet/tree/v2.0.4)。保留 MPL 1.1 / GPL 2.0-or-later / LGPL 2.1-or-later 三选一许可，本次分发选择 MPL 1.1。运行库源码、构建配置与许可在 `third_party/juniversalchardet-2.0.4/`；[来源记录](../third_party/JUNIVERSALCHARDET.md)与[原许可](../assets/licenses/juniversalchardet.txt)随应用提供。
 
-局域网续读当前预览版已停用，依赖 `cryptography` 2.9.0（Apache-2.0）保留原许可。旧 EPUB 定位迁移使用 `diff_match_patch` 0.4.1（Apache-2.0），仅在本机计算定位映射。系统朗读通过 Android 公开 TextToSpeech 服务发现与文件合成接口连接已安装引擎。
+局域网续读使用 `cryptography` 2.9.0（Apache-2.0），在用户启用并配对后加密交换阅读记录及传送选定书籍。旧 EPUB 定位迁移使用 `diff_match_patch` 0.4.1（Apache-2.0），仅在本机计算定位映射。系统朗读通过 Android 公开 TextToSpeech 服务发现与文件合成接口连接已安装引擎。
 
 依赖版本锁定于 `pubspec.lock`。Flutter、Cupertino Icons、音频与存储插件保留各自许可；Flutter 构建生成的许可集合可在 **我的 → 关于页间阅读 → 开源许可与字体授权** 查看。该页面也包括可下载字体与协议适配声明。
 

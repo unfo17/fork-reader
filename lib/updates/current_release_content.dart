@@ -6,8 +6,8 @@ class ReleaseSection {
   final List<String> items;
 }
 
-const _opening = '仿真翻页中，反向拖动可见的折起纸页时，同一张纸会跟手回卷。';
-const _swipes = '恢复在其他设备上续读。同一 Wi-Fi 上可使用临时连接码传送原书和阅读位置。';
+const _opening = '恢复原项目的局域网续读流程，Android 支持同一 Wi-Fi 自动发现与双方确认配对。';
+const _swipes = '已配对设备可传送选中的原书和 Readium 阅读位置，并在前台同步阅读记录。';
 const _androidInstall = '已安装本仓库固定签名版的 Android 用户可以直接覆盖更新，书籍和阅读记录会保留。';
 
 const publicReleaseNotes =

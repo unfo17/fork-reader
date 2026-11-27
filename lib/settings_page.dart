@@ -14,7 +14,8 @@ import 'library_state.dart';
 import 'listening/custom_tts_page.dart';
 import 'listening/widgets.dart';
 import 'local_platform.dart';
-import 'nearby_reading_page.dart';
+import 'lan_reading_page.dart';
+import 'lan_reading_sync.dart';
 import 'low_performance_page.dart';
 import 'palette_settings_page.dart';
 import 'reader_illustrations.dart';
@@ -86,15 +87,15 @@ class SettingsPage extends StatelessWidget {
             icon: CupertinoIcons.speedometer,
             options: _effectsOptions,
           ),
-          if (NearbyReadingScope.maybeOf(context) case final scope?) ...[
+          if (LanSyncScope.maybeOf(context) case final sync?) ...[
             FeatureEntry(
               key: const ValueKey('settings-lan-sync'),
               title: '局域网续读',
-              subtitle: '在同一 Wi-Fi 上接收图书和阅读位置',
+              subtitle: '连接自己的设备，接着上次的位置阅读',
               icon: CupertinoIcons.wifi,
               onTap: () => pushNovelPage<void>(
                 context,
-                NearbyReadingPage(scope: scope, reduceMotion: state.reduceMotion),
+                LanReadingPage(sync: sync, reduceMotion: state.reduceMotion),
                 reduceMotion: state.reduceMotion,
                 slot: ('settings', 'lan-reading'),
               ),
