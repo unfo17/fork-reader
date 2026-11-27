@@ -810,46 +810,56 @@ class _PrintRecordTable extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Column(
-      children: [
-        for (final (label, value) in rows)
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 5),
-            decoration: BoxDecoration(
-              border: Border(
-                bottom: BorderSide(color: scheme.outlineVariant, width: .5),
+    final valueStyle = TextStyle(
+      color: route ? scheme.primary : null,
+      fontWeight: FontWeight.w700,
+    );
+    return LayoutBuilder(
+      builder: (context, space) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final (label, value) in rows)
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 5),
+              decoration: BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(color: scheme.outlineVariant, width: .5),
+                ),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (route) ...[
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Icon(
+                        CupertinoIcons.circle_fill,
+                        size: 7,
+                        color: scheme.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                  if (space.maxWidth < 155)
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _PrintCaption(label),
+                          Text(value, style: valueStyle),
+                        ],
+                      ),
+                    )
+                  else ...[
+                    Expanded(flex: 4, child: _PrintCaption(label)),
+                    const SizedBox(width: 6),
+                    Expanded(flex: 7, child: Text(value, style: valueStyle)),
+                  ],
+                ],
               ),
             ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (route) ...[
-                  Padding(
-                    padding: const EdgeInsets.only(top: 3),
-                    child: Icon(
-                      CupertinoIcons.circle_fill,
-                      size: 7,
-                      color: scheme.primary,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                ],
-                Expanded(flex: 4, child: _PrintCaption(label)),
-                const SizedBox(width: 6),
-                Expanded(
-                  flex: 7,
-                  child: Text(
-                    value,
-                    style: TextStyle(
-                      color: route ? scheme.primary : null,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 }
