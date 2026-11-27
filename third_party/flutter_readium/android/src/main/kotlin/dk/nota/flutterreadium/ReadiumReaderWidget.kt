@@ -620,8 +620,7 @@ private class AppPageGestureLayout(
                 } finally {
                     cancel.recycle()
                 }
-                val startY = (downY / height.coerceAtLeast(1)).coerceIn(0f, 1f)
-                onSwipe("Start", event.x - downX, event.y - downY, startY, 0f, event.eventTime - event.downTime)
+                emitSwipe("Start", event)
                 emitSwipe("End", event, releaseVelocity())
                 return true
             }
@@ -666,7 +665,7 @@ private class AppPageGestureLayout(
                     // Own that same displacement before its native scroller starts.
                     kotlin.math.abs(dx) > slop) {
                     dragging = true
-                    onSwipe("Start", dx, dy, (downY / height.coerceAtLeast(1)).coerceIn(0f, 1f), 0f, event.eventTime - event.downTime)
+                    emitSwipe("Start", event)
                     parent?.requestDisallowInterceptTouchEvent(true)
                     return true
                 }
@@ -684,7 +683,7 @@ private class AppPageGestureLayout(
                 MotionEvent.ACTION_MOVE -> if (ownsGesture() && kotlin.math.abs(event.x - downX) > slop) {
                     dragging = true
                     marginTouch = false
-                    onSwipe("Start", event.x - downX, event.y - downY, downY / height.coerceAtLeast(1), 0f, event.eventTime - event.downTime)
+                    emitSwipe("Start", event)
                     parent?.requestDisallowInterceptTouchEvent(true)
                 }
                 MotionEvent.ACTION_UP -> {
