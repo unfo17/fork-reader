@@ -6,8 +6,8 @@ class ReleaseSection {
   final List<String> items;
 }
 
-const _opening = '首页恢复原项目的合并书架，本地书籍和已缓存的收藏共用分类、筛选和搜索。';
-const _swipes = '系统配色与系统纸色同时开启时，EPUB 和 TXT 的选区底色与拖动手柄跟随莫奈配色。';
+const _opening = '恢复图片阅读报告的日期、主题、内容、隐私、完整预览、保存和分享。';
+const _swipes = '统一设置首页卡片间距，并对齐阅读与外观、使用方式中的设置行。';
 const _androidInstall = '已安装本仓库固定签名版的 Android 用户可以直接覆盖更新，书籍和阅读记录会保留。';
 
 const publicReleaseNotes =

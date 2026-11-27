@@ -46,90 +46,96 @@ class SettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) => ActiveListenableBuilder(
     listenable: state.settingsChanges,
-    builder: (context) => GlassHeaderLayout(
-      showHeader: showHeader,
-      header: buildHeader(context),
-      body: ListView(
-        key: const PageStorageKey('settings'),
-        padding: EdgeInsets.fromLTRB(
-          24,
-          MediaQuery.paddingOf(context).top + FrostedHeader.toolbarHeight + 20,
-          24,
-          MediaQuery.paddingOf(context).bottom + 120,
+    builder: (context) {
+      final entries = <Widget>[
+        _sectionEntry(
+          context,
+          id: 'usage',
+          title: '使用方式',
+          subtitle: '启动与续读、阅读偏好',
+          code: 'SYSTEM / USAGE',
+          icon: CupertinoIcons.square_grid_2x2,
+          options: _usageOptions,
         ),
-        children: [
-          _sectionEntry(
-            context,
-            id: 'usage',
-            title: '使用方式',
-            subtitle: '启动与续读、阅读偏好',
-            code: 'SYSTEM / USAGE',
-            icon: CupertinoIcons.square_grid_2x2,
-            options: _usageOptions,
-          ),
-          const SizedBox(height: 14),
-          _sectionEntry(
-            context,
-            id: 'reading',
-            title: '阅读与外观',
-            subtitle: '外观模式、主题配色、字体与听书',
-            code: 'SYSTEM / READING',
-            icon: CupertinoIcons.textformat,
-            options: _readingOptions,
-          ),
-          const SizedBox(height: 14),
-          _sectionEntry(
-            context,
-            id: 'effects',
-            title: '性能与动效',
-            subtitle: '振动反馈、帧率偏好与动态效果',
-            code: 'SYSTEM / EFFECTS',
-            icon: CupertinoIcons.speedometer,
-            options: _effectsOptions,
-          ),
-          if (LanSyncScope.maybeOf(context) case final sync?) ...[
-            FeatureEntry(
-              key: const ValueKey('settings-lan-sync'),
-              title: '局域网续读',
-              subtitle: '连接自己的设备，接着上次的位置阅读',
-              icon: CupertinoIcons.wifi,
-              onTap: () => pushNovelPage<void>(
-                context,
-                LanReadingPage(sync: sync, reduceMotion: state.reduceMotion),
-                reduceMotion: state.reduceMotion,
-                slot: ('settings', 'lan-reading'),
-              ),
+        _sectionEntry(
+          context,
+          id: 'reading',
+          title: '阅读与外观',
+          subtitle: '外观模式、主题配色、字体与听书',
+          code: 'SYSTEM / READING',
+          icon: CupertinoIcons.textformat,
+          options: _readingOptions,
+        ),
+        _sectionEntry(
+          context,
+          id: 'effects',
+          title: '性能与动效',
+          subtitle: '振动反馈、帧率偏好与动态效果',
+          code: 'SYSTEM / EFFECTS',
+          icon: CupertinoIcons.speedometer,
+          options: _effectsOptions,
+        ),
+        if (LanSyncScope.maybeOf(context) case final sync?) ...[
+          FeatureEntry(
+            key: const ValueKey('settings-lan-sync'),
+            title: '局域网续读',
+            subtitle: '连接自己的设备，接着上次的位置阅读',
+            icon: CupertinoIcons.wifi,
+            onTap: () => pushNovelPage<void>(
+              context,
+              LanReadingPage(sync: sync, reduceMotion: state.reduceMotion),
+              reduceMotion: state.reduceMotion,
+              slot: ('settings', 'lan-reading'),
             ),
-            const SizedBox(height: 14),
-          ],
-          if (ReadingWidgetBridge.supported) ...[
-            const SizedBox(height: 14),
-            FeatureEntry(
-              key: const ValueKey('settings-reading-widgets'),
-              title: '小组件',
-              subtitle: '配置桌面上的阅读主题与隐私',
-              icon: CupertinoIcons.square_grid_2x2,
-              onTap: () => pushNovelPage<void>(
-                context,
-                ReadingWidgetSettingsPage(state: state),
-                reduceMotion: state.reduceMotion,
-                slot: ('settings', 'reading-widgets'),
-              ),
-            ),
-          ],
-          const SizedBox(height: 14),
-          _sectionEntry(
-            context,
-            id: 'data',
-            title: '数据与存储',
-            subtitle: '阅读历史、缓存管理与备份恢复',
-            code: 'SYSTEM / STORAGE',
-            icon: CupertinoIcons.folder,
-            options: _dataOptions,
           ),
         ],
-      ),
-    ),
+        if (ReadingWidgetBridge.supported) ...[
+          FeatureEntry(
+            key: const ValueKey('settings-reading-widgets'),
+            title: '小组件',
+            subtitle: '配置桌面上的阅读主题与隐私',
+            icon: CupertinoIcons.square_grid_2x2,
+            onTap: () => pushNovelPage<void>(
+              context,
+              ReadingWidgetSettingsPage(state: state),
+              reduceMotion: state.reduceMotion,
+              slot: ('settings', 'reading-widgets'),
+            ),
+          ),
+        ],
+        _sectionEntry(
+          context,
+          id: 'data',
+          title: '数据与存储',
+          subtitle: '阅读历史、缓存管理与备份恢复',
+          code: 'SYSTEM / STORAGE',
+          icon: CupertinoIcons.folder,
+          options: _dataOptions,
+        ),
+      ];
+      final safe = MediaQuery.paddingOf(context);
+      return GlassHeaderLayout(
+        showHeader: showHeader,
+        header: buildHeader(context),
+        body: Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760),
+            child: ListView.separated(
+              key: const PageStorageKey('settings'),
+              padding: featurePadding(context).copyWith(
+                left: 24 + safe.left,
+                right: 24 + safe.right,
+                bottom: safe.bottom + 120,
+              ),
+              itemCount: entries.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 14),
+              itemBuilder: (_, index) => entries[index],
+            ),
+          ),
+        ),
+      );
+    },
   );
 
   Widget _sectionEntry(
@@ -210,19 +216,11 @@ class SettingsPage extends StatelessWidget {
             },
           ),
           const Divider(height: 22),
-          const Row(
+          const _SettingsRow(
             key: ValueKey('settings-start-page'),
-            children: [
-              ArchiveIcon(CupertinoIcons.house, size: 21),
-              SizedBox(width: 12),
-              Expanded(
-                child: AppText(
-                  '启动页面',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-              ),
-              AppText('书架'),
-            ],
+            icon: CupertinoIcons.house,
+            title: '启动页面',
+            trailing: AppText('书架'),
           ),
           const Divider(height: 22),
           _toggleSetting(
@@ -265,21 +263,9 @@ class SettingsPage extends StatelessWidget {
               PaletteSettingsPage(state: state),
               reduceMotion: state.effectiveReduceMotion,
             ),
-            child: const Padding(
-              padding: EdgeInsets.symmetric(vertical: 10),
-              child: Row(
-                children: [
-                  ArchiveIcon(CupertinoIcons.paintbrush, size: 21),
-                  SizedBox(width: 12),
-                  Expanded(
-                    child: AppText(
-                      '主题配色',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                  ArchiveIcon(CupertinoIcons.chevron_forward, size: 14),
-                ],
-              ),
+            child: const _SettingsRow(
+              icon: CupertinoIcons.paintbrush,
+              title: '主题配色',
             ),
           ),
           const Divider(height: 22),
@@ -295,22 +281,9 @@ class SettingsPage extends StatelessWidget {
               FontSettingsPage(state: state),
               reduceMotion: state.reduceMotion,
             ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 10),
-              child: Row(
-                children: [
-                  const ArchiveIcon(CupertinoIcons.textformat, size: 21),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: const AppText(
-                      '字体',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  const ArchiveIcon(CupertinoIcons.chevron_forward, size: 14),
-                ],
-              ),
+            child: const _SettingsRow(
+              icon: CupertinoIcons.textformat,
+              title: '字体',
             ),
           ),
           const Divider(height: 22),
@@ -320,22 +293,7 @@ class SettingsPage extends StatelessWidget {
               context: context,
               reduceMotion: state.reduceMotion,
             ),
-            child: const Padding(
-              padding: EdgeInsets.symmetric(vertical: 10),
-              child: Row(
-                children: [
-                  ArchiveIcon(CupertinoIcons.book, size: 21),
-                  SizedBox(width: 12),
-                  Expanded(
-                    child: AppText(
-                      '离线词典',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                  ArchiveIcon(CupertinoIcons.chevron_forward, size: 14),
-                ],
-              ),
-            ),
+            child: const _SettingsRow(icon: CupertinoIcons.book, title: '离线词典'),
           ),
         ],
       ),
@@ -692,4 +650,36 @@ class SettingsPage extends StatelessWidget {
       if (context.mounted) showNovelFeedback(context, '设置保存失败，请重试');
     }
   }
+}
+
+class _SettingsRow extends StatelessWidget {
+  const _SettingsRow({
+    super.key,
+    required this.icon,
+    required this.title,
+    this.trailing = const ArchiveIcon(CupertinoIcons.chevron_forward, size: 14),
+  });
+
+  final IconData icon;
+  final String title;
+  final Widget trailing;
+
+  @override
+  Widget build(BuildContext context) => ConstrainedBox(
+    constraints: const BoxConstraints(minHeight: 44),
+    child: Row(
+      children: [
+        ArchiveIcon(icon, size: 21),
+        const SizedBox(width: 12),
+        Expanded(
+          child: AppText(
+            title,
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+          ),
+        ),
+        const SizedBox(width: 12),
+        trailing,
+      ],
+    ),
+  );
 }

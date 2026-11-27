@@ -203,11 +203,11 @@ class ReadingReportOptions {
   }
 
   static Future<ReadingReportOptions> load() async {
-    final raw = (await SharedPreferences.getInstance()).getString(
-      preferenceKey,
-    );
-    if (raw == null) return const ReadingReportOptions();
     try {
+      final raw = (await SharedPreferences.getInstance()).getString(
+        preferenceKey,
+      );
+      if (raw == null) return const ReadingReportOptions();
       return ReadingReportOptions.fromJson(
         jsonDecode(raw) as Map<String, dynamic>,
       );

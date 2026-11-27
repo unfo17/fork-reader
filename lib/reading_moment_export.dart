@@ -39,7 +39,19 @@ Future<Uint8List> renderReadingMomentPresentationPng(
       warm(MemoryImage(presentation.coverBytes!)),
   ]);
   if (!context.mounted) throw StateError('纪念弹窗已关闭');
+  return renderReadingArtworkPng(
+    context,
+    ReadingMomentContent(presentation: presentation),
+    name: '纪念',
+  );
+}
 
+/// Captures the full artwork independently of the route's viewport.
+Future<Uint8List> renderReadingArtworkPng(
+  BuildContext context,
+  Widget artwork, {
+  required String name,
+}) async {
   const canvas = Size(386, 8192);
   final theme = Theme.of(context);
   final media = MediaQuery.of(context).copyWith(
@@ -85,10 +97,7 @@ Future<Uint8List> renderReadingMomentPresentationPng(
                 color: Colors.transparent,
                 child: DefaultTextStyle(
                   style: theme.textTheme.bodyMedium!,
-                  child: SizedBox(
-                    width: canvas.width,
-                    child: ReadingMomentContent(presentation: presentation),
-                  ),
+                  child: SizedBox(width: canvas.width, child: artwork),
                 ),
               ),
             ),
@@ -114,9 +123,9 @@ Future<Uint8List> renderReadingMomentPresentationPng(
     await Future<void>.delayed(Duration.zero);
     flush();
     if (boundary.size.height >= canvas.height) {
-      throw const FormatException('纪念内容过长，无法完整生成图片');
+      throw FormatException('$name内容过长，无法完整生成图片');
     }
-    return await renderReadingMomentPng(boundary);
+    return await renderReadingMomentPng(boundary, name: name);
   } finally {
     owner.buildScope(
       root,
@@ -138,7 +147,10 @@ Future<Uint8List> renderReadingMomentPresentationPng(
 
 /// Capture the pure event content, never controls, feedback or celebration.
 /// The immutable ReadingMomentPresentation is its only source of facts.
-Future<Uint8List> renderReadingMomentPng(RenderRepaintBoundary content) async {
+Future<Uint8List> renderReadingMomentPng(
+  RenderRepaintBoundary content, {
+  String name = '纪念',
+}) async {
   if (content.debugNeedsPaint) await WidgetsBinding.instance.endOfFrame;
   final size = content.size;
   final ratio = math.min(
@@ -151,10 +163,10 @@ Future<Uint8List> renderReadingMomentPng(RenderRepaintBoundary content) async {
   final image = await content.toImage(pixelRatio: ratio);
   try {
     final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-    if (bytes == null) throw const FormatException('纪念图片未能生成');
+    if (bytes == null) throw FormatException('$name图片未能生成');
     final png = bytes.buffer.asUint8List();
     if (png.length > 12 * 1024 * 1024) {
-      throw const FormatException('纪念内容过长，图片超过保存上限');
+      throw FormatException('$name内容过长，图片超过保存上限');
     }
     return png;
   } finally {

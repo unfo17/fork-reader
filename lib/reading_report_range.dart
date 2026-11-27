@@ -87,7 +87,7 @@ class _ReadingReportDateSheetState extends State<ReadingReportDateSheet> {
   }
 
   @override
-  Widget build(BuildContext context) => Padding(
+  Widget build(BuildContext context) => SingleChildScrollView(
     padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
     child: Column(
       mainAxisSize: MainAxisSize.min,

@@ -130,19 +130,22 @@ class _GlassSettingMenuState<T> extends State<GlassSettingMenu<T>> {
                     Align(alignment: Alignment.centerRight, child: selector),
                   ],
                 )
-              : Row(
-                  children: [
-                    Expanded(child: label),
-                    const SizedBox(width: 12),
-                    // Short values use only their natural width instead of
-                    // reserving two thirds of the row and wrapping its label.
-                    ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxWidth: constraints.maxWidth * .55,
+              : ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 44),
+                  child: Row(
+                    children: [
+                      Expanded(child: label),
+                      const SizedBox(width: 12),
+                      // Short values use only their natural width instead of
+                      // reserving two thirds of the row and wrapping its label.
+                      ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: constraints.maxWidth * .55,
+                        ),
+                        child: selector,
                       ),
-                      child: selector,
-                    ),
-                  ],
+                    ],
+                  ),
                 );
         },
       ),

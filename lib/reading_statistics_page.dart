@@ -179,7 +179,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
     context: context,
     reduceMotion: widget.state.reduceMotion,
     builder: (context) => StatefulBuilder(
-      builder: (context, updateSheet) => Padding(
+      builder: (context, updateSheet) => SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(24, 10, 24, 28),
         child: Column(
           mainAxisSize: MainAxisSize.min,
