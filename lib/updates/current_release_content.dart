@@ -6,8 +6,8 @@ class ReleaseSection {
   final List<String> items;
 }
 
-const _opening = '恢复原项目的局域网续读流程，Android 支持同一 Wi-Fi 自动发现与双方确认配对。';
-const _swipes = '已配对设备可传送选中的原书和 Readium 阅读位置，并在前台同步阅读记录。';
+const _opening = '修复段落接续翻页时，后一页提前盖住前一页的问题。';
+const _swipes = '前后翻页时，移入的段落会跟随同一行区域上正在移出的段落。';
 const _androidInstall = '已安装本仓库固定签名版的 Android 用户可以直接覆盖更新，书籍和阅读记录会保留。';
 
 const publicReleaseNotes =

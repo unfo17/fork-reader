@@ -1863,7 +1863,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       if (_previewCover case final cover? when !_sceneCoversPage)
         Positioned.fill(child: IgnorePointer(child: _pageImage(cover))),
       if (_overlaps.isNotEmpty ||
-          (_from != null && _effect == ReaderPageEffect.staggered && widget.preview != null))
+          (_from != null && _effect == ReaderPageEffect.staggered &&
+              (widget.preview != null || _to != null)))
         Positioned.fill(child: IgnorePointer(child: ExcludeSemantics(
           child: RepaintBoundary(child: CustomPaint(willChange: true, painter: _combinedTurn())),
         )))
@@ -2082,8 +2083,13 @@ class _ReadiumCompositeTurn extends CustomPainter {
   }) : paperClock = direction < 0 ? ReverseAnimation(clock) : clock,
        super(repaint: Listenable.merge([clock, shape, below])) {
     if (effect == ReaderPageEffect.staggered) {
-      _outgoing = _ReadiumParagraphTurn(from, clock, direction, false, vertical);
-      if (to != null) _incoming = _ReadiumParagraphTurn(to!, clock, direction, true, vertical);
+      final outgoing = _ReadiumParagraphTurn(from, clock, direction, false, vertical);
+      _outgoing = outgoing;
+      if (to case final target?) {
+        _incoming = _ReadiumParagraphTurn(
+          target, clock, direction, true, vertical, predecessor: outgoing,
+        );
+      }
     }
     if (effect == ReaderPageEffect.paper) {
       // The reverse turn unfolds an incoming sheet. Page readiness changes its
@@ -2206,6 +2212,7 @@ class _ReadiumParagraphTurn extends CustomPainter {
     this.vertical, {
     this.enterFromBottom = false,
     this.fillPaper = false,
+    this.predecessor,
   }) : super(repaint: clock);
 
   final ReadiumPageFrame frame;
@@ -2213,6 +2220,7 @@ class _ReadiumParagraphTurn extends CustomPainter {
   final double direction;
   final bool incoming, vertical, enterFromBottom;
   final bool fillPaper;
+  final _ReadiumParagraphTurn? predecessor;
   Size? _size;
   late List<({Rect source, Interval timing})> _parts;
   late double _scaleX, _scaleY;
@@ -2226,6 +2234,8 @@ class _ReadiumParagraphTurn extends CustomPainter {
     _size = size;
     _scaleX = size.width / frame.image.width;
     _scaleY = size.height / frame.image.height;
+    final outgoing = predecessor;
+    outgoing?._layout(size);
     const relayCurve = Cubic(.22, .1, .28, 1);
     final motion = ReaderTurnScope(
       animation: clock,
@@ -2260,18 +2270,36 @@ class _ReadiumParagraphTurn extends CustomPainter {
         band.right * size.width, band.bottom * size.height,
       ));
     }
-    _parts = [
-      for (var index = 0; index < bands.length; index++)
-        (
-          source: Rect.fromLTRB(
-            (bands[index].left * frame.image.width).roundToDouble(),
-            (bands[index].top * frame.image.height).roundToDouble(),
-            (bands[index].right * frame.image.width).roundToDouble(),
-            (bands[index].bottom * frame.image.height).roundToDouble(),
-          ),
-          timing: timingFor(index),
-        ),
-    ];
+    _parts = List.generate(bands.length, (index) {
+      final band = bands[index];
+      final source = Rect.fromLTRB(
+        (band.left * frame.image.width).roundToDouble(),
+        (band.top * frame.image.height).roundToDouble(),
+        (band.right * frame.image.width).roundToDouble(),
+        (band.bottom * frame.image.height).roundToDouble(),
+      );
+      final timing = timingFor(index);
+      // Each page can have different paragraph breaks. Where two bands share
+      // screen rows, the incoming band must never advance faster than the
+      // departing one. Match their timing once, retaining the easing curve.
+      var start = timing.begin, end = timing.end;
+      if (outgoing != null) {
+        final top = source.top * _scaleY, bottom = source.bottom * _scaleY;
+        for (final part in outgoing._parts) {
+          if (top < part.source.bottom * outgoing._scaleY &&
+              bottom > part.source.top * outgoing._scaleY) {
+            start = math.max(start, part.timing.begin);
+            end = math.max(end, part.timing.end);
+          }
+        }
+      }
+      return (
+        source: source,
+        timing: start == timing.begin && end == timing.end
+            ? timing
+            : Interval(start, end, curve: timing.curve),
+      );
+    }, growable: false);
     _transforms = Float32List(_parts.length * 4);
     _sources = Float32List(_parts.length * 4);
   }
@@ -2279,7 +2307,11 @@ class _ReadiumParagraphTurn extends CustomPainter {
   double _travel(Interval timing, double progress) {
     final fraction = timing.transform(progress);
     final distance = (incoming ? 1 - fraction : -fraction) * (enterFromBottom ? 1 : direction);
-    return (distance * (enterFromBottom ? frame.image.height / 2 : frame.image.width)).roundToDouble();
+    if (enterFromBottom) return (distance * frame.image.height / 2).roundToDouble();
+    final offset = distance * frame.image.width;
+    // Text and illustration textures may have different pixel densities.
+    // Round away from the shared edge on both grids to keep the bands disjoint.
+    return offset < 0 ? offset.floorToDouble() : offset.ceilToDouble();
   }
 
   Path visibleBands(Size size) {
@@ -2344,7 +2376,8 @@ class _ReadiumParagraphTurn extends CustomPainter {
       old.incoming != incoming ||
       old.direction != direction ||
       old.vertical != vertical ||
-      old.enterFromBottom != enterFromBottom || old.fillPaper != fillPaper;
+      old.enterFromBottom != enterFromBottom || old.fillPaper != fillPaper ||
+      old.predecessor != predecessor;
 }
 
 /// The drawing and pointer hit test share the same screen-space crease.
