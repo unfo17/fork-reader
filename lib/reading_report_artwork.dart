@@ -118,13 +118,6 @@ class _ReportArtwork extends StatelessWidget {
 
   ReadingReportTemplate get template => options.template;
   String get _snapshot => _reportDate(data.analysis.snapshotAt);
-  bool get _showProgressBands => switch (template) {
-    ReadingReportTemplate.archive ||
-    ReadingReportTemplate.ink ||
-    ReadingReportTemplate.festival => false,
-    _ => true,
-  };
-
   Widget _muted(String text) => Builder(
     builder: (context) => Text(
       text,
@@ -153,83 +146,88 @@ class _ReportArtwork extends StatelessWidget {
     ],
   );
 
-  Widget _timeSummary() {
-    final duration = data.observedDays > 0
-        ? data.periodSeconds
-        : data.analysis.measuredSeconds;
-    final recorded =
-        data.observedDays > 0 || data.analysis.coverage.hasTimeDetail;
-    final label = switch (template) {
-      ReadingReportTemplate.archive => 'TOTAL READING TIME',
-      ReadingReportTemplate.shelf => 'READING / VOYAGE',
-      ReadingReportTemplate.editorial => '这本手帖的阅读时长',
-      ReadingReportTemplate.constellation => '夜读时长',
-      ReadingReportTemplate.signal => '本期阅读',
-      ReadingReportTemplate.score => 'RUNNING TIME / 本期放映时长',
-      ReadingReportTemplate.ink => '沿途的阅读时长',
-      ReadingReportTemplate.festival => '本期旅程',
-    };
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _muted(label),
-        const SizedBox(height: 3),
-        Text(
-          recorded ? _reportDuration(duration) : '本期暂无阅读时长记录',
-          style: const TextStyle(fontSize: 27, fontWeight: FontWeight.w800),
-        ),
-        if (recorded && template == ReadingReportTemplate.archive) ...[
-          const SizedBox(height: 12),
-          _metrics([
-            ('阅读日', '${data.activeDays}'),
-            ('最长连续 / 天', '${data.analysis.longestStreak.days}'),
-            ('相伴书目', '${data.periodBooks}'),
-            ('已记录日均', statisticsDuration(data.averageSeconds)),
-          ]),
-        ],
-      ],
-    );
-  }
-
   Widget _daysSection() {
     final active = data.analysis.days
         .where((day) => (day.seconds ?? 0) > 0)
         .toList();
     final streak = data.analysis.longestStreak;
-    final streakDates = streak.start != null && streak.end != null
+    final continuous = streak.start != null && streak.end != null
         ? _datesCaption(streak.start!, streak.end!)
         : null;
+    if (template == ReadingReportTemplate.signal) {
+      return _PrintMetricCards(
+        values: [
+          ('阅读日', '${data.activeDays}', '有阅读记录的日子'),
+          ('连续阅读', '${streak.days}', continuous ?? '暂无连续记录'),
+          ('相伴书目', '${data.periodBooks}', '本期实际读过的书'),
+          if (options.modules.contains(_collection))
+            (
+              '当前藏书',
+              '${data.onlineBooks + data.localBooks}',
+              '$_snapshot 藏书快照',
+            ),
+        ],
+      );
+    }
+    if (template == ReadingReportTemplate.archive) {
+      return _PrintRecordTable(
+        rows: [
+          ('记录覆盖', '${data.observedDays} / ${data.period} 天'),
+          if (data.peakDate case final peak?)
+            (
+              '最长的一日',
+              '${_reportDate(peak)} · ${statisticsDuration(data.peakSeconds)}',
+            ),
+          if (continuous != null) ('连续阅读段', continuous),
+        ],
+      );
+    }
+    if (template == ReadingReportTemplate.constellation) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _PrintCaption(_datesCaption(data.analysis.start, data.analysis.end)),
+          if (active.isNotEmpty) ...[
+            const SizedBox(height: 9),
+            SizedBox(
+              height: 45,
+              child: CustomPaint(
+                painter: _ReportDailyMarks(
+                  data.seconds,
+                  data.peakSeconds,
+                  _reportTint(options),
+                ),
+                child: const SizedBox.expand(),
+              ),
+            ),
+          ],
+          const SizedBox(height: 7),
+          _PrintCaption(
+            '${data.activeDays} 个阅读日 · ${data.observedDays}/${data.period} 天有记录'
+            '${continuous == null ? '' : ' · 连续 ${streak.days} 天 · $continuous'}',
+          ),
+        ],
+      );
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (template == ReadingReportTemplate.signal)
-          _metrics([
-            ('有阅读记录的日子', '${data.activeDays}'),
-            ('最长连续 / 天', '${streak.days}'),
-            ('本期实际读过的书', '${data.periodBooks}'),
-            if (options.modules.contains(_collection))
-              ('当前藏书', '${data.onlineBooks + data.localBooks}'),
-          ])
-        else ...[
-          if (template != ReadingReportTemplate.archive)
-            Text('${data.activeDays} 个阅读日'),
-          if (template == ReadingReportTemplate.archive ||
-              template == ReadingReportTemplate.constellation)
-            Text('记录覆盖  ${data.observedDays} / ${data.period} 天'),
-          if (active.isNotEmpty &&
-              (template == ReadingReportTemplate.archive ||
-                  template == ReadingReportTemplate.constellation)) ...[
-            if (data.peakDate case final peak?)
-              Text(
-                '最长的一日  ${_reportDate(peak)} · ${statisticsDuration(data.peakSeconds)}',
-              ),
-          ] else if (active.isNotEmpty &&
-              template != ReadingReportTemplate.editorial) ...[
-            Text('本期第一日  ${_reportDate(active.first.date)}'),
-            Text('最近阅读日  ${_reportDate(active.last.date)}'),
-          ],
-          if (streakDates != null) Text('最长连续 ${streak.days} 天 · $streakDates'),
-        ],
+        if (active.isNotEmpty)
+          _PrintRecordTable(
+            route:
+                template == ReadingReportTemplate.ink ||
+                template == ReadingReportTemplate.festival,
+            rows: [
+              ('本期第一日', _reportDate(active.first.date)),
+              ('最近阅读日', _reportDate(active.last.date)),
+            ],
+          ),
+        const SizedBox(height: 8),
+        _PrintCaption(
+          '${data.activeDays} 个阅读日'
+          '${continuous == null ? '' : ' · 最长连续 ${streak.days} 天'}',
+        ),
+        if (continuous != null) _PrintCaption(continuous),
       ],
     );
   }
@@ -244,124 +242,147 @@ class _ReportArtwork extends StatelessWidget {
     }
     final months = data.analysis.months;
     final known = months.where((month) => month.totalSeconds != null);
-    final peak = known.fold<StatisticsAnalysisMonth?>(
+    final maximum = known.fold<StatisticsAnalysisMonth?>(
       null,
       (best, month) => best == null || month.totalSeconds! > best.totalSeconds!
           ? month
           : best,
     );
-    final peakMonth = peak != null && peak.totalSeconds! > 0 ? peak : null;
-    final maxSeconds = math.max(1, peak?.totalSeconds ?? 0);
-    final showPeak =
-        template == ReadingReportTemplate.archive ||
-        template == ReadingReportTemplate.constellation ||
-        template == ReadingReportTemplate.signal;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (showPeak && peakMonth != null)
-          Text(
-            '${_reportMonth(peakMonth.date)} · ${statisticsDuration(peakMonth.totalSeconds!)}',
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+    final peak = maximum != null && maximum.totalSeconds! > 0 ? maximum : null;
+    final scale = math.max(1, maximum?.totalSeconds ?? 0);
+    final ledger = _PrintMonthLedger(months: months, peakSeconds: scale);
+    if (template == ReadingReportTemplate.constellation) {
+      return _PrintRecordTable(
+        rows: [
+          if (peak != null)
+            (_reportMonth(peak.date), statisticsDuration(peak.totalSeconds!))
+          else
+            ('本期', '暂无阅读时长'),
+          ('记录覆盖', '${data.observedDays} / ${data.period} 天'),
+        ],
+      );
+    }
+    if (template == ReadingReportTemplate.ink) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final month in months)
+                _ReportMonthLabel(
+                  month: month,
+                  area: (month.totalSeconds ?? 0) / scale,
+                ),
+            ],
           ),
-        if (template == ReadingReportTemplate.archive)
-          _muted('${known.length} 个有覆盖的月份'),
-        if (template == ReadingReportTemplate.editorial)
-          Text(
-            '${_reportSeasons(months)} · ${_datesCaption(data.analysis.start, data.analysis.end)}',
-          ),
-        const SizedBox(height: 7),
-        if (template == ReadingReportTemplate.archive ||
-            template == ReadingReportTemplate.constellation)
-          ReadingMonthlyChart(
-            dates: [for (final month in months) month.date],
-            seconds: [for (final month in months) month.totalSeconds],
-            height: 94,
-            presentation: template == ReadingReportTemplate.archive
-                ? ReadingChartPresentation.archive
-                : ReadingChartPresentation.night,
-            reduceMotion: true,
-          ),
-        Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          children: [
-            for (final month in months)
-              _ReportMonthLabel(
-                month: month,
-                circle: template == ReadingReportTemplate.ink,
-                area: (month.totalSeconds ?? 0) / maxSeconds,
-              ),
-          ],
-        ),
-        if (template == ReadingReportTemplate.ink) ...[
           const SizedBox(height: 6),
           _muted('着色圆面积按已记录时长'),
         ],
-      ],
-    );
+      );
+    }
+    if (template == ReadingReportTemplate.signal) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _PrintMonthlyStrips(months: months, peakSeconds: scale),
+          if (peak != null) ...[
+            const SizedBox(height: 10),
+            _PrintCaption(
+              '本期阅读最多：${_reportMonth(peak.date)} · ${statisticsDuration(peak.totalSeconds!)}',
+            ),
+          ],
+        ],
+      );
+    }
+    if (template == ReadingReportTemplate.archive ||
+        template == ReadingReportTemplate.editorial) {
+      final archive = template == ReadingReportTemplate.archive;
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            flex: 4,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _ReportFigure(
+                  value: archive
+                      ? (peak == null ? '—' : '${peak.date.month}')
+                      : _reportSeasons(months),
+                  highlight: true,
+                  size: archive ? 44 : 33,
+                ),
+                _PrintCaption(
+                  archive
+                      ? '本期峰值月'
+                      : _datesCaption(data.analysis.start, data.analysis.end),
+                ),
+                const SizedBox(height: 8),
+                if (archive)
+                  _PrintCaption('${known.length} 个有覆盖的月份')
+                else
+                  _PrintCaption(_reportDuration(data.periodSeconds)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(flex: 7, child: ledger),
+        ],
+      );
+    }
+    if (template == ReadingReportTemplate.festival) {
+      return _ReportStationMonths(months: months, peakSeconds: scale);
+    }
+    return ledger;
   }
 
   Widget _bookSection() {
     final books = _rankedReportBooks(data);
     final selected = books.take(options.bookLimit).toList();
-    final datedBooks =
-        template == ReadingReportTemplate.ink ||
-        template == ReadingReportTemplate.festival;
+    final maximum = selected.fold<int>(
+      1,
+      (best, book) => math.max(best, book.seconds ?? 0),
+    );
     final breadth = data.analysis.bookDayDistribution;
+    final rows = [
+      for (final (index, book) in selected.indexed)
+        _PrintBookRow(
+          template: template,
+          index: index,
+          title: options.hideBookTitles ? '书籍 ${index + 1}' : book.title,
+          author: options.hideAuthorNames ? null : book.book?.author.trim(),
+          time: book.seconds == null
+              ? '阅读 ${book.activeDates.length} 天'
+              : statisticsDuration(book.seconds!),
+          dates:
+              (template == ReadingReportTemplate.ink ||
+                      template == ReadingReportTemplate.festival) &&
+                  book.activeDates.isNotEmpty
+              ? _datesCaption(book.activeDates.first, book.activeDates.last)
+              : null,
+          relativeTime: book.seconds == null ? null : book.seconds! / maximum,
+        ),
+    ];
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (final (index, book) in selected.indexed)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 6),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SizedBox(
-                  width: 30,
-                  child: _muted((index + 1).toString().padLeft(2, '0')),
-                ),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        options.hideBookTitles ? '书籍 ${index + 1}' : book.title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                      _muted(
-                        [
-                          if (!options.hideAuthorNames &&
-                              book.book?.author.trim().isNotEmpty == true)
-                            book.book!.author,
-                          if (book.seconds case final seconds?)
-                            statisticsDuration(seconds)
-                          else
-                            '阅读 ${book.activeDates.length} 天',
-                          if (datedBooks && book.activeDates.isNotEmpty)
-                            _datesCaption(
-                              book.activeDates.first,
-                              book.activeDates.last,
-                            ),
-                        ].join(' · '),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        _muted(
+        if (template == ReadingReportTemplate.editorial)
+          _ReportTwoColumns(children: rows)
+        else if (template == ReadingReportTemplate.ink)
+          _ReportWaypoints(children: rows)
+        else
+          ...rows,
+        const SizedBox(height: 7),
+        _PrintCaption(
           '选录 ${selected.length}/${books.length} ${template == ReadingReportTemplate.festival ? '站' : '本'}',
         ),
         if (breadth.hasData &&
             (template == ReadingReportTemplate.archive ||
                 template == ReadingReportTemplate.constellation ||
                 template == ReadingReportTemplate.signal))
-          _muted(
+          _PrintCaption(
             [
               for (final bucket in breadth.buckets)
                 '${bucket.label} ${bucket.days}天',
@@ -371,23 +392,69 @@ class _ReportArtwork extends StatelessWidget {
     );
   }
 
-  Widget _progressSection() => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      if (_showProgressBands && data.progressBands.any((count) => count > 0))
-        ReadingProgressBands(
-          bands: data.progressBands,
-          reduceMotion: true,
-          compact: true,
-        )
-      else
-        Text('当前阅读位置 ${data.readingBooks} 本'),
-      if (data.unknownProgress > 0) _muted('未知进度 ${data.unknownProgress} 本'),
-      _muted('$_snapshot · 阅读位置快照'),
-    ],
-  );
+  Widget _progressSection() {
+    final archive = template == ReadingReportTemplate.archive;
+    final bars =
+        archive ||
+        template == ReadingReportTemplate.ink ||
+        template == ReadingReportTemplate.festival;
+    final bands = data.progressBands.any((count) => count > 0);
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (bars || !bands) Text('当前阅读位置 ${data.readingBooks} 本'),
+        if (bands) ...[
+          const SizedBox(height: 5),
+          if (bars)
+            ReadingProgressBands(
+              bands: data.progressBands,
+              reduceMotion: true,
+              compact: true,
+              labelSize: 10,
+            )
+          else
+            _PrintStatsStrip(
+              numberSize: 22,
+              values: [
+                for (final (index, label) in const [
+                  '0–25%',
+                  '25–50%',
+                  '50–75%',
+                  '75–100%',
+                ].indexed)
+                  (label, '${data.progressBands[index]}'),
+              ],
+            ),
+        ],
+        const SizedBox(height: 6),
+        if (data.unknownProgress > 0)
+          _PrintCaption('未知进度 ${data.unknownProgress} 本'),
+        _PrintCaption('$_snapshot · 阅读位置快照'),
+      ],
+    );
+    return archive
+        ? Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                flex: 3,
+                child: AspectRatio(
+                  aspectRatio: .76,
+                  child: _PrintPicture(
+                    _reportArt(options, data),
+                    alignment: Alignment.centerRight,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(flex: 7, child: content),
+            ],
+          )
+        : content;
+  }
 
   Widget _collectionSection() {
+    final total = data.onlineBooks + data.localBooks;
     final genres = data.analysis.genres;
     final limited = template == ReadingReportTemplate.signal;
     final showRatio =
@@ -395,23 +462,63 @@ class _ReportArtwork extends StatelessWidget {
         template != ReadingReportTemplate.constellation &&
         template != ReadingReportTemplate.shelf &&
         template != ReadingReportTemplate.festival;
-    return Column(
+    final archive = template == ReadingReportTemplate.archive;
+    final heading = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        _ReportFigure(value: '$total', highlight: !archive, size: 42),
+        const _PrintCaption('本当前藏书'),
+      ],
+    );
+    final rows = [
+      _PrintCaption(
+        '在线 ${data.onlineBooks} / 本地 ${data.localBooks}'
+        '${options.hideAuthorNames || data.authorCount == 0 ? '' : ' · ${data.authorCount} 位作者'}',
+      ),
+      for (final genre in genres.take(limited ? 1 : 4))
         Text(
-          '${data.onlineBooks + data.localBooks} 本当前藏书',
-          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+          '${genre.label} · ${statisticsDuration(genre.seconds)}'
+          '${showRatio ? ' · ${(genre.ratio * 100).toStringAsFixed(1)}%' : ''}',
         ),
-        _muted(
-          '在线 ${data.onlineBooks} / 本地 ${data.localBooks}'
-          '${options.hideAuthorNames || data.authorCount == 0 ? '' : ' · ${data.authorCount} 位作者'}',
-        ),
-        for (final genre in genres.take(limited ? 1 : 4))
-          Text(
-            '${genre.label} · ${statisticsDuration(genre.seconds)}'
-            '${showRatio ? ' · ${(genre.ratio * 100).toStringAsFixed(1)}%' : ''}',
-          ),
-        _muted('$_snapshot · 藏书快照'),
+      _PrintCaption('$_snapshot · 藏书快照'),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (archive)
+          SizedBox(
+            height: 133,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                const _PrintPicture(_archiveStacks, dim: true),
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        Colors.black.withValues(alpha: .82),
+                        Colors.black.withValues(alpha: .05),
+                      ],
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(15),
+                  child: DefaultTextStyle.merge(
+                    style: const TextStyle(color: Colors.white),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Theme(data: ThemeData.dark(), child: heading),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          heading,
+        const SizedBox(height: 9),
+        ...rows,
       ],
     );
   }
@@ -443,140 +550,228 @@ class _ReportArtwork extends StatelessWidget {
   Widget _module(ReadingReportModule module) => switch (module) {
     _rhythm => _rhythmSection(),
     _days => _daysSection(),
-    _calendar => _ReportCalendar(data: data),
+    _calendar => _ReportCalendar(
+      data: data,
+      round: template == ReadingReportTemplate.constellation,
+    ),
     _books => _bookSection(),
     _progress => _progressSection(),
     _collection => _collectionSection(),
     _excerpts => _excerptSection(),
   };
 
+  Widget _section(_ReportSection entry, {bool inset = true}) {
+    final (module, title, caption) = entry;
+    return _ReportSectionFrame(
+      template: template,
+      module: module,
+      title: title,
+      caption: caption,
+      inset: inset,
+      child: _module(module),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final style = readingExportTheme(template.theme);
     final tint = _reportTint(options);
     final theme = Theme.of(context);
+    final lightBody =
+        template == ReadingReportTemplate.shelf ||
+        template == ReadingReportTemplate.signal;
+    final paper = switch (template) {
+      ReadingReportTemplate.shelf => const Color(0xffe0e9e6),
+      ReadingReportTemplate.signal => const Color(0xffeeeee4),
+      _ => style.background,
+    };
+    final ink = lightBody ? const Color(0xff24302b) : style.foreground;
+    final primary = lightBody && options.palette == ReadingReportPalette.pine
+        ? (template == ReadingReportTemplate.shelf
+              ? const Color(0xff386d65)
+              : const Color(0xff49594e))
+        : lightBody
+        ? Color.lerp(tint, ink, .53)!
+        : tint;
     final scheme = theme.colorScheme.copyWith(
-      brightness: style.isDark ? Brightness.dark : Brightness.light,
-      surface: style.background,
-      onSurface: style.foreground,
-      onSurfaceVariant: style.muted,
-      primary: tint,
-      outline: Color.lerp(style.background, style.foreground, .35),
-      outlineVariant: Color.lerp(style.background, style.foreground, .18),
+      brightness: !lightBody && style.isDark
+          ? Brightness.dark
+          : Brightness.light,
+      surface: paper,
+      onSurface: ink,
+      onSurfaceVariant: Color.lerp(paper, ink, .76),
+      primary: primary,
+      outline: Color.lerp(paper, ink, .37),
+      outlineVariant: Color.lerp(paper, ink, .19),
     );
     final available = _availableModules(data);
-    final sections = [
-      ..._reportSections(template),
-      (_excerpts, _excerpts.label, ''),
-    ].where((section) => _reportSectionEnabled(section.$1, options, available));
-    return Theme(
+    final sections =
+        [..._reportSections(template), (_excerpts, _excerpts.label, '')]
+            .where(
+              (entry) => _reportSectionEnabled(entry.$1, options, available),
+            )
+            .toList();
+    final partner = switch (template) {
+      ReadingReportTemplate.shelf => _books,
+      ReadingReportTemplate.festival => _collection,
+      _ => null,
+    };
+    final dayIndex = sections.indexWhere((entry) => entry.$1 == _days);
+    final pairIndex =
+        partner != null &&
+            dayIndex >= 0 &&
+            dayIndex + 1 < sections.length &&
+            sections[dayIndex + 1].$1 == partner
+        ? dayIndex
+        : -1;
+    final widget = Theme(
       data: theme.copyWith(colorScheme: scheme),
       child: Material(
-        color: style.background,
+        color: paper,
         child: DefaultTextStyle(
           style: theme.textTheme.bodyMedium!.copyWith(
-            color: style.foreground,
+            color: ink,
             height: 1.4,
+            fontSize: 12,
           ),
-          child: Padding(
-            padding: const EdgeInsets.all(22),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _ReportCover(options: options, data: data),
-                if (options.note.trim().isNotEmpty) _muted(options.note),
-                const SizedBox(height: 16),
-                _timeSummary(),
-                for (final (module, title, caption) in sections) ...[
-                  const SizedBox(height: 16),
-                  _ReportSectionFrame(
-                    template: template,
-                    title: title,
-                    caption: caption,
-                    child: _module(module),
-                  ),
-                ],
-                if (options.signature) ...[
-                  const SizedBox(height: 16),
-                  _muted(switch (template) {
-                    ReadingReportTemplate.archive =>
-                      'ARCHIVE ENDS / KEEP READING · $readingExportBrandName',
-                    ReadingReportTemplate.shelf =>
-                      '下一页，继续启航。 · $readingExportBrandName',
-                    ReadingReportTemplate.editorial =>
-                      '下一页，留给将来的自己。 · $readingExportBrandName',
-                    ReadingReportTemplate.constellation =>
-                      '夜深，仍有书页。 · $readingExportBrandName',
-                    ReadingReportTemplate.signal =>
-                      'TO BE CONTINUED · $readingExportBrandName',
-                    ReadingReportTemplate.score =>
-                      'THE END · $readingExportBrandName',
-                    ReadingReportTemplate.ink =>
-                      '走得慢一点，也会遇见下一页。 · $readingExportBrandName',
-                    ReadingReportTemplate.festival =>
-                      '下一站，仍有书页。 · $readingExportBrandName',
-                  }),
-                ],
-              ],
-            ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _ReportCover(options: options, data: data),
+              for (final (index, entry) in sections.indexed)
+                if (index == pairIndex)
+                  _PrintInset(
+                    vertical: 0,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(flex: 4, child: _section(entry, inset: false)),
+                        const SizedBox(width: 13),
+                        Expanded(
+                          flex: 7,
+                          child: _section(sections[index + 1], inset: false),
+                        ),
+                      ],
+                    ),
+                  )
+                else if (pairIndex < 0 || index != pairIndex + 1)
+                  _section(entry),
+              if (options.signature)
+                _ReportColophon(
+                  template: template,
+                  year: data.analysis.end.year,
+                ),
+            ],
           ),
         ),
       ),
     );
+    return template == ReadingReportTemplate.score
+        ? _ReportFilmEdge(child: widget)
+        : widget;
   }
 }
 
 class _ReportSectionFrame extends StatelessWidget {
   const _ReportSectionFrame({
     required this.template,
+    required this.module,
     required this.title,
     required this.caption,
+    required this.inset,
     required this.child,
   });
   final ReadingReportTemplate template;
+  final ReadingReportModule module;
   final String title, caption;
+  final bool inset;
   final Widget child;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final outlined =
-        template == ReadingReportTemplate.score ||
+    final index = template == ReadingReportTemplate.archive
+        ? switch (module) {
+            _progress => '01',
+            _days => '02',
+            _rhythm => '03',
+            _books => '04',
+            _ => null,
+          }
+        : null;
+    final ticket = template == ReadingReportTemplate.festival;
+    final serif =
         template == ReadingReportTemplate.editorial ||
-        template == ReadingReportTemplate.festival;
-    final edge = BorderSide(color: scheme.outlineVariant);
-    return Container(
-      padding: EdgeInsets.fromLTRB(outlined ? 12 : 0, 10, outlined ? 12 : 0, 2),
-      decoration: BoxDecoration(
-        border: outlined ? Border.fromBorderSide(edge) : Border(top: edge),
-        color: outlined ? scheme.primary.withValues(alpha: .04) : null,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (caption.isNotEmpty)
-            Text(
-              caption,
-              style: TextStyle(
-                color: scheme.onSurfaceVariant,
-                fontSize: 10,
-                letterSpacing: 1.0,
-              ),
-            ),
-          Text(
+        template == ReadingReportTemplate.ink;
+    final panel =
+        (template == ReadingReportTemplate.shelf &&
+            (module == _rhythm || module == _collection)) ||
+        (template == ReadingReportTemplate.signal && module == _rhythm);
+    final heading = Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        if (index != null) ...[
+          _ReportFigure(value: index, highlight: true, size: 25),
+          const SizedBox(width: 12),
+        ],
+        Expanded(
+          child: Text(
             title,
             style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-              color: scheme.primary,
+              fontSize: inset ? 18 : 16,
+              height: 1.16,
+              fontWeight: FontWeight.w800,
+              fontFamily: serif ? 'ReadingSerifDisplay' : null,
             ),
           ),
-          const SizedBox(height: 7),
-          child,
-          if (outlined) const SizedBox(height: 7),
+        ),
+      ],
+    );
+    final children = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (ticket) const _ReportPerforation(),
+        if (caption.isNotEmpty) ...[
+          _PrintCaption(caption, tracking: true, size: 8),
+          const SizedBox(height: 4),
         ],
+        heading,
+        const SizedBox(height: 11),
+        child,
+      ],
+    );
+    final content = inset
+        ? _PrintInset(
+            vertical:
+                template == ReadingReportTemplate.score && module == _rhythm
+                ? 10
+                : 16,
+            child: children,
+          )
+        : Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: children,
+          );
+    if (panel) {
+      return _PrintTone(
+        background: template == ReadingReportTemplate.shelf
+            ? const Color(0xff15212c)
+            : const Color(0xff252524),
+        foreground: const Color(0xffefebe1),
+        child: content,
+      );
+    }
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border(
+          top: BorderSide(
+            color: scheme.outlineVariant.withValues(alpha: .62),
+            width: .5,
+          ),
+        ),
       ),
+      child: content,
     );
   }
 }
@@ -595,13 +790,8 @@ String _reportSeasons(List<StatisticsAnalysisMonth> months) => {
 }.join(' · ');
 
 class _ReportMonthLabel extends StatelessWidget {
-  const _ReportMonthLabel({
-    required this.month,
-    required this.circle,
-    required this.area,
-  });
+  const _ReportMonthLabel({required this.month, required this.area});
   final StatisticsAnalysisMonth month;
-  final bool circle;
   final double area;
 
   @override
@@ -613,12 +803,12 @@ class _ReportMonthLabel extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 6),
       decoration: BoxDecoration(
         border: Border.all(color: colors.outlineVariant),
-        borderRadius: BorderRadius.circular(circle ? 11 : 3),
+        borderRadius: BorderRadius.circular(11),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (circle && diameter > 0) ...[
+          if (diameter > 0) ...[
             Container(
               width: diameter,
               height: diameter,
@@ -718,36 +908,102 @@ class _ReportFilmAct extends StatelessWidget {
     );
     final visible = cuts.length <= 4 ? cuts : cuts.where((cut) => cut == peak);
     final colors = Theme.of(context).colorScheme;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 7),
-      padding: const EdgeInsets.fromLTRB(10, 7, 6, 7),
-      decoration: BoxDecoration(
-        border: Border(left: BorderSide(color: colors.primary, width: 2)),
-        color: colors.primary.withValues(alpha: .06),
-      ),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            '第${index + 1}幕 · ${const ['相遇', '远行', '归来'][index]}',
-            style: const TextStyle(fontWeight: FontWeight.w700),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              _ReportFigure(
+                value: (index + 1).toString().padLeft(2, '0'),
+                size: 38,
+                highlight: true,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '第${index + 1}幕 · ${const ['相遇', '远行', '归来'][index]}',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    _PrintCaption('ACT ${index + 1}', tracking: true),
+                  ],
+                ),
+              ),
+              if (showTiming)
+                _PrintCaption('RUNTIME\n${runtime(seconds(days))}'),
+            ],
           ),
-          if (showTiming) Text('RUNTIME  ${runtime(seconds(days))}'),
-          Text(
+          const SizedBox(height: 5),
+          _PrintCaption(
             [
               _datesCaption(days.first.date, days.last.date),
               if (showDays)
                 '${days.where((day) => (day.seconds ?? 0) > 0).length} 个阅读日',
             ].join(' · '),
-            style: const TextStyle(fontSize: 11),
           ),
-          if (showTiming)
-            for (final (i, cut) in visible.indexed)
-              Text(
-                '${cuts.length > 4 ? 'PEAK CUT' : 'CUT ${(i + 1).toString().padLeft(2, '0')}'}'
-                '  ${_reportMonth(cut.month)} · ${cut.from}—${cut.to} · ${runtime(cut.seconds)}',
-                style: const TextStyle(fontSize: 10),
+          const SizedBox(height: 8),
+          AspectRatio(
+            aspectRatio: 2.02,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                border: Border.all(color: colors.outlineVariant),
               ),
+              child: Padding(
+                padding: const EdgeInsets.all(2),
+                child: _PrintPicture(_filmStills[index], dim: true),
+              ),
+            ),
+          ),
+          if (showTiming) ...[
+            const SizedBox(height: 7),
+            _ReportTwoColumns(
+              children: [
+                for (final (i, cut) in visible.indexed)
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: colors.outlineVariant.withValues(alpha: .18),
+                      border: Border.all(
+                        color: colors.outlineVariant,
+                        width: .65,
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _PrintCaption(
+                          cuts.length > 4
+                              ? 'PEAK CUT'
+                              : 'CUT ${(i + 1).toString().padLeft(2, '0')}',
+                          tracking: true,
+                        ),
+                        _PrintCaption(
+                          '${_reportMonth(cut.month)} · ${cut.from}—${cut.to}',
+                        ),
+                        Text(
+                          runtime(cut.seconds),
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 5),
+                        _ReportMeter(
+                          value: cut.seconds == null || (peak.seconds ?? 0) <= 0
+                              ? null
+                              : cut.seconds! / peak.seconds!,
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -755,16 +1011,13 @@ class _ReportFilmAct extends StatelessWidget {
 }
 
 class _ReportCalendar extends StatelessWidget {
-  const _ReportCalendar({required this.data});
+  const _ReportCalendar({required this.data, required this.round});
   final ReadingStatisticsData data;
+  final bool round;
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    const legend = Text(
-      '浅框：未记录 · 深框：已记录 0 · 色深：阅读时长',
-      style: TextStyle(fontSize: 10),
-    );
+    const legend = _PrintCaption('浅框：未记录 · 深框：已记录 0 · 色深：阅读时长', size: 9);
     if (data.period > 93) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -781,81 +1034,130 @@ class _ReportCalendar extends StatelessWidget {
         ],
       );
     }
-    final dates = {
-      for (final (i, date) in data.dates.indexed)
-        (date.year, date.month, date.day): data.seconds[i],
-    };
-    final months = {for (final date in data.dates) (date.year, date.month)};
-    final maximum = data.peakSeconds;
+    final months = <DateTime, Map<int, int?>>{};
+    for (final (i, date) in data.dates.indexed) {
+      final month = DateTime(date.year, date.month);
+      (months[month] ??= {})[date.day] = data.seconds[i];
+    }
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (final (year, month) in months) ...[
-          Padding(
-            padding: const EdgeInsets.only(top: 6, bottom: 4),
-            child: Text('$year / $month'),
-          ),
-          Table(
-            children: [
-              TableRow(
-                children: [
-                  for (final day in ['一', '二', '三', '四', '五', '六', '日'])
-                    Text(day, textAlign: TextAlign.center),
-                ],
+        _ReportTwoColumns(
+          children: [
+            for (final entry in months.entries)
+              _ReportCalendarMonth(
+                month: entry.key,
+                days: entry.value,
+                maximum: data.peakSeconds,
+                round: round,
               ),
-              for (
-                var start = 2 - DateTime(year, month).weekday;
-                start <= DateUtils.getDaysInMonth(year, month);
-                start += 7
-              )
-                TableRow(
-                  children: [
-                    for (var day = start; day < start + 7; day++)
-                      if (day < 1 || !dates.containsKey((year, month, day)))
-                        const SizedBox.shrink()
-                      else
-                        Padding(
-                          padding: const EdgeInsets.all(2),
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: switch (dates[(year, month, day)]) {
-                                null => null,
-                                0 => colors.outlineVariant,
-                                final seconds => colors.primary.withValues(
-                                  alpha: maximum <= 0
-                                      ? .20
-                                      : .20 + .32 * seconds / maximum,
-                                ),
-                              },
-                              borderRadius: BorderRadius.circular(4),
-                              border: Border.all(
-                                color: dates[(year, month, day)] == null
-                                    ? colors.outlineVariant.withValues(
-                                        alpha: .5,
-                                      )
-                                    : colors.outlineVariant,
-                              ),
-                            ),
-                            child: Text(
-                              '$day',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: dates[(year, month, day)] == null
-                                    ? colors.onSurfaceVariant
-                                    : colors.onSurface,
-                              ),
-                            ),
-                          ),
-                        ),
-                  ],
-                ),
-            ],
-          ),
-        ],
-        const SizedBox(height: 6),
+          ],
+        ),
+        const SizedBox(height: 9),
         legend,
       ],
+    );
+  }
+}
+
+class _ReportCalendarMonth extends StatelessWidget {
+  const _ReportCalendarMonth({
+    required this.month,
+    required this.days,
+    required this.maximum,
+    required this.round,
+  });
+  final DateTime month;
+  final Map<int, int?> days;
+  final int maximum;
+  final bool round;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        '${month.year} / ${month.month.toString().padLeft(2, '0')}',
+        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+      ),
+      const SizedBox(height: 3),
+      Table(
+        children: [
+          TableRow(
+            children: [
+              for (final weekday in const ['一', '二', '三', '四', '五', '六', '日'])
+                Center(child: _PrintCaption(weekday, size: 8)),
+            ],
+          ),
+          for (
+            var start = 2 - month.weekday;
+            start <= DateUtils.getDaysInMonth(month.year, month.month);
+            start += 7
+          )
+            TableRow(
+              children: [
+                for (var day = start; day < start + 7; day++)
+                  Padding(
+                    padding: const EdgeInsets.all(1),
+                    child: AspectRatio(
+                      aspectRatio: 1,
+                      child: !days.containsKey(day)
+                          ? null
+                          : _ReportCalendarCell(
+                              day: day,
+                              seconds: days[day],
+                              maximum: maximum,
+                              round: round,
+                            ),
+                    ),
+                  ),
+              ],
+            ),
+        ],
+      ),
+    ],
+  );
+}
+
+class _ReportCalendarCell extends StatelessWidget {
+  const _ReportCalendarCell({
+    required this.day,
+    required this.seconds,
+    required this.maximum,
+    required this.round,
+  });
+  final int day, maximum;
+  final int? seconds;
+  final bool round;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final fraction = (seconds ?? 0) / math.max(1, maximum);
+    final fill = switch (seconds) {
+      null => colors.surface,
+      0 => Color.lerp(colors.surface, colors.outlineVariant, .4)!,
+      _ => Color.lerp(colors.surface, colors.primary, .32 + fraction * .55)!,
+    };
+    final text = fraction > .42
+        ? (fill.computeLuminance() > .35
+              ? const Color(0xff151b19)
+              : Colors.white)
+        : colors.onSurface;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: fill,
+        border: Border.all(
+          color: colors.outlineVariant.withValues(
+            alpha: seconds == null ? .48 : 1,
+          ),
+          width: .6,
+        ),
+        borderRadius: BorderRadius.circular(round ? 99 : 2),
+      ),
+      child: Center(
+        child: Text('$day', style: TextStyle(fontSize: 8.5, color: text)),
+      ),
     );
   }
 }

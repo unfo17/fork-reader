@@ -21,6 +21,7 @@ import 'reading_statistics_data.dart';
 import 'reading_visual_theme_picker.dart';
 
 part 'reading_report_artwork.dart';
+part 'reading_report_print.dart';
 
 class ReadingReportPage extends StatefulWidget {
   const ReadingReportPage({
@@ -141,13 +142,25 @@ class _ReadingReportPageState extends State<ReadingReportPage> {
   }
 
   Future<Uint8List?> _render() async {
-    final art = AssetImage(
-      _reportArt(_options!, _data),
-      bundle: DefaultAssetBundle.of(context),
-    );
-    if (LocalPlatform.android) {
-      await precacheImage(art, context, onError: (_, _) {});
-    }
+    if (_image case final cached?) return cached;
+    final options = _options!;
+    final bundle = DefaultAssetBundle.of(context);
+    final artwork = {
+      _reportArt(options, _data),
+      if (options.template == ReadingReportTemplate.score) ..._filmStills,
+      if (options.template == ReadingReportTemplate.festival &&
+          options.signature)
+        _filmStills.first,
+      if (options.template == ReadingReportTemplate.archive) _archiveStacks,
+    };
+    await Future.wait([
+      for (final asset in artwork)
+        precacheImage(
+          AssetImage(asset, bundle: bundle),
+          context,
+          onError: (_, _) {},
+        ),
+    ]);
     if (!mounted) return null;
     return _image ??= await renderReadingArtworkPng(
       context,
@@ -410,7 +423,11 @@ class _ReadingReportPageState extends State<ReadingReportPage> {
                           onTap: _exporting
                               ? null
                               : () => _useImage(preview: true),
-                          child: _ReportCover(options: options, data: _data),
+                          child: _ReportCover(
+                            options: options,
+                            data: _data,
+                            compact: true,
+                          ),
                         ),
                       ),
                     ),
@@ -644,7 +661,11 @@ List<StatisticsAnalysisBook> _rankedReportBooks(ReadingStatisticsData data) {
 }
 
 String _reportArt(ReadingReportOptions options, ReadingStatisticsData data) =>
-    readingExportArt(options.template.theme, at: data.analysis.end);
+    switch (options.template) {
+      ReadingReportTemplate.shelf => _harborCover,
+      ReadingReportTemplate.ink => _dawnCover,
+      _ => readingExportArt(options.template.theme, at: data.analysis.end),
+    };
 
 Color _reportTint(ReadingReportOptions options) {
   final style = readingExportTheme(options.template.theme);
@@ -657,134 +678,4 @@ Color _reportTint(ReadingReportOptions options) {
     ReadingReportPalette.plum =>
       style.isDark ? const Color(0xffdfb5e1) : const Color(0xff815080),
   };
-}
-
-class _ReportCover extends StatelessWidget {
-  const _ReportCover({required this.options, required this.data});
-  final ReadingReportOptions options;
-  final ReadingStatisticsData data;
-
-  @override
-  Widget build(BuildContext context) {
-    final style = readingExportTheme(options.template.theme);
-    final tint = _reportTint(options);
-    final heading = TextStyle(
-      color: style.foreground,
-      fontSize: 31,
-      height: 1.12,
-      fontWeight: FontWeight.w800,
-      fontFamily: style.prefersSerif ? 'ReadingSerifDisplay' : null,
-    );
-    final fullWidthArt = switch (options.template) {
-      ReadingReportTemplate.archive || ReadingReportTemplate.signal => false,
-      _ => true,
-    };
-    final art = ClipRRect(
-      borderRadius: BorderRadius.circular(fullWidthArt ? 2 : 8),
-      child: Image.asset(
-        _reportArt(options, data),
-        fit: BoxFit.cover,
-        alignment: style.previewAlignment,
-        excludeFromSemantics: true,
-        errorBuilder: (_, _, _) => ColoredBox(
-          color: style.secondary,
-          child: Icon(CupertinoIcons.book, color: tint, size: 42),
-        ),
-      ),
-    );
-    final title = Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          options.title.trim().isEmpty ? '阅读报告' : options.title,
-          style: heading,
-          maxLines: 3,
-          overflow: TextOverflow.ellipsis,
-        ),
-        const SizedBox(height: 10),
-        Text(
-          options.nickname.trim().isEmpty ? '一位读者' : options.nickname,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-        ),
-        const SizedBox(height: 5),
-        Text(
-          '${_reportDate(data.analysis.start)} — ${_reportDate(data.analysis.end)}',
-          style: TextStyle(color: style.muted, fontSize: 11),
-        ),
-      ],
-    );
-    return ColoredBox(
-      color: style.background,
-      child: Padding(
-        padding: const EdgeInsets.only(top: 5, bottom: 12),
-        child: DefaultTextStyle(
-          style: Theme.of(
-            context,
-          ).textTheme.bodyMedium!.copyWith(color: style.foreground),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          readingExportBrandName,
-                          style: TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                        Text(
-                          'PERSONAL READING REPORT',
-                          style: TextStyle(
-                            fontSize: 9,
-                            letterSpacing: 1.1,
-                            color: style.muted,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Text(
-                    '${data.analysis.end.year}',
-                    style: TextStyle(
-                      color: tint,
-                      fontSize: 21,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              if (fullWidthArt) ...[
-                AspectRatio(
-                  aspectRatio: switch (options.template) {
-                    ReadingReportTemplate.editorial => 1.65,
-                    ReadingReportTemplate.shelf ||
-                    ReadingReportTemplate.ink => 2.1,
-                    _ => 2.35,
-                  },
-                  child: art,
-                ),
-                const SizedBox(height: 12),
-                title,
-              ] else
-                Row(
-                  children: [
-                    Expanded(flex: 6, child: title),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      flex: 5,
-                      child: AspectRatio(aspectRatio: .9, child: art),
-                    ),
-                  ],
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }
