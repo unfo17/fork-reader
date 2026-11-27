@@ -765,12 +765,13 @@ class EpubReaderFragment :
                 selectionDirty = true
                 if (selectionUpdate != null) return
                 selectionUpdate = lifecycleScope.launch {
+                    var retryMissingRange = lastSelection == null
                     try {
                         while (selectionDirty && ReadiumReader.appSelectionMode === mode) {
                             selectionDirty = false
                             delay(16)
                             val snapshot = try {
-                                ReadiumReader.appSelectionSnapshot(lastSelection == null)
+                                ReadiumReader.appSelectionSnapshot()
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
                             } catch (_: Exception) {
@@ -779,7 +780,13 @@ class EpubReaderFragment :
                             if (ReadiumReader.appSelectionMode === mode && snapshot != null &&
                                 snapshot != lastSelection) {
                                 lastSelection = snapshot
+                                if (android.util.Log.isLoggable("ReadiumControlTiming", android.util.Log.DEBUG)) {
+                                    android.util.Log.d("ReadiumControlTiming", "selectionUpdate")
+                                }
                                 ReadiumReader.appSelectionChanged?.invoke(snapshot)
+                            } else if (snapshot == null && retryMissingRange && lastSelection == null) {
+                                retryMissingRange = false
+                                selectionDirty = true
                             }
                         }
                     } finally {

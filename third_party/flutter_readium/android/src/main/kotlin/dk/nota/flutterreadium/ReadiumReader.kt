@@ -290,7 +290,7 @@ object ReadiumReader :
         try { root.dispatchTouchEvent(event) } finally { event.recycle() }
     }
 
-    suspend fun appSelectionSnapshot(expandSentence: Boolean): Map<String, Any>? {
+    suspend fun appSelectionSnapshot(): Map<String, Any>? {
         val root = currentReaderWidget?.getView() ?: return null
         val view = appVisibleWebView() ?: return null
         val locator = epubNavigator?.currentLocator?.value ?: return null
@@ -299,11 +299,11 @@ object ReadiumReader :
                 (function(){
                     const selection = window.getSelection();
                     if (!selection || !selection.rangeCount || selection.isCollapsed) return null;
-                    if ($expandSentence) { $appExpandSentenceScript }
-                    const current = readium.getCurrentSelection();
-                    if (!current || !current.text) return null;
+                    let text;
+                    try { text = readium.getCurrentSelection()?.text; } catch (_) {}
+                    text = text || {highlight: selection.toString()};
                     const rect = selection.getRangeAt(0).getBoundingClientRect();
-                    return {text: current.text, x: rect.left, y: rect.top,
+                    return {text, x: rect.left, y: rect.top,
                         width: rect.width, height: rect.height, viewport: innerWidth};
                 })()
             """.trimIndent()) { value ->
@@ -328,50 +328,6 @@ object ReadiumReader :
             ),
         )
     }
-
-    // Match the reader's sentence punctuation while leaving Chromium in
-    // charge of the range and its handles. Never expand into another column.
-    private val appExpandSentenceScript = """
-        const initial = selection.getRangeAt(0);
-        const element = initial.startContainer.parentElement;
-        const block = element?.closest('p,h1,h2,h3,h4,h5,h6,li,pre,blockquote,figcaption,td,th,div');
-        if (block && block.contains(initial.endContainer)) {
-            const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
-            const nodes = [];
-            let value = '', anchor = -1, node;
-            while ((node = walker.nextNode()) && value.length < 24000) {
-                if (node.parentElement.closest('rt,rp,script,style')) continue;
-                if (node === initial.startContainer) anchor = value.length + initial.startOffset;
-                nodes.push({node, offset: value.length});
-                value += node.data;
-            }
-            if (anchor >= 0 && anchor < value.length && value.length < 24000) {
-                const stops = '。！？!?\n', closes = '」』”’）】》〉"';
-                const ends = i => stops.includes(value[i]) ||
-                    (value[i] === '.' && (i + 1 === value.length ||
-                        !value[i + 1].trim() || closes.includes(value[i + 1])));
-                let start = anchor, end = anchor;
-                while (start > 0 && !ends(start - 1)) start--;
-                while (start < anchor && (!value[start].trim() || closes.includes(value[start]))) start++;
-                while (end < value.length && !ends(end)) end++;
-                if (end < value.length) end++;
-                while (end < value.length && closes.includes(value[end])) end++;
-                const a = nodes.findLast ? nodes.findLast(item => item.offset <= start)
-                    : nodes.slice().reverse().find(item => item.offset <= start);
-                const b = nodes.find(item => end <= item.offset + item.node.length);
-                if (a && b && start < end) {
-                    const range = document.createRange();
-                    range.setStart(a.node, start - a.offset);
-                    range.setEnd(b.node, end - b.offset);
-                    const rects = Array.from(range.getClientRects());
-                    if (rects.length && rects.every(rect => rect.right > 0 &&
-                        rect.left < innerWidth && rect.bottom > 0 && rect.top < innerHeight)) {
-                        selection.setBaseAndExtent(a.node, start - a.offset, b.node, end - b.offset);
-                    }
-                }
-            }
-        }
-    """.trimIndent()
 
     var appPreviewVersion = 0
         private set

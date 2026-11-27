@@ -6,7 +6,7 @@ class ReleaseSection {
   final List<String> items;
 }
 
-const _opening = 'EPUB 长按文字恢复按句选择，并使用与原阅读器共用的工具条。';
+const _opening = 'EPUB 长按文字使用与原阅读器共用的工具条，并保留原生选择手柄。';
 const _swipes = '合并选区查询，拖动手柄时只刷新工具条。选字期间暂停翻页预加载。';
 const _androidInstall = '已安装本仓库固定签名版的 Android 用户可以直接覆盖更新，书籍和阅读记录会保留。';
 
