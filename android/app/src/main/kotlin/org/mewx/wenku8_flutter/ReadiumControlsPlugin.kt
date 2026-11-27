@@ -1,5 +1,8 @@
 package org.mewx.wenku8_flutter
 
+import android.content.res.Resources
+import android.os.Build
+import android.webkit.WebView
 import dk.nota.flutterreadium.ReadiumReader
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodChannel
@@ -10,12 +13,44 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.WeakHashMap
 
 /** Narrow app-owned bridge to the pinned Readium navigator, not another WebView. */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class ReadiumControlsPlugin : FlutterPlugin {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var channel: MethodChannel? = null
+    private val selectionThemes = WeakHashMap<Resources.Theme, Resources.Theme>()
+    private var selectionStyle = 0
+
+    private fun updateSelectionStyle(dark: Boolean?) {
+        if (Build.VERSION.SDK_INT < 31) return
+        val style = when (dark) {
+            true -> R.style.ReaderSelectionMonetDark
+            false -> R.style.ReaderSelectionMonetLight
+            null -> 0
+        }
+        if (style == selectionStyle) return
+        restoreSelectionThemes()
+        selectionStyle = style
+    }
+
+    private fun applySelectionStyle(view: WebView) {
+        if (selectionStyle == 0) return
+        // WebView reads the native selection drawables from its own theme.
+        val theme = view.context.theme
+        selectionThemes.getOrPut(theme) {
+            val original = view.resources.newTheme().apply { setTo(theme) }
+            theme.applyStyle(selectionStyle, true)
+            original
+        }
+    }
+
+    private fun restoreSelectionThemes() {
+        selectionThemes.forEach { (theme, original) -> theme.setTo(original) }
+        selectionThemes.clear()
+    }
+
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel = MethodChannel(binding.binaryMessenger, "org.mewx.wenku8/readium_controls").also { ch ->
             ch.setMethodCallHandler { call, result ->
@@ -28,6 +63,7 @@ class ReadiumControlsPlugin : FlutterPlugin {
                             "locator" -> result.success(ReadiumReader.appCurrentLocatorJson())
                             "pageKey" -> result.success(ReadiumReader.appPageKeyJson())
                             "parkPublication" -> {
+                                updateSelectionStyle(null)
                                 ReadiumReader.visualClose()
                                 result.success(null)
                             }
@@ -96,7 +132,8 @@ class ReadiumControlsPlugin : FlutterPlugin {
                             }
                             "style" -> {
                                 val script = call.argument<String>("script") ?: ""
-                                result.success(ReadiumReader.appApplyStyle(script))
+                                updateSelectionStyle(call.argument<Boolean>("darkSelectionPalette"))
+                                result.success(ReadiumReader.appApplyStyle(script, ::applySelectionStyle))
                             }
                             "evaluate" -> result.success(ReadiumReader.epubEvaluateJavascript(call.argument<String>("script") ?: ""))
                             else -> result.notImplemented()
@@ -117,6 +154,8 @@ class ReadiumControlsPlugin : FlutterPlugin {
         ReadiumReader.appContactChanged = { channel?.invokeMethod("pageContact", it) }
     }
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        restoreSelectionThemes()
+        ReadiumReader.appReaderWebViewSetup = null
         ReadiumReader.appSelectionDidStart = null
         ReadiumReader.appSelectionDidEnd = null
         ReadiumReader.appSelectionChanged = null

@@ -121,6 +121,7 @@ object ReadiumReader :
     CoroutineScope by CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) {
     // App-owned preferences are reapplied to each Readium resource, never to a separate renderer.
     var appReaderStyleScript: String? = null
+    var appReaderWebViewSetup: ((android.webkit.WebView) -> Unit)? = null
     var appSelectionToolbar = false
     var appSelectionMode: android.view.ActionMode? = null
     var appSelectionDidStart: (() -> Unit)? = null
@@ -485,16 +486,27 @@ object ReadiumReader :
         }
         return false
     }
-    suspend fun appApplyStyle(script: String): String? {
+    suspend fun appApplyStyle(
+        script: String,
+        setup: ((android.webkit.WebView) -> Unit)? = appReaderWebViewSetup,
+    ): String? {
         appReaderStyleScript = script
-        appEvaluateAllWebViews(script)
+        appReaderWebViewSetup = setup
+        appEvaluateAllWebViews(script, setup)
         return null
     }
 
-    fun appEvaluateAllWebViews(script: String) {
+    fun appEvaluateAllWebViews(
+        script: String,
+        setup: ((android.webkit.WebView) -> Unit)? = null,
+    ) {
         fun apply(node: android.view.View) {
-            if (node is android.webkit.WebView) node.evaluateJavascript(script, null)
-            else if (node is android.view.ViewGroup) for (i in 0 until node.childCount) apply(node.getChildAt(i))
+            if (node is android.webkit.WebView) {
+                setup?.invoke(node)
+                node.evaluateJavascript(script, null)
+            } else if (node is android.view.ViewGroup) {
+                for (i in 0 until node.childCount) apply(node.getChildAt(i))
+            }
         }
         currentReaderWidget?.getView()?.let { apply(it) }
     }
@@ -1408,6 +1420,7 @@ object ReadiumReader :
 
     fun closePublication() {
         appReaderStyleScript = null
+        appReaderWebViewSetup = null
         ttsNavigator?.dispose()
         ttsNavigator = null
         audiobookNavigator?.dispose()

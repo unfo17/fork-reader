@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="ReaderSelectionMonetLight" parent="">
+        <item name="android:colorControlActivated">@android:color/system_accent1_600</item>
+    </style>
+    <style name="ReaderSelectionMonetDark" parent="">
+        <item name="android:colorControlActivated">@android:color/system_accent1_200</item>
+    </style>
+</resources>

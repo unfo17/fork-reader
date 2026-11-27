@@ -1,7 +1,7 @@
 const appDisplayName = '页间阅读';
 
 const currentReleaseSourcePolicy =
-    '通过「本地」导入你自己的书籍。EPUB 由 Readium 解析和渲染，安装包不附带书籍。';
+    '通过「书架」右上角的导入按钮添加自己的书籍。EPUB 由 Readium 解析和渲染，安装包不附带书籍。';
 
 const projectFreeNotice =
     '页间阅读是基于 Wenku8 Flutter 的免费本地阅读器。安装和更新请使用 [项目的 GitHub Releases](https://github.com/unfo17/fork-reader/releases) 或应用内更新。';

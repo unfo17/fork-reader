@@ -153,6 +153,7 @@ android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
 android/app/src/main/res/raw/listening_keep.xml
 android/app/src/main/res/values-night/styles.xml
 android/app/src/main/res/values-v26/reading_widget_typography.xml
+android/app/src/main/res/values-v31/reader_selection.xml
 android/app/src/main/res/values/archive_icon.xml
 android/app/src/main/res/values/reading_widget_typography.xml
 android/app/src/main/res/values/reading_widgets.xml

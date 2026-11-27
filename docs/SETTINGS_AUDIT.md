@@ -15,7 +15,7 @@
 ## 与原项目的差异
 
 - 书架仍能打开已缓存的旧收藏。在线发现、文库账号、出版分类和远端书架依赖独立在线组件，当前预览版没有这些入口或服务。
-- EPUB 正文及选区范围由 Readium 和 Android WebView 管理。选区底色跟随阅读主题，原阅读工具条保留。首次长按遵循 WebView 的选词规则，TXT 沿用原项目按句选中的规则。
+- EPUB 正文及选区范围由 Readium 和 Android WebView 管理。选区底色跟随阅读主题，原阅读工具条保留。系统配色与系统纸色同时启用时，选区底色和手柄使用 Android 莫奈色盘。首次长按遵循 WebView 的选词规则，TXT 沿用原项目按句选中的规则。
 - Android 本地导入支持 EPUB、TXT 和 ZIP。HarmonyOS 尚无 Readium EPUB 导入适配。iOS 及跨设备配对需要对应设备验证。
 
 ## 模块边界

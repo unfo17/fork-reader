@@ -1400,6 +1400,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
         final selectionCss =
             '::selection,body *::selection{background-color:$selectionInk !important;}';
         await native.invokeMethod<String>('style', {
+          if (systemPalette != null) 'darkSelectionPalette': dark,
           'script':
               '''(function(){
                 var root=document.documentElement,body=document.body;
