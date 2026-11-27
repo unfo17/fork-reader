@@ -6,8 +6,8 @@ class ReleaseSection {
   final List<String> items;
 }
 
-const _opening = '修复段落接续翻页时，后一页提前盖住前一页的问题。';
-const _swipes = '前后翻页时，移入的段落会跟随同一行区域上正在移出的段落。';
+const _opening = 'EPUB 长按文字恢复按句选择，并使用与原阅读器共用的工具条。';
+const _swipes = '合并选区查询，拖动手柄时只刷新工具条。选字期间暂停翻页预加载。';
 const _androidInstall = '已安装本仓库固定签名版的 Android 用户可以直接覆盖更新，书籍和阅读记录会保留。';
 
 const publicReleaseNotes =

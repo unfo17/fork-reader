@@ -23,6 +23,9 @@ import dk.nota.flutterreadium.progression
 import dk.nota.flutterreadium.requireOrLog
 import dk.nota.flutterreadium.withMainContext
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -754,12 +757,49 @@ class EpubReaderFragment :
         val menuItemIdOffset = 100
 
         return object : ActionMode.Callback {
+            private var selectionUpdate: Job? = null
+            private var selectionDirty = false
+            private var lastSelection: Map<String, Any>? = null
+
+            private fun scheduleSelection(mode: ActionMode?) {
+                selectionDirty = true
+                if (selectionUpdate != null) return
+                selectionUpdate = lifecycleScope.launch {
+                    try {
+                        while (selectionDirty && ReadiumReader.appSelectionMode === mode) {
+                            selectionDirty = false
+                            delay(16)
+                            val snapshot = try {
+                                ReadiumReader.appSelectionSnapshot(lastSelection == null)
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                null
+                            }
+                            if (ReadiumReader.appSelectionMode === mode && snapshot != null &&
+                                snapshot != lastSelection) {
+                                lastSelection = snapshot
+                                ReadiumReader.appSelectionChanged?.invoke(snapshot)
+                            }
+                        }
+                    } finally {
+                        selectionUpdate = null
+                    }
+                }
+            }
+
             override fun onCreateActionMode(
                 mode: ActionMode?,
                 menu: Menu?,
             ): Boolean {
                 ReadiumReader.appSelectionMode = mode
-                if (ReadiumReader.appSelectionToolbar) menu?.clear()
+                if (ReadiumReader.appSelectionToolbar) {
+                    menu?.clear()
+                    lastSelection = null
+                    ReadiumReader.appSelectionDidStart?.invoke()
+                    scheduleSelection(mode)
+                    return true
+                }
                 PluginLog.d(TAG, "::onCreateActionMode - text selection detected")
                 // Fire onTextSelected callback.
                 lifecycleScope.launch {
@@ -780,12 +820,9 @@ class EpubReaderFragment :
             ): Boolean {
                 if (menu == null) return false
                 if (ReadiumReader.appSelectionToolbar) {
+                    scheduleSelection(mode)
+                    if (menu.size() == 0) return false
                     menu.clear()
-                    lifecycleScope.launch {
-                        val nav = navigator as? SelectableNavigator ?: return@launch
-                        val selection = nav.currentSelection() ?: return@launch
-                        ReadiumReader.currentReaderWidget?.channel?.onTextSelected(selection.locator, selection.locator.text.highlight)
-                    }
                     return true
                 }
                 var changed = false
@@ -828,7 +865,11 @@ class EpubReaderFragment :
             }
 
             override fun onDestroyActionMode(mode: ActionMode?) {
+                if (ReadiumReader.appSelectionMode !== mode) return
                 ReadiumReader.appSelectionMode = null
+                selectionDirty = false
+                selectionUpdate?.cancel()
+                lastSelection = null
                 ReadiumReader.appSelectionDidEnd?.invoke()
             }
         }

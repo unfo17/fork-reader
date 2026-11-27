@@ -443,102 +443,57 @@ class ReaderSelection extends StatelessWidget {
             secondaryAnchor: Offset(x, start.dy > end.dy ? start.dy : end.dy),
           );
         }
-        return CustomSingleChildLayout(
-          delegate: TextSelectionToolbarLayoutDelegate(
-            anchorAbove: anchors.primaryAnchor - const Offset(0, 8),
-            anchorBelow:
-                (anchors.secondaryAnchor ?? anchors.primaryAnchor) +
-                const Offset(0, 8),
-          ),
-          child: GlassAppearance(
-            blur: appearance.blur,
-            opacity: appearance.opacity,
-            child: Theme(
-              data: readerTheme,
-              child: Material(
-                type: MaterialType.transparency,
-                child: GlassOverlaySurface(
-                  key: const ValueKey('reader-selection-toolbar'),
-                  preserveOptics: true,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 6,
-                      vertical: 4,
-                    ),
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxWidth: MediaQuery.sizeOf(context).width - 44,
-                      ),
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            for (final item in region.contextMenuButtonItems)
-                              if (item.type == ContextMenuButtonType.copy)
-                                _selectionAction(
-                                  key: ValueKey(
-                                    'reader-selection-${item.type.name}',
-                                  ),
-                                  icon: CupertinoIcons.doc_on_doc,
-                                  label: '复制',
-                                  onPressed: () async {
-                                    final text = controller.quote.text;
-                                    region.hideToolbar();
-                                    try {
-                                      await Clipboard.setData(
-                                        ClipboardData(text: text),
-                                      );
-                                      controller.clear();
-                                      if (context.mounted) {
-                                        showNovelFeedback(context, '已复制');
-                                      }
-                                    } catch (_) {
-                                      if (context.mounted) {
-                                        showNovelFeedback(context, '复制失败，请重试');
-                                      }
-                                    }
-                                  },
-                                ),
-                            if (onBookmark != null)
-                              _selectionAction(
-                                key: const ValueKey(
-                                  'reader-selection-bookmark',
-                                ),
-                                icon: CupertinoIcons.bookmark,
-                                label: '书签',
-                                onPressed: () => action(onBookmark!),
-                              ),
-                            if (onDictionary != null)
-                              _selectionAction(
-                                key: const ValueKey(
-                                  'reader-selection-dictionary',
-                                ),
-                                icon: CupertinoIcons.book,
-                                label: '词典',
-                                semanticLabel: '词典',
-                                onPressed: () => action(onDictionary!),
-                              ),
-                            if (onIllustrations != null)
-                              _selectionAction(
-                                key: const ValueKey(
-                                  'reader-selection-illustrations',
-                                ),
-                                icon: CupertinoIcons.photo,
-                                label: '插图',
-                                onPressed: () {
-                                  region.hideToolbar();
-                                  controller.clear();
-                                  onIllustrations!();
-                                },
-                              ),
-                          ],
-                        ),
-                      ),
-                    ),
+        return GlassAppearance(
+          blur: appearance.blur,
+          opacity: appearance.opacity,
+          child: Theme(
+            data: readerTheme,
+            child: _ReaderSelectionMenu(
+              anchors: anchors,
+              actions: [
+                if (region.contextMenuButtonItems.any(
+                  (item) => item.type == ContextMenuButtonType.copy,
+                ))
+                  _selectionAction(
+                    key: const ValueKey('reader-selection-copy'),
+                    icon: CupertinoIcons.doc_on_doc,
+                    label: '复制',
+                    onPressed: () {
+                      final text = controller.quote.text;
+                      region.hideToolbar();
+                      copyReaderSelection(
+                        context,
+                        text,
+                        onCopied: controller.clear,
+                      );
+                    },
                   ),
-                ),
-              ),
+                if (onBookmark != null)
+                  _selectionAction(
+                    key: const ValueKey('reader-selection-bookmark'),
+                    icon: CupertinoIcons.bookmark,
+                    label: '书签',
+                    onPressed: () => action(onBookmark!),
+                  ),
+                if (onDictionary != null)
+                  _selectionAction(
+                    key: const ValueKey('reader-selection-dictionary'),
+                    icon: CupertinoIcons.book,
+                    label: '词典',
+                    onPressed: () => action(onDictionary!),
+                  ),
+                if (onIllustrations != null)
+                  _selectionAction(
+                    key: const ValueKey('reader-selection-illustrations'),
+                    icon: CupertinoIcons.photo,
+                    label: '插图',
+                    onPressed: () {
+                      region.hideToolbar();
+                      controller.clear();
+                      onIllustrations!();
+                    },
+                  ),
+              ],
             ),
           ),
         );
@@ -553,10 +508,9 @@ Widget _selectionAction({
   required IconData icon,
   required String label,
   required VoidCallback onPressed,
-  String? semanticLabel,
 }) => Semantics(
   button: true,
-  label: semanticLabel ?? label,
+  label: label,
   child: JellyTapSurface(
     key: key,
     onTap: onPressed,
@@ -587,10 +541,40 @@ class ReaderNativeSelectionToolbar extends StatelessWidget {
   final Rect bounds;
   final ValueChanged<String> onAction;
   @override
+  Widget build(BuildContext context) => _ReaderSelectionMenu(
+    anchors: TextSelectionToolbarAnchors(
+      primaryAnchor: bounds.topCenter,
+      secondaryAnchor: bounds.bottomCenter,
+    ),
+    actions: [
+      for (final (id, icon, label) in const [
+        ('copy', CupertinoIcons.doc_on_doc, '复制'),
+        ('bookmark', CupertinoIcons.bookmark, '书签'),
+        ('dictionary', CupertinoIcons.book, '词典'),
+        ('illustrations', CupertinoIcons.photo, '插图'),
+      ])
+        _selectionAction(
+          key: ValueKey('reader-selection-$id'),
+          icon: icon,
+          label: label,
+          onPressed: () => onAction(id),
+        ),
+    ],
+  );
+}
+
+class _ReaderSelectionMenu extends StatelessWidget {
+  const _ReaderSelectionMenu({required this.anchors, required this.actions});
+  final TextSelectionToolbarAnchors anchors;
+  final List<Widget> actions;
+
+  @override
   Widget build(BuildContext context) => CustomSingleChildLayout(
     delegate: TextSelectionToolbarLayoutDelegate(
-      anchorAbove: bounds.topCenter - const Offset(0, 8),
-      anchorBelow: bounds.bottomCenter + const Offset(0, 8),
+      anchorAbove: anchors.primaryAnchor - const Offset(0, 8),
+      anchorBelow:
+          (anchors.secondaryAnchor ?? anchors.primaryAnchor) +
+          const Offset(0, 8),
     ),
     child: Material(
       type: MaterialType.transparency,
@@ -605,39 +589,25 @@ class ReaderNativeSelectionToolbar extends StatelessWidget {
             ),
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _selectionAction(
-                    key: const ValueKey('reader-selection-copy'),
-                    icon: CupertinoIcons.doc_on_doc,
-                    label: '复制',
-                    onPressed: () => onAction('copy'),
-                  ),
-                  _selectionAction(
-                    key: const ValueKey('reader-selection-bookmark'),
-                    icon: CupertinoIcons.bookmark,
-                    label: '书签',
-                    onPressed: () => onAction('bookmark'),
-                  ),
-                  _selectionAction(
-                    key: const ValueKey('reader-selection-dictionary'),
-                    icon: CupertinoIcons.book,
-                    label: '词典',
-                    onPressed: () => onAction('dictionary'),
-                  ),
-                  _selectionAction(
-                    key: const ValueKey('reader-selection-illustrations'),
-                    icon: CupertinoIcons.photo,
-                    label: '插图',
-                    onPressed: () => onAction('illustrations'),
-                  ),
-                ],
-              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: actions),
             ),
           ),
         ),
       ),
     ),
   );
+}
+
+Future<void> copyReaderSelection(
+  BuildContext context,
+  String text, {
+  VoidCallback? onCopied,
+}) async {
+  try {
+    await Clipboard.setData(ClipboardData(text: text));
+    onCopied?.call();
+    if (context.mounted) showNovelFeedback(context, '已复制');
+  } catch (_) {
+    if (context.mounted) showNovelFeedback(context, '复制失败，请重试');
+  }
 }

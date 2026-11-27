@@ -291,6 +291,8 @@ class ReadiumPageTurnController {
   Future<void> thawAfterRoute() async => _owner?._thawAfterRoute();
   void setOverlayOpen(bool open) => _owner?._setOverlayOpen(open);
   void setChromeAnimating(bool animating) => _owner?._setChromeAnimating(animating);
+  void setSelectionActive(bool active) => _owner?._setSelectionActive(active);
+  void setNativeContact(bool active) => _owner?._setNativeContact(active);
 
   Future<void> get whenPrepared => _owner?._preparing ?? Future<void>.value();
 
@@ -332,6 +334,7 @@ class ReadiumPageSurface extends StatefulWidget {
     this.coverInitialEntry = false,
     this.captureEntry,
     this.replayTap,
+    this.replayPress,
     this.onRetainedDrag,
     this.refreshRateLimit = 0,
   });
@@ -351,6 +354,7 @@ class ReadiumPageSurface extends StatefulWidget {
   final bool coverInitialEntry;
   final Future<ReadiumPageFrame?> Function()? captureEntry;
   final Future<void> Function(Offset fraction)? replayTap;
+  final Future<void> Function(String phase, Offset fraction)? replayPress;
   final ValueChanged<Map<String, dynamic>>? onRetainedDrag;
   final Future<bool> Function(int direction)? canTurn;
   final Future<ReadiumPageFrame?> Function(int direction, ReadiumPageFrame origin)? preview;
@@ -412,6 +416,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   bool _preparationInterrupted = false, _routePaused = false;
   bool _overlayOpen = false;
   bool _chromeAnimating = false;
+  bool _selectionActive = false, _nativeContact = false, _retainedContact = false;
+  bool get _inputActive => _selectionActive || _nativeContact || _retainedContact;
   ReadiumPageFrame? _routeCover;
   ReadiumPageFrame? _overlayCover;
   ReadiumPageFrame? _presented;
@@ -446,6 +452,28 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       _warmTimer?.cancel();
       if (!_busy && _preparing != null) widget.onPrioritize?.call();
     } else {
+      _resumeWarmWhenReady();
+    }
+  }
+
+  void _setSelectionActive(bool active) {
+    if (_selectionActive == active) return;
+    _selectionActive = active;
+    if (active) {
+      _warmTimer?.cancel();
+      if (_preparing != null && !_busy) widget.onPrioritize?.call();
+      if (_presented != null) setState(_releasePresentedPage);
+    } else if (!_inputActive) {
+      _resumeWarmWhenReady();
+    }
+  }
+
+  void _setNativeContact(bool active) {
+    if (_nativeContact == active) return;
+    _nativeContact = active;
+    if (active) {
+      _warmTimer?.cancel();
+    } else if (!_inputActive) {
       _resumeWarmWhenReady();
     }
   }
@@ -719,7 +747,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       for (final run in runs) {
         if (!mounted || key != widget.frameKey || _routePaused ||
             (requiredDirection == null &&
-                (_preparationInterrupted || _overlayOpen || _chromeAnimating))) break;
+                (_preparationInterrupted || _overlayOpen || _chromeAnimating ||
+                    _inputActive))) break;
         final missing = <int>[];
         for (final offset in run) {
           if (offset.abs() > 1 && _edges.contains(offset.sign)) _edges.add(offset);
@@ -767,6 +796,35 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       _preparationInterrupted = false;
       if (mounted) _warmLater();
     }
+  }
+
+  void Function(bool cancel)? _holdPreviewPress(Offset position) {
+    final replay = widget.replayPress;
+    final box = context.findRenderObject();
+    if (replay == null || _busy || _routePaused ||
+        box is! RenderBox || !box.hasSize || box.size.isEmpty) return null;
+    final fraction = Offset(position.dx / box.size.width, position.dy / box.size.height);
+    final key = widget.frameKey;
+    var ended = false, forwarded = false;
+    _retainedContact = true;
+    _warmTimer?.cancel();
+    if (_preparing != null) widget.onPrioritize?.call();
+    unawaited(() async {
+      await _preparing;
+      if (ended || !mounted || _busy || key != widget.frameKey) return;
+      forwarded = true;
+      await replay('down', fraction);
+    }().catchError((Object _) {}));
+    return (cancel) {
+      ended = true;
+      _retainedContact = false;
+      if (forwarded) {
+        unawaited(replay(cancel ? 'cancel' : 'up', fraction).catchError((Object _) {}));
+      } else if (!cancel && mounted && key == widget.frameKey) {
+        unawaited(_replayPreviewTap(position));
+      }
+      if (mounted && !_inputActive) _resumeWarmWhenReady();
+    };
   }
 
   void _reverseDrag(int direction) {
@@ -1309,7 +1367,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _warmTimer?.cancel();
     _warmTimer = Timer(Duration(milliseconds: _cached == null ? 48 : 32), () async {
       if (!mounted || _busy || _warming || _routePaused || _overlayOpen ||
-          _chromeAnimating || _entering ||
+          _chromeAnimating || _entering || _inputActive ||
           _preparationInterrupted) return;
       if (MediaQuery.disableAnimationsOf(context) ||
           (_cached != null && (widget.preview == null || _windowComplete)) ||
@@ -1917,14 +1975,19 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         ),
       if (widget.onRetainedDrag != null || widget.replayTap != null)
         Positioned.fill(
+          key: const ValueKey('readium-retained-input'),
           child: IgnorePointer(
             ignoring: _previewCover == null &&
                 !(_sceneCoversPage && widget.onRetainedDrag != null),
             child: _ReadiumRetainedInput(
               onDrag: widget.onRetainedDrag,
-              onTap: widget.replayTap == null ? null : (position) {
-                if (_previewCover != null) unawaited(_replayPreviewTap(position));
-              },
+              onTap: widget.replayTap != null && _previewCover != null
+                  ? (position) => unawaited(_replayPreviewTap(position))
+                  : null,
+              onHold: widget.replayPress != null && _previewCover != null && !_sceneCoversPage
+                  ? _holdPreviewPress
+                  : null,
+              selectionActive: _selectionActive,
             ),
           ),
         ),
@@ -1975,10 +2038,15 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
 /// Keep this recognizer mounted through the transition back to the live page
 /// so a second pointer can finish the gesture it started on the frame.
 class _ReadiumRetainedInput extends StatefulWidget {
-  const _ReadiumRetainedInput({required this.onDrag, required this.onTap});
+  const _ReadiumRetainedInput({
+    required this.onDrag, required this.onTap, required this.onHold,
+    required this.selectionActive,
+  });
 
   final ValueChanged<Map<String, dynamic>>? onDrag;
   final ValueChanged<Offset>? onTap;
+  final void Function(bool cancel)? Function(Offset)? onHold;
+  final bool selectionActive;
 
   @override
   State<_ReadiumRetainedInput> createState() => _ReadiumRetainedInputState();
@@ -1992,9 +2060,21 @@ class _ReadiumRetainedInputState extends State<_ReadiumRetainedInput> {
   Duration _downTime = Duration.zero;
   VelocityTracker? _velocity;
   bool _dragging = false, _interrupted = false;
+  Timer? _holdTimer;
+  void Function(bool cancel)? _releaseHold;
+  ValueChanged<Offset>? _tap;
+
+  void _stopHold(bool cancel) {
+    _holdTimer?.cancel();
+    _holdTimer = null;
+    final release = _releaseHold;
+    _releaseHold = null;
+    release?.call(cancel);
+  }
 
   void _down(PointerDownEvent event) {
     if (_pointer != null) {
+      _stopHold(true);
       if (_dragging) _send('Cancel', event);
       _dragging = false;
       _interrupted = true;
@@ -2007,6 +2087,12 @@ class _ReadiumRetainedInputState extends State<_ReadiumRetainedInput> {
     _velocity = VelocityTracker.withKind(event.kind)
       ..addPosition(event.timeStamp, event.localPosition);
     _interrupted = false;
+    _tap = widget.onTap;
+    if (widget.onHold case final hold?) {
+      _holdTimer = Timer(const Duration(milliseconds: 120), () {
+        _releaseHold = hold(_origin);
+      });
+    }
   }
 
   void _send(String phase, PointerEvent event, {double? velocity}) {
@@ -2027,6 +2113,8 @@ class _ReadiumRetainedInputState extends State<_ReadiumRetainedInput> {
 
   void _move(PointerEvent event) {
     if (event.pointer != _pointer || _interrupted) return;
+    if (widget.selectionActive && _releaseHold != null) return;
+    if ((event.localPosition - _origin).distance > _touchSlop) _stopHold(true);
     _velocity?.addPosition(event.timeStamp, event.localPosition);
     if (!_dragging && widget.onDrag != null &&
         (event.localPosition.dx - _origin.dx).abs() > _touchSlop) {
@@ -2040,19 +2128,30 @@ class _ReadiumRetainedInputState extends State<_ReadiumRetainedInput> {
   void _end(PointerEvent event) {
     if (event.pointer != _pointer) return;
     if (event is PointerCancelEvent) {
+      _stopHold(true);
       if (_dragging) _send('Cancel', event);
     } else if (!_interrupted) {
       _move(event);
       if (_dragging) {
         _send('End', event, velocity: _velocity?.getVelocity().pixelsPerSecond.dx);
+      } else if (_releaseHold != null) {
+        _stopHold(false);
       } else if ((event.localPosition - _origin).distance <= _touchSlop &&
           event.timeStamp - _downTime < kLongPressTimeout) {
-        widget.onTap?.call(event.localPosition);
+        _tap?.call(event.localPosition);
       }
     }
+    _stopHold(true);
+    _tap = null;
     _pointer = null;
     _velocity = null;
     _dragging = false;
+  }
+
+  @override
+  void dispose() {
+    _stopHold(true);
+    super.dispose();
   }
 
   @override

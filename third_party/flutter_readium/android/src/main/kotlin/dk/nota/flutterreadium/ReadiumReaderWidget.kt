@@ -602,6 +602,7 @@ private class AppPageGestureLayout(
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            if (ReadiumReader.appSelectionToolbar) ReadiumReader.appContactChanged?.invoke(true)
             recycleVelocityTracker()
             marginTouch = false
             if (ownsGesture()) velocityTracker = VelocityTracker.obtain()
@@ -627,12 +628,16 @@ private class AppPageGestureLayout(
             return super.dispatchTouchEvent(event)
         } finally {
             if (event.actionMasked == MotionEvent.ACTION_UP ||
-                event.actionMasked == MotionEvent.ACTION_CANCEL) recycleVelocityTracker()
+                event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                recycleVelocityTracker()
+                if (ReadiumReader.appSelectionToolbar) ReadiumReader.appContactChanged?.invoke(false)
+            }
         }
     }
 
     override fun onDetachedFromWindow() {
         recycleVelocityTracker()
+        if (ReadiumReader.appSelectionToolbar) ReadiumReader.appContactChanged?.invoke(false)
         super.onDetachedFromWindow()
     }
 

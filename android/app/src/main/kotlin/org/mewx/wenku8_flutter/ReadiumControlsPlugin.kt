@@ -32,7 +32,6 @@ class ReadiumControlsPlugin : FlutterPlugin {
                                 result.success(null)
                             }
                             "fixedLayout" -> result.success(ReadiumReader.appIsFixedLayout())
-                            "contentTop" -> result.success(ReadiumReader.appContentTop())
                             "viewportInsets" -> {
                                 ReadiumReader.appSetViewportInsets(
                                     call.argument<Number>("top")?.toDouble() ?: 0.0,
@@ -54,6 +53,11 @@ class ReadiumControlsPlugin : FlutterPlugin {
                                 call.argument<Boolean>("waitForPaint") != false,
                             ))
                             "tap" -> { ReadiumReader.appReplayTap(call.argument<Double>("x") ?: 0.5, call.argument<Double>("y") ?: 0.5); result.success(null) }
+                            "press" -> {
+                                ReadiumReader.appReplayPress(call.argument<String>("phase") ?: "",
+                                    call.argument<Double>("x") ?: 0.5, call.argument<Double>("y") ?: 0.5)
+                                result.success(null)
+                            }
                             "previewVersion" -> result.success(ReadiumReader.appPreviewVersion)
                             "interruptPreview" -> { ReadiumReader.appInterruptPreview(); result.success(null) }
                             "canTurn" -> result.success(ReadiumReader.appCanTurnPage(call.argument<Int>("direction") ?: 1))
@@ -107,10 +111,16 @@ class ReadiumControlsPlugin : FlutterPlugin {
                 }
             }
         }
+        ReadiumReader.appSelectionDidStart = { channel?.invokeMethod("selectionStarted", null) }
         ReadiumReader.appSelectionDidEnd = { channel?.invokeMethod("selectionEnded", null) }
+        ReadiumReader.appSelectionChanged = { channel?.invokeMethod("selectionChanged", it) }
+        ReadiumReader.appContactChanged = { channel?.invokeMethod("pageContact", it) }
     }
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        ReadiumReader.appSelectionDidStart = null
         ReadiumReader.appSelectionDidEnd = null
+        ReadiumReader.appSelectionChanged = null
+        ReadiumReader.appContactChanged = null
         channel?.setMethodCallHandler(null); channel = null; scope.cancel()
     }
 }

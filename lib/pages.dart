@@ -5074,17 +5074,17 @@ class _ReaderPageState extends State<ReaderPage>
   double? _nativeSeekPreview;
   int _nativeSeekRequest = 0;
   String? _nativeText;
-  ({String text, Rect bounds})? _nativeSelection;
+  final _nativeSelection = ValueNotifier<({String text, Rect bounds})?>(null);
   void _nativeSelectionEnded() {
     if (!mounted) return;
     _selection.value = false;
-    setState(() => _nativeSelection = null);
+    _nativeSelection.value = null;
   }
 
   void _nativeSelected(String text, Rect bounds) {
     if (!mounted || text.isEmpty) return;
     _selection.value = true;
-    setState(() => _nativeSelection = (text: text, bounds: bounds));
+    _nativeSelection.value = (text: text, bounds: bounds);
   }
 
   String? _nativeReportedError;
@@ -5316,19 +5316,17 @@ class _ReaderPageState extends State<ReaderPage>
       return;
     }
     if (action == 'image') {
-      if (_nativeSelection != null) {
-        _selection.clear();
-        setState(() => _nativeSelection = null);
+      if (_nativeSelection.value != null) {
+        _nativeSelectionEnded();
         unawaited(_readium!.clearSelection());
       }
       unawaited(_openNativeImage(text));
       return;
     }
-    _selection.clear();
-    if (_nativeSelection != null) setState(() => _nativeSelection = null);
+    _nativeSelectionEnded();
     unawaited(_readium!.clearSelection());
     if (action == 'copy') {
-      Clipboard.setData(ClipboardData(text: text));
+      unawaited(copyReaderSelection(context, text));
       return;
     }
     if (action == 'illustrations') {
@@ -6347,6 +6345,7 @@ class _ReaderPageState extends State<ReaderPage>
     _bookmarkLandingTimer?.cancel();
     _bookmarkLanding.dispose();
     _selection.dispose();
+    _nativeSelection.dispose();
     _verticalGlyphs.dispose();
     _listening?.snapshot.removeListener(_listeningChanged);
     _listening?.progress.removeListener(_listeningProgressChanged);
@@ -10321,11 +10320,16 @@ class _ReaderPageState extends State<ReaderPage>
               ),
             ),
           ),
-          if (_nativeSelection case final selected?)
+          if (_readium != null)
             Positioned.fill(
-              child: ReaderNativeSelectionToolbar(
-                bounds: selected.bounds,
-                onAction: (action) => _nativeAction(action, selected.text),
+              child: ValueListenableBuilder(
+                valueListenable: _nativeSelection,
+                builder: (context, selected, _) => selected == null
+                    ? const SizedBox.shrink()
+                    : ReaderNativeSelectionToolbar(
+                        bounds: selected.bounds,
+                        onAction: (action) => _nativeAction(action, selected.text),
+                      ),
               ),
             ),
         ],

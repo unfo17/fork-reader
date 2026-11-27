@@ -54,12 +54,18 @@ class ReadiumReaderBridge extends ChangeNotifier {
     native.setMethodCallHandler((call) async {
       final owner = _owner;
       if (owner == null || owner._disposed) return;
-      if (call.method == 'selectionEnded') {
-        final owner = _owner;
-        if (owner != null) {
-          owner._selectionTicket++;
+      switch (call.method) {
+        case 'selectionStarted':
+          owner.turns.setSelectionActive(true);
+          owner._seekTicket++;
+          owner.onUserNavigation();
+        case 'selectionChanged':
+          owner._selected(call.arguments as Map);
+        case 'selectionEnded':
+          owner.turns.setSelectionActive(false);
           owner.onSelectionEnd();
-        }
+        case 'pageContact':
+          owner.turns.setNativeContact(call.arguments == true);
       }
     });
     chapter = initialChapter;
@@ -105,40 +111,25 @@ class ReadiumReaderBridge extends ChangeNotifier {
   final void Function(String text, Rect bounds) onSelection;
   final VoidCallback onSelectionEnd;
   final _viewKey = GlobalKey();
-  int _selectionTicket = 0;
   Future<void> clearSelection() async {
     if (Platform.isAndroid && _owner == this)
       await native.invokeMethod<void>('clearSelection');
   }
 
-  Future<void> _selected(rd.TextSelectionEvent event) async {
-    selectedLocator = event.locator;
-    _seekTicket++;
-    onUserNavigation();
-    if (!Platform.isAndroid) return;
-    final ticket = ++_selectionTicket;
-    final raw = await native.invokeMethod<String>('evaluate', {
-      'script':
-          '(function(){var s=window.getSelection();if(!s||!s.rangeCount||s.isCollapsed)return null;var r=s.getRangeAt(0).getBoundingClientRect();return JSON.stringify({x:r.x,y:r.y,w:r.width,h:r.height,v:window.innerWidth});})()',
-    });
-    final top = await native.invokeMethod<double>('contentTop') ?? 0;
-    if (_disposed || ticket != _selectionTicket || raw == null) return;
-    Object? decoded = jsonDecode(raw);
-    if (decoded is String) decoded = jsonDecode(decoded);
+  void _selected(Map snapshot) {
+    final rawBounds = snapshot['bounds'] as List;
     final box = _viewKey.currentContext?.findRenderObject();
-    if (decoded is! Map || box is! RenderBox || !box.hasSize) return;
-    final scale = box.size.width / (decoded['v'] as num).toDouble();
+    if (box is! RenderBox || !box.hasSize) return;
+    final values = rawBounds.cast<double>();
     final bounds = Rect.fromLTWH(
-      (decoded['x'] as num).toDouble() * scale,
-      top + (decoded['y'] as num).toDouble() * scale,
-      (decoded['w'] as num).toDouble() * scale,
-      (decoded['h'] as num).toDouble() * scale,
-    ).shift(box.localToGlobal(Offset.zero));
+      values[0], values[1], values[2], values[3],
+    ).intersect(Offset.zero & box.size).shift(box.localToGlobal(Offset.zero));
     if (bounds.isEmpty) return;
-    onSelection(
-      event.selectedText ?? event.locator.text?.highlight ?? '',
-      bounds,
-    );
+    final at = rd.Locator.fromJson(jsonDecode(snapshot['locator'] as String));
+    final text = at?.text?.highlight;
+    if (text == null || text.isEmpty) return;
+    selectedLocator = at;
+    onSelection(text, bounds);
   }
 
   bool _previewing = false, _landing = false;
@@ -1588,8 +1579,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
     return ReadiumPageSurface(
       controller: turns,
       frameKey:
-          "${locator?.href}|$fraction|$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|${_appearance.pageEffect}",
-      layoutKey: '$_preferencesTicket|$_selectionTicket|$_marksRevision|$_styleReady|${_appearance.pageEffect}',
+          "${locator?.href}|$fraction|$_preferencesTicket|$_marksRevision|$_styleReady|${_appearance.pageEffect}",
+      layoutKey: '$_preferencesTicket|$_marksRevision|$_styleReady|${_appearance.pageEffect}',
       preferences: _appearance,
       paper: pagePaper,
       capture: _capturePage,
@@ -1607,6 +1598,11 @@ class ReadiumReaderBridge extends ChangeNotifier {
       onPrioritize: _interruptPreview,
       onTurnAvailable: _continueHeldDrag,
       replayTap: (point) => native.invokeMethod<void>('tap', {'x': point.dx, 'y': point.dy}),
+      replayPress: Platform.isAndroid
+          ? (phase, point) => native.invokeMethod<void>('press', {
+              'phase': phase, 'x': point.dx, 'y': point.dy,
+            })
+          : null,
       onRetainedDrag: useSnapshots
           ? (event) => _pageDrag(event, source: _ReaderDragSource.retained)
           : null,
@@ -1646,8 +1642,11 @@ class ReadiumReaderBridge extends ChangeNotifier {
                 ],
                 allowedDefaultActions: const {},
                 onImageTapped: (image) => onAction('image', image.href),
-                onTextSelected: (e) =>
-                    unawaited(_selected(e).catchError((Object _) {})),
+                onTextSelected: (e) {
+                  selectedLocator = e.locator;
+                  _seekTicket++;
+                  onUserNavigation();
+                },
                 onSelectionAction: (e) {
                   selectedLocator = e.locator;
                   onAction(e.actionId, e.selectedText ?? '');

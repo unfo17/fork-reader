@@ -123,7 +123,10 @@ object ReadiumReader :
     var appReaderStyleScript: String? = null
     var appSelectionToolbar = false
     var appSelectionMode: android.view.ActionMode? = null
+    var appSelectionDidStart: (() -> Unit)? = null
     var appSelectionDidEnd: (() -> Unit)? = null
+    var appSelectionChanged: ((Map<String, Any>) -> Unit)? = null
+    var appContactChanged: ((Boolean) -> Unit)? = null
     fun appIsFixedLayout(): Boolean = currentPublication?.metadata?.layout == org.readium.r2.shared.publication.Layout.FIXED
 
     private fun appVisibleWebView(): android.webkit.WebView? {
@@ -264,6 +267,111 @@ object ReadiumReader :
             try { root.dispatchTouchEvent(event) } finally { event.recycle() }
         }
     }
+
+    private var appPressStarted: Long? = null
+
+    fun appReplayPress(phase: String, x: Double, y: Double) {
+        val root = currentReaderWidget?.getView() ?: return
+        val now = android.os.SystemClock.uptimeMillis()
+        val action = when (phase) {
+            "down" -> android.view.MotionEvent.ACTION_DOWN
+            "up" -> android.view.MotionEvent.ACTION_UP
+            "cancel" -> android.view.MotionEvent.ACTION_CANCEL
+            else -> return
+        }
+        val start = if (phase == "down") {
+            (now - 120).also { appPressStarted = it }
+        } else {
+            (appPressStarted ?: return).also { appPressStarted = null }
+        }
+        val event = android.view.MotionEvent.obtain(start, now, action,
+            (x * root.width).toFloat(), (y * root.height).toFloat(), 0)
+        event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+        try { root.dispatchTouchEvent(event) } finally { event.recycle() }
+    }
+
+    suspend fun appSelectionSnapshot(expandSentence: Boolean): Map<String, Any>? {
+        val root = currentReaderWidget?.getView() ?: return null
+        val view = appVisibleWebView() ?: return null
+        val locator = epubNavigator?.currentLocator?.value ?: return null
+        val raw = kotlinx.coroutines.suspendCancellableCoroutine<String?> { continuation ->
+            view.evaluateJavascript("""
+                (function(){
+                    const selection = window.getSelection();
+                    if (!selection || !selection.rangeCount || selection.isCollapsed) return null;
+                    if ($expandSentence) { $appExpandSentenceScript }
+                    const current = readium.getCurrentSelection();
+                    if (!current || !current.text) return null;
+                    const rect = selection.getRangeAt(0).getBoundingClientRect();
+                    return {text: current.text, x: rect.left, y: rect.top,
+                        width: rect.width, height: rect.height, viewport: innerWidth};
+                })()
+            """.trimIndent()) { value ->
+                if (continuation.isActive) continuation.resumeWith(Result.success(value))
+            }
+        } ?: return null
+        if (appVisibleWebView() !== view || raw == "null") return null
+        val value = JSONObject(raw)
+        val text = Locator.Text.fromJSON(value.optJSONObject("text"))
+        val viewport = value.optDouble("viewport")
+        if (!viewport.isFinite() || viewport <= 0 || text.highlight.isNullOrBlank()) return null
+        val viewPosition = IntArray(2).also(view::getLocationInWindow)
+        val rootPosition = IntArray(2).also(root::getLocationInWindow)
+        val density = root.resources.displayMetrics.density.toDouble()
+        val scale = view.width / viewport / density
+        return mapOf(
+            "locator" to locator.copy(text = text).toJSON().toString(),
+            "bounds" to listOf(
+                (viewPosition[0] - rootPosition[0]) / density + value.getDouble("x") * scale,
+                (viewPosition[1] - rootPosition[1]) / density + value.getDouble("y") * scale,
+                value.getDouble("width") * scale, value.getDouble("height") * scale,
+            ),
+        )
+    }
+
+    // Match the reader's sentence punctuation while leaving Chromium in
+    // charge of the range and its handles. Never expand into another column.
+    private val appExpandSentenceScript = """
+        const initial = selection.getRangeAt(0);
+        const element = initial.startContainer.parentElement;
+        const block = element?.closest('p,h1,h2,h3,h4,h5,h6,li,pre,blockquote,figcaption,td,th,div');
+        if (block && block.contains(initial.endContainer)) {
+            const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+            const nodes = [];
+            let value = '', anchor = -1, node;
+            while ((node = walker.nextNode()) && value.length < 24000) {
+                if (node.parentElement.closest('rt,rp,script,style')) continue;
+                if (node === initial.startContainer) anchor = value.length + initial.startOffset;
+                nodes.push({node, offset: value.length});
+                value += node.data;
+            }
+            if (anchor >= 0 && anchor < value.length && value.length < 24000) {
+                const stops = '。！？!?\n', closes = '」』”’）】》〉"';
+                const ends = i => stops.includes(value[i]) ||
+                    (value[i] === '.' && (i + 1 === value.length ||
+                        !value[i + 1].trim() || closes.includes(value[i + 1])));
+                let start = anchor, end = anchor;
+                while (start > 0 && !ends(start - 1)) start--;
+                while (start < anchor && (!value[start].trim() || closes.includes(value[start]))) start++;
+                while (end < value.length && !ends(end)) end++;
+                if (end < value.length) end++;
+                while (end < value.length && closes.includes(value[end])) end++;
+                const a = nodes.findLast ? nodes.findLast(item => item.offset <= start)
+                    : nodes.slice().reverse().find(item => item.offset <= start);
+                const b = nodes.find(item => end <= item.offset + item.node.length);
+                if (a && b && start < end) {
+                    const range = document.createRange();
+                    range.setStart(a.node, start - a.offset);
+                    range.setEnd(b.node, end - b.offset);
+                    const rects = Array.from(range.getClientRects());
+                    if (rects.length && rects.every(rect => rect.right > 0 &&
+                        rect.left < innerWidth && rect.bottom > 0 && rect.top < innerHeight)) {
+                        selection.setBaseAndExtent(a.node, start - a.offset, b.node, end - b.offset);
+                    }
+                }
+            }
+        }
+    """.trimIndent()
 
     var appPreviewVersion = 0
         private set
@@ -451,14 +559,6 @@ object ReadiumReader :
 
     fun appSetViewportInsets(top: Double, bottom: Double, minimumStatus: Double) =
         currentReaderWidget?.setAppViewportInsets(top, bottom, minimumStatus)
-
-    fun appContentTop(): Double {
-        val root = currentReaderWidget?.getView() ?: return 0.0
-        val page = appVisibleWebView() ?: return 0.0
-        val rootLocation = IntArray(2).also(root::getLocationInWindow)
-        val pageLocation = IntArray(2).also(page::getLocationInWindow)
-        return (pageLocation[1] - rootLocation[1]) / root.resources.displayMetrics.density.toDouble()
-    }
 
     fun appOwnsPageGestures(): Boolean = appSelectionToolbar &&
         epubNavigator != null && epubNavigator?.preferences?.scroll != true &&
