@@ -239,7 +239,14 @@ class _ReadingReportPageState extends State<ReadingReportPage> {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (leading != null) ...[leading, const SizedBox(width: 6)],
-          Flexible(child: AppText(label)),
+          Flexible(
+            child: compact
+                ? FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: AppText(label, maxLines: 1),
+                  )
+                : AppText(label),
+          ),
         ],
       ),
     ),

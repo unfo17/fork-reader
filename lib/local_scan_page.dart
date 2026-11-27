@@ -111,6 +111,7 @@ class _LocalScanPageState extends State<LocalScanPage> {
                         runSpacing: 8,
                         children: [
                           GlassTextButton(
+                            compact: true,
                             selected: selected.containsAll(available.keys),
                             onPressed: busy
                                 ? null
@@ -119,6 +120,7 @@ class _LocalScanPageState extends State<LocalScanPage> {
                           ),
                           for (final entry in available.entries)
                             GlassTextButton(
+                              compact: true,
                               selected: selected.contains(entry.key),
                               onPressed: busy
                                   ? null
