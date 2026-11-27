@@ -152,9 +152,9 @@ class ReadiumReaderWidget(
                 val density = context.resources.displayMetrics.density
                 channel.onReaderTap(x / density, y / density)
             },
-            onSwipe = { phase, dx, dy, y, velocityX, durationMillis ->
+            onSwipe = { phase, dx, dy, y, startX, velocityX, durationMillis ->
                 val density = context.resources.displayMetrics.density
-                channel.onReaderDrag(phase, dx / density, dy / density, y, velocityX / density, durationMillis)
+                channel.onReaderDrag(phase, dx / density, dy / density, y, startX, velocityX / density, durationMillis)
             })
         layout.id = generateViewId()
         (creationParams["appViewportInsets"] as? List<*>)?.let { values ->
@@ -549,7 +549,7 @@ private class AppPageGestureLayout(
     attrs: AttributeSet?,
     private val ownsGesture: () -> Boolean,
     private val onMarginTap: (Float, Float) -> Unit,
-    private val onSwipe: (String, Float, Float, Float, Float, Long) -> Unit,
+    private val onSwipe: (String, Float, Float, Float, Float, Float, Long) -> Unit,
 ) : LinearLayout(context, attrs) {
     private val configuration = ViewConfiguration.get(context)
     private val slop = configuration.scaledTouchSlop
@@ -728,8 +728,9 @@ private class AppPageGestureLayout(
     }
 
     private fun emitSwipe(phase: String, event: MotionEvent, velocityX: Float = 0f) {
-        val y = (event.y / height.coerceAtLeast(1)).coerceIn(0f, 1f)
-        onSwipe(phase, event.x - downX, event.y - downY, y, velocityX, event.eventTime - event.downTime)
+        val y = ((if (phase == "Start") downY else event.y) / height.coerceAtLeast(1)).coerceIn(0f, 1f)
+        val startX = (downX / width.coerceAtLeast(1)).coerceIn(0f, 1f)
+        onSwipe(phase, event.x - downX, event.y - downY, y, startX, velocityX, event.eventTime - event.downTime)
     }
 
     private fun releaseVelocity(): Float {

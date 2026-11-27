@@ -23,6 +23,8 @@ import 'listening/store.dart';
 import 'listening/custom_tts.dart';
 import 'listening/widgets.dart';
 import 'native_effects.dart';
+import 'nearby_reading.dart';
+import 'nearby_reading_page.dart';
 import 'network_status.dart';
 import 'offline_repository.dart';
 import 'pages.dart';
@@ -190,7 +192,6 @@ class _NovelAppState extends State<NovelApp> with WidgetsBindingObserver {
     _updateNavigation.addListener(_queueStartupReading);
     updates?.addListener(_queueStartupReading);
     if (!_startupReadingConsumed) unawaited(_prepareStartupReading());
-    unawaited(_prepareLanSync());
     unawaited(
       _readingWidgets.attach().then((_) {
         if (mounted) return _widgetCards.attach();
@@ -492,7 +493,38 @@ class _NovelAppState extends State<NovelApp> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _prepareLanSync() async {}
+  Future<void> _continueNearbyBook(NearbyReadingReceipt receipt) async {
+    final book = receipt.book;
+    final chapter = state.chapterForPosition(book, receipt.position);
+    if (chapter == null) throw const FormatException('接收的阅读位置与本机目录不一致');
+    await state.rememberNovel(book);
+    if (!mounted) return;
+    // A same-book reader consumes the position directly. Otherwise discard the
+    // settings subroutes so exiting the new reader returns to the library.
+    if (!_readerHandoff.hasReader) _navigator.currentState?.popUntil((route) => route.isFirst);
+    await _readerHandoff.open(
+      bookId: book.id,
+      position: receipt.position,
+      locator: receipt.locator,
+      page: ReaderPage(
+        novel: book,
+        state: state,
+        repository: repository,
+        initialChapter: chapter,
+        initialPosition: receipt.position,
+        initialReadiumLocator: receipt.locator,
+        directEntry: true,
+      ),
+      reduceMotion: state.reduceMotion,
+    );
+  }
+
+  Widget _nearbyReading(Widget child) {
+    final source = repository;
+    final books = source is OfflineNovelRepository ? source.local : null;
+    if (!LocalPlatform.nearbyReading || books == null) return child;
+    return NearbyReadingScope(books: books, open: _continueNearbyBook, child: child);
+  }
 
   @override
   Future<void> didChangeLocales(List<Locale>? locales) async {
@@ -631,7 +663,7 @@ class _NovelAppState extends State<NovelApp> with WidgetsBindingObserver {
                               features: features,
                               child: ReaderHandoffScope(
                                 navigation: _readerHandoff,
-                                child: child!,
+                                child: _nearbyReading(child!),
                               ),
                             ),
                           ),

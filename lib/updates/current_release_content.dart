@@ -6,8 +6,8 @@ class ReleaseSection {
   final List<String> items;
 }
 
-const _opening = '点书直读开关与本地图书的实际行为一致。';
-const _swipes = 'Readium 翻页遵循减少动态效果设置，插图清理明确针对临时内存。';
+const _opening = '仿真翻页中，反向拖动可见的折起纸页时，同一张纸会跟手回卷。';
+const _swipes = '恢复在其他设备上续读。同一 Wi-Fi 上可使用临时连接码传送原书和阅读位置。';
 const _androidInstall = '已安装本仓库固定签名版的 Android 用户可以直接覆盖更新，书籍和阅读记录会保留。';
 
 const publicReleaseNotes =

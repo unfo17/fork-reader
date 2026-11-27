@@ -6,7 +6,7 @@ import 'library_state.dart';
 class _ReaderTarget {
   const _ReaderTarget(this.bookId, this.resume);
   final int bookId;
-  final void Function(ReadingPosition) resume;
+  final void Function(ReadingPosition, Map<String, dynamic>?) resume;
 }
 
 /// Explicit handoff reuses the open reader for the same book and replaces it
@@ -34,7 +34,7 @@ class ReaderHandoffNavigation extends NavigatorObserver with ChangeNotifier {
   VoidCallback register(
     BuildContext context,
     int bookId,
-    void Function(ReadingPosition) resume,
+    void Function(ReadingPosition, Map<String, dynamic>?) resume,
   ) {
     final route = ModalRoute.of(context);
     if (route == null) return () {};
@@ -52,6 +52,7 @@ class ReaderHandoffNavigation extends NavigatorObserver with ChangeNotifier {
   Future<void> open({
     required int bookId,
     required ReadingPosition position,
+    Map<String, dynamic>? locator,
     required Widget page,
     required bool reduceMotion,
     bool reuseCurrentReader = true,
@@ -79,7 +80,7 @@ class ReaderHandoffNavigation extends NavigatorObserver with ChangeNotifier {
       // An online handoff validated a fresh catalogue/body. Do not keep an
       // already-open reader's stale chapter indices or in-memory body cache.
       if (reuseCurrentReader && target.bookId == bookId) {
-        target.resume(position);
+        target.resume(position, locator);
         return;
       }
       if (old.isFirst) {

@@ -197,12 +197,9 @@ class ReadiumReaderBridge extends ChangeNotifier {
 
   bool _startOverlappingDrag(Map<String, dynamic> event, _ReaderDragSource source) {
     final start = _dragStart(event);
-    // A fresh flick turns the exposed page. An intentional hold before
-    // moving can still pick up a paper sheet that is halfway through a turn.
-    final heldBeforeDrag = (event['durationMillis'] as num?) ?? 0;
     if (!turns.beginOverlappingDrag(
       start.direction, start.dx, start.width, start.y,
-      grabSettlingSheet: heldBeforeDrag >= 120,
+      startX: (event['startX'] as num?)?.toDouble(),
     )) return false;
     _dragInFlight = true;
     _receivingDrag = source;
@@ -1158,13 +1155,14 @@ class ReadiumReaderBridge extends ChangeNotifier {
     String? text,
     String? before,
     String? after,
+    Map<String, dynamic>? handoffLocator,
     bool animated = false,
     bool chapterEntrance = false,
   }) {
     final ticket = ++_seekTicket;
     return command(() async {
       if (ticket != _seekTicket) return;
-      final at = locationFor(
+      final at = _verifiedHandoffLocator(handoffLocator) ?? locationFor(
         index,
         progression: progression,
         text: text,
@@ -1176,6 +1174,21 @@ class ReadiumReaderBridge extends ChangeNotifier {
       await _navigate(at, transitionDirection: animated ? (direction == 0 ? 1 : direction) : null,
         chapterEntrance: chapterEntrance && direction != 0);
     }, waitForPreparation: false);
+  }
+
+  rd.Locator? _verifiedHandoffLocator(Map<String, dynamic>? raw) {
+    if (raw == null) return null;
+    try {
+      final at = rd.Locator.fromJson(raw);
+      if (at == null) return null;
+      final href = Uri.decodeFull(at.href.split('#').first);
+      final exists = publication?.readingOrder.any(
+        (link) => Uri.decodeFull(link.href.split('#').first) == href,
+      );
+      return exists == true ? at : null;
+    } catch (_) {
+      return null;
+    }
   }
 
   String _bookmarkKey(String id) => 'readium.bookmark.v1.${book.id}.$id';

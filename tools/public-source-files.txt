@@ -535,6 +535,8 @@ lib/main.dart
 lib/motion_ui.dart
 lib/my_page.dart
 lib/native_effects.dart
+lib/nearby_reading.dart
+lib/nearby_reading_page.dart
 lib/network_status.dart
 lib/novel_feed_controller.dart
 lib/offline_cache.dart

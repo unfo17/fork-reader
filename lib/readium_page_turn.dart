@@ -240,11 +240,12 @@ class ReadiumPageTurnController {
   }
 
   bool beginOverlappingDrag(int direction, double dx, double width, double touchY, {
-    bool grabSettlingSheet = false,
+    double? startX,
   }) {
     final owner = _owner;
     if (_release?.isCompleted == false || owner == null ||
-        !((grabSettlingSheet && owner._grabPaper(direction)) || owner._addOverlap(direction))) return false;
+        !(owner._grabPaper(direction, startX: startX, startY: touchY) ||
+            owner._addOverlap(direction))) return false;
     beginDrag(dx, width, touchY, direction: direction);
     return true;
   }
@@ -1050,7 +1051,10 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     });
   }
 
-  bool _grabPaper(int direction) {
+  bool _grabPaper(int direction, {
+    required double? startX,
+    required double startY,
+  }) {
     if (!mounted || _routePaused || _effect != ReaderPageEffect.paper) return false;
     final overlap = _overlaps.lastOrNull;
     final clock = overlap?.clock ?? _clock;
@@ -1061,9 +1065,22 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     } else if (overlap.target == null || overlap.settling == null || overlap.continued.isCompleted || overlap.landed.isCompleted) {
       return false;
     }
+    final touchY = overlap?.touchY ?? _primaryTouchY;
+    final box = context.findRenderObject();
+    if (startX == null || box is! RenderBox || !box.hasSize || box.size.isEmpty) return false;
+    final size = box.size;
+    final physicalProgress = _visualDirection(currentDirection) < 0
+        ? 1 - clock.value
+        : clock.value;
+    final fold = _ReadiumFold(
+      size, physicalProgress, touchY, overlap?.startY ?? _primaryStartY,
+    );
+    if (!fold.containsBack(Offset(size.width * startX, size.height * startY))) {
+      return false;
+    }
     final grab = _ReadiumPaperGrab(
       clock, overlap, overlap?.committed ?? _primaryCommit,
-      overlap?.touchY ?? _primaryTouchY,
+      touchY,
     );
     _paperGrab = grab;
     if (overlap == null) {
@@ -1379,7 +1396,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         _primaryTouchY = height;
         controller._shape.value++;
       }
-      grab.clock.value = (grab.progress - controller._displacement).clamp(0.0, 1.0);
+      // The reflected free edge travels twice as far as the crease.
+      grab.clock.value = (grab.progress - controller._displacement / 2).clamp(0.0, 1.0);
       _shapeChanged = false;
       return;
     }
@@ -1991,14 +2009,16 @@ class _ReadiumRetainedInputState extends State<_ReadiumRetainedInput> {
   }
 
   void _send(String phase, PointerEvent event, {double? velocity}) {
-    final height = context.size?.height ?? 0;
+    final size = context.size ?? Size.zero;
     final position = event.localPosition;
     widget.onDrag?.call({
       'phase': phase,
       'dx': position.dx - _origin.dx,
-      'y': height > 0
-          ? ((phase == 'Start' ? _origin.dy : position.dy) / height).clamp(0.0, 1.0)
+      'y': size.height > 0
+          ? ((phase == 'Start' ? _origin.dy : position.dy) / size.height).clamp(0.0, 1.0)
           : .5,
+      if (phase == 'Start' && size.width > 0)
+        'startX': (_origin.dx / size.width).clamp(0.0, 1.0),
       'durationMillis': (event.timeStamp - _downTime).inMilliseconds,
       if (velocity != null) 'velocityX': velocity,
     });
@@ -2327,6 +2347,40 @@ class _ReadiumParagraphTurn extends CustomPainter {
       old.enterFromBottom != enterFromBottom || old.fillPaper != fillPaper;
 }
 
+/// The drawing and pointer hit test share the same screen-space crease.
+class _ReadiumFold {
+  factory _ReadiumFold(Size size, double progress, double touchY, double startY) {
+    final anchorY = startY < .25 ? 0.0 : startY > .75 ? size.height : startY * size.height;
+    final weight = (progress / .12).clamp(0.0, 1.0) *
+        ((1 - progress) / .15).clamp(0.0, 1.0);
+    final anchor = Offset(size.width, anchorY);
+    final drag = Offset(size.width * (1 - 2 * progress),
+        anchorY + (touchY * size.height - anchorY) * weight);
+    final delta = anchor - drag;
+    return _ReadiumFold._(
+      size, (anchor + drag) / 2, delta / delta.distance.clamp(.001, double.infinity),
+      size.width * .045 * math.sin(math.pi * progress),
+    );
+  }
+
+  const _ReadiumFold._(this.size, this.centre, this.normal, this.radius);
+
+  final Size size;
+  final Offset centre, normal;
+  final double radius;
+  double get arc => math.pi * radius;
+
+  double distance(Offset p) =>
+      (p.dx - centre.dx) * normal.dx + (p.dy - centre.dy) * normal.dy;
+
+  bool containsBack(Offset point) {
+    final along = distance(point);
+    if (radius <= 0 || along > radius) return false;
+    final original = along < 0 ? arc - along : arc - radius * math.asin(along / radius);
+    return (Offset.zero & size).contains(point + normal * (original - along));
+  }
+}
+
 /// Textured fold around a tilted cylindrical axis. One image shader and three
 /// mesh draws replace per-strip image draws; the flat page stays pixel-stable.
 class _ReadiumCurl extends CustomPainter {
@@ -2365,17 +2419,10 @@ class _ReadiumCurl extends CustomPainter {
       return;
     }
     final w = size.width, h = size.height, backwards = direction < 0;
-    final initial = startY().clamp(0.0, 1.0);
-    final anchorY = initial < .25 ? 0.0 : initial > .75 ? h : initial * h;
-    final weight = (t / .12).clamp(0.0, 1.0) * ((1 - t) / .15).clamp(0.0, 1.0);
-    final anchor = Offset(w, anchorY);
-    final drag = Offset(w * (1 - 2 * t), anchorY + (touchY() * h - anchorY) * weight);
-    final delta = anchor - drag;
-    final normal = delta / delta.distance.clamp(.001, double.infinity);
-    final centre = (anchor + drag) / 2;
-    final radius = w * .045 * math.sin(math.pi * t);
-    final arc = math.pi * radius;
-    double distance(Offset p) => (p.dx-centre.dx)*normal.dx + (p.dy-centre.dy)*normal.dy;
+    final fold = _ReadiumFold(size, t, touchY(), startY());
+    final normal = fold.normal, centre = fold.centre;
+    final radius = fold.radius, arc = fold.arc;
+    final distance = fold.distance;
     final page = [Offset.zero, Offset(w,0), Offset(w,h), Offset(0,h)];
     List<Offset> clip(List<Offset> input, double edge, bool greater) {
       if (input.isEmpty) return input;

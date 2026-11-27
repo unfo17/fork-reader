@@ -63,6 +63,7 @@ import 'local_book_importer.dart';
 import 'local_text_reference.dart';
 import 'local_text_recovery.dart';
 import 'native_effects.dart' show NativeGlassGroup;
+import 'nearby_reading_page.dart';
 import 'network_status.dart';
 import 'novel_feed_controller.dart';
 import 'offline_repository.dart';
@@ -5037,6 +5038,7 @@ class ReaderPage extends StatefulWidget {
     this.animateEntry = false,
     this.initialBookmark,
     this.initialPosition,
+    this.initialReadiumLocator,
     this.dictionaryLauncher,
     this.verifiedReadingElapsed,
   });
@@ -5048,6 +5050,7 @@ class ReaderPage extends StatefulWidget {
   final bool animateEntry;
   final ReaderBookmark? initialBookmark;
   final ReadingPosition? initialPosition;
+  final Map<String, dynamic>? initialReadiumLocator;
   final Future<bool> Function(String selectedText)? dictionaryLauncher;
 
   /// Deterministic monotonic clock for causal reader integration fixtures.
@@ -5142,7 +5145,8 @@ class _ReaderPageState extends State<ReaderPage>
               (saved.textOffset ?? 0).clamp(0, content.paragraphs[i].length),
             )
           : null;
-      unawaited(engine.go(_chapter, progression: saved.fraction, text: text)
+      unawaited(engine.go(_chapter, progression: saved.fraction, text: text,
+                handoffLocator: widget.initialReadiumLocator)
           .whenComplete(_nativeEntry));
     } else {
       _nativeEntry();
@@ -6370,11 +6374,13 @@ class _ReaderPageState extends State<ReaderPage>
       _handoffNavigation = handoff;
       _releaseHandoffTarget = handoff?.register(context, widget.novel.id, (
         position,
+        locator,
       ) {
         if (!mounted) return;
         _stopAutoScroll();
         _cancelExitRequest();
-        _go(position.chapter, position: position);
+        final chapter = widget.state.chapterForPosition(_sourceBook, position);
+        if (chapter != null) _go(chapter, position: position, handoffLocator: locator);
       });
     }
     _scheduleChromeHint();
@@ -6764,6 +6770,7 @@ class _ReaderPageState extends State<ReaderPage>
   void _go(
     int index, {
     ReadingPosition? position,
+    Map<String, dynamic>? handoffLocator,
     bool highlightBookmark = false,
     ReaderMatch? findMatch,
     bool listeningFollow = false,
@@ -6802,6 +6809,7 @@ class _ReaderPageState extends State<ReaderPage>
                   index,
                   progression: position?.fraction,
                   text: text,
+                  handoffLocator: handoffLocator,
                   animated: animateNativeJump && motion,
                   chapterEntrance: chapterEntrance,
                 );
@@ -9434,7 +9442,11 @@ class _ReaderPageState extends State<ReaderPage>
     );
   }
 
-  bool _canHandoff(BuildContext context) => false;
+  bool _canHandoff(BuildContext context) {
+    final books = NearbyReadingScope.maybeOf(context)?.books;
+    return books?.book(widget.novel.id) != null &&
+        books?.isIncompleteBook(widget.novel.id) != true;
+  }
 
   double _readerHeaderExtent(BuildContext context) =>
       math.max(46, MediaQuery.textScalerOf(context).scale(16) * 1.25);
@@ -11082,7 +11094,34 @@ class _ReaderPageState extends State<ReaderPage>
     }
   }
 
-  Future<void> _openHandoff() async {}
+  Future<void> _openHandoff() async {
+    if (_toolsOpen || _catalogueOpen || _findOpen || _detailsOpen) return;
+    final books = NearbyReadingScope.maybeOf(context)?.books;
+    final position = _currentPosition();
+    if (books == null || position == null || !_canHandoff(context)) return;
+    _cancelExitRequest();
+    _selection.clear();
+    _stopAutoScroll();
+    _followTicket++;
+    _followScroll.cancel();
+    _toolsOpen = true;
+    try {
+      await showJellySheet<void>(
+        context: context,
+        reduceMotion: widget.state.reduceMotion,
+        surfaceWrapper: _readerSurface,
+        builder: (_) => NearbyReadingSendSheet(
+          books: books,
+          bookId: widget.novel.id,
+          position: position,
+          locator: _readium?.locator?.toJson(),
+        ),
+      );
+    } finally {
+      _toolsOpen = false;
+      if (mounted) _savePosition(notify: false);
+    }
+  }
 
   void _showFindMatch(ReaderMatch match) {
     if (_readium != null &&

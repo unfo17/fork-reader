@@ -1805,7 +1805,7 @@ class _ReaderToolsState extends State<ReaderTools>
             children: [
               ArchiveIcon(CupertinoIcons.device_laptop, size: 20),
               SizedBox(width: 12),
-              Expanded(child: AppText('在其他设备续读')),
+              Expanded(child: AppText('在其他设备上续读')),
             ],
           ),
         ),

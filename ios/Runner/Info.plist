@@ -192,7 +192,7 @@
 	<key>NSPhotoLibraryAddUsageDescription</key>
 		<string>用于将你选择保存的封面、插图、摘录、阅读报告或纪念图片添加到相册，不读取相册中的照片。</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>用于发现同一 Wi-Fi 或热点上的你的设备，并在确认配对后同步阅读记录、传送你选择的本地书籍。</string>
+	<string>用于通过临时连接码，在同一 Wi-Fi 上传送你选择的本地书籍和阅读位置。</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_wenkuread._tcp</string>
