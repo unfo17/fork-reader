@@ -462,16 +462,13 @@ class _ReportArtwork extends StatelessWidget {
   );
 
   Widget _module(ReadingReportModule module) => switch (module) {
-    ReadingReportModule.rhythm => SizedBox(
-      height: 144,
-      child: ReadingRhythmChart(
-        dates: data.dates,
-        minutes: data.minutes,
-        averageMinutes: data.averageMinutes,
-        selectedIndex: data.dates.length - 1,
-        onSelected: (_) {},
-        reduceMotion: true,
-      ),
+    ReadingReportModule.rhythm => ReadingRhythmChart(
+      dates: data.dates,
+      minutes: data.minutes,
+      averageMinutes: data.averageMinutes,
+      selectedIndex: data.dates.length - 1,
+      onSelected: (_) {},
+      reduceMotion: true,
     ),
     ReadingReportModule.days => _metrics([
       ('活跃天数', '${data.activeDays} 天'),
