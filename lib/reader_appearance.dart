@@ -1,4 +1,5 @@
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -20,7 +21,9 @@ ThemeData readerTheme(
   final paper = systemPaper
       ? app.colorScheme.surface
       : preferences.background(appDark);
-  final brightness = app.brightness;
+  final brightness = preferences.darkPaper(appDark)
+      ? Brightness.dark
+      : Brightness.light;
   final dark = brightness == Brightness.dark;
   final base = novelTheme(brightness, fontFamily: fontFamily);
   // Dim only the article's ink. Sliders, buttons and text selection retain
@@ -109,10 +112,12 @@ class ReaderAppearance extends StatefulWidget {
     required this.state,
     required this.child,
     this.bookId,
+    this.paintedBrightness,
   });
   final LibraryState state;
   final Widget child;
   final int? bookId;
+  final ValueListenable<Brightness?>? paintedBrightness;
 
   /// Continue a reader-owned route without changing ordinary app entry points.
   /// Reuse the live book palette rather than capturing one ThemeData snapshot.
@@ -131,9 +136,12 @@ class ReaderAppearance extends StatefulWidget {
   State<ReaderAppearance> createState() => _ReaderAppearanceState();
 }
 
+const readerAppearanceDuration = Duration(milliseconds: 180);
+
 class _ReaderAppearanceState extends State<ReaderAppearance> {
   Object? _key;
   ThemeData? _theme;
+  ThemeData? _visibleTheme;
   String? _family;
 
   ThemeData _resolve(BuildContext context) {
@@ -172,26 +180,34 @@ class _ReaderAppearanceState extends State<ReaderAppearance> {
     animation: Listenable.merge([
       widget.state.readerSettingsChanges,
       widget.state.appearanceChanges,
+      widget.paintedBrightness,
     ]),
     child: widget.child,
     builder: (context, child) {
       final previousFamily = _family;
       final theme = _resolve(context);
+      final previous = _visibleTheme;
+      final painted = widget.paintedBrightness?.value;
+      // The native page receives the target immediately. Start the controls'
+      // transition when the new page colors are ready to draw.
+      final visible = painted != null && painted != theme.brightness &&
+              previous != null && previous.brightness != theme.brightness
+          ? previous
+          : theme;
+      _visibleTheme = visible;
       _family = widget.state.readerFontFamilyFor(widget.bookId);
       final animate =
           previousFamily == _family &&
           !widget.state.reduceMotion &&
           !MediaQuery.disableAnimationsOf(context);
       return AnnotatedRegion<SystemUiOverlayStyle>(
-        value: novelSystemUiStyle(theme.brightness),
+        value: novelSystemUiStyle(visible.brightness),
         child: _ReaderThemeTarget(
           theme: theme,
           child: AnimatedTheme(
-            data: theme,
-            duration: animate
-                ? const Duration(milliseconds: 120)
-                : Duration.zero,
-            curve: Curves.easeInOutCubic,
+            data: visible,
+            duration: animate ? readerAppearanceDuration : Duration.zero,
+            curve: Curves.fastOutSlowIn,
             child: Builder(
               builder: (context) {
                 final current = Theme.of(context);

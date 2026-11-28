@@ -138,7 +138,14 @@ class ReadiumControlsPlugin : FlutterPlugin {
                                 val script = call.argument<String>("script") ?: ""
                                 val fallback = call.argument<Number>("paper")?.toInt() ?: android.graphics.Color.WHITE
                                 updateSelectionStyle(call.argument<Boolean>("darkSelectionPalette"))
-                                result.success(ReadiumReader.appApplyPalette(script, fallback, ::applySelectionStyle))
+                                result.success(ReadiumReader.appApplyPalette(
+                                    script,
+                                    fallback,
+                                    call.argument<String>("backgroundScript"),
+                                    (call.argument<Number>("transitionMs")?.toLong() ?: 0L).coerceIn(0L, 220L),
+                                    call.argument<Boolean>("awaitPaint") == true,
+                                    ::applySelectionStyle,
+                                ))
                             }
                             "evaluate" -> result.success(ReadiumReader.epubEvaluateJavascript(call.argument<String>("script") ?: ""))
                             else -> result.notImplemented()

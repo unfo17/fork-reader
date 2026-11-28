@@ -289,7 +289,10 @@ class ReadiumPageTurnController {
 
   Future<void> freezeForRoute() async => _owner?._freezeForRoute();
   Future<void> thawAfterRoute() async => _owner?._thawAfterRoute();
-  void setOverlayOpen(bool open) => _owner?._setOverlayOpen(open);
+  void setOverlayOpen(bool open, {bool showLivePage = false}) =>
+      _owner?._setOverlayOpen(open, showLivePage: showLivePage);
+  Future<VoidCallback?> holdPaperForBlend(Duration duration) async =>
+      _owner?._holdPaperForBlend(duration);
   void setChromeAnimating(bool animating) => _owner?._setChromeAnimating(animating);
   void setSelectionActive(bool active) => _owner?._setSelectionActive(active);
   void setNativeContact(bool active) => _owner?._setNativeContact(active);
@@ -373,6 +376,8 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     with TickerProviderStateMixin {
   late final _clock = AnimationController(vsync: this);
   late final _returnClock = AnimationController(vsync: this);
+  late final _paperClock = AnimationController(vsync: this);
+  ReadiumPageFrame? _paperCover;
   int _returnEpoch = 0;
   ReadiumPageFrame? _returnFrame;
   ReaderPageEffect _entryEffect = ReaderPageEffect.staggered;
@@ -430,13 +435,58 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       (widget.rightToLeft || widget.preferences.mode == ReaderMode.vertical
           ? -direction : direction).toDouble();
 
-  void _setOverlayOpen(bool open) {
-    if (open == _overlayOpen) return;
+  bool _liveOverlay = false;
+
+  Future<VoidCallback?> _holdPaperForBlend(Duration duration) async {
+    // Reuse an already rendered resting page. A color change never queues a
+    // capture or waits for the neighboring page to return.
+    final frame = _presented ?? _cached;
+    if (frame == null || frame.sampled || _busy || _entering ||
+        _inputActive || _previewCover != null || _overlayCover != null ||
+        _routePaused || _paperCover != null) return null;
+    frame.retain();
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || _busy || _inputActive || _previewCover != null ||
+        _routePaused || _paperCover != null) {
+      frame.dispose();
+      return null;
+    }
+    _warmTimer?.cancel();
+    _paperClock.value = 0;
+    setState(() => _paperCover = frame);
+    await WidgetsBinding.instance.endOfFrame;
+    return () {
+      if (!mounted || !identical(frame, _paperCover)) return;
+      unawaited(_paperClock
+          .animateTo(1, duration: duration, curve: Curves.fastOutSlowIn)
+          .orCancel.then((_) {
+        if (mounted && identical(frame, _paperCover)) _releasePaperCover();
+      }).onError<TickerCanceled>((_, __) {}));
+    };
+  }
+
+  void _releasePaperCover() {
+    final frame = _paperCover;
+    if (frame == null) return;
+    _paperClock.stop();
+    setState(() => _paperCover = null);
+    WidgetsBinding.instance.addPostFrameCallback((_) => frame.dispose());
+    _warmLater();
+  }
+
+  void _setOverlayOpen(bool open, {required bool showLivePage}) {
+    final live = open && showLivePage;
+    if (open == _overlayOpen && live == _liveOverlay) return;
     _overlayOpen = open;
+    _liveOverlay = live;
     if (open) {
       _warmTimer?.cancel();
       if (!_busy && _preparing != null) widget.onPrioritize?.call();
-      if ((_presented ?? _cached) case final frame? when !_busy) {
+      if (live) {
+        _releaseOverlayCover();
+        if (_presented != null) setState(_releasePresentedPage);
+      } else if ((_presented ?? _cached) case final frame? when !_busy) {
+        _releaseOverlayCover();
         setState(() => _overlayCover = frame.retain());
       }
     } else {
@@ -1367,7 +1417,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _warmTimer?.cancel();
     _warmTimer = Timer(Duration(milliseconds: _cached == null ? 48 : 32), () async {
       if (!mounted || _busy || _warming || _routePaused || _overlayOpen ||
-          _chromeAnimating || _entering || _inputActive ||
+          _chromeAnimating || _entering || _inputActive || _paperCover != null ||
           _preparationInterrupted) return;
       if (MediaQuery.disableAnimationsOf(context) ||
           (_cached != null && (widget.preview == null || _windowComplete)) ||
@@ -1536,6 +1586,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     if (oldWidget.layoutKey != widget.layoutKey) {
       _stopReturnAnimation();
       _releaseOverlayCover();
+      _releasePaperCover();
     }
     if (oldWidget.frameKey != widget.frameKey) {
       _warmRetries = 0;
@@ -1920,6 +1971,10 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         Positioned.fill(child: IgnorePointer(child: _pageImage(cover))),
       if (_previewCover case final cover? when !_sceneCoversPage)
         Positioned.fill(child: IgnorePointer(child: _pageImage(cover))),
+      if (_paperCover case final cover? when !_sceneCoversPage)
+        Positioned.fill(child: IgnorePointer(
+          child: FadeTransition(opacity: ReverseAnimation(_paperClock), child: _pageImage(cover)),
+        )),
       if (_overlaps.isNotEmpty ||
           (_from != null && _effect == ReaderPageEffect.staggered &&
               (widget.preview != null || _to != null)))
@@ -2017,6 +2072,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _presented?.dispose();
     _returnFrame?.dispose();
     _overlayCover?.dispose();
+    _paperCover?.dispose();
     _cached?.dispose();
     _routeCover?.dispose(); _routeCover = null;
     _clearNeighbors();
@@ -2030,6 +2086,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     _trackingOverlap = null;
     _clock.dispose();
     _returnClock.dispose();
+    _paperClock.dispose();
     super.dispose();
   }
 }

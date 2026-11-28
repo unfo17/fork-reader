@@ -5442,17 +5442,21 @@ class _ReaderPageState extends State<ReaderPage>
           ReaderScrollLocation.extentOf(context),
     );
     final geometry =
-        '$pageInsets|$statusBand|${prefs.layoutKey}|${prefs.backgroundImage}|'
-        '${prefs.backgroundOpacity}|${prefs.backgroundFit}|$_fontSize|$_lineHeight|'
+        '$pageInsets|$statusBand|${prefs.layoutKey}|$_fontSize|$_lineHeight|'
         '$_readerFontId|$hidden|$only';
-    final key = '$geometry|${prefs.paper.name}|${prefs.nightTextBrightness}|'
+    final key = '$geometry|${prefs.backgroundImage}|${prefs.backgroundOpacity}|'
+        '${prefs.backgroundFit}|${prefs.paper.name}|${prefs.nightTextBrightness}|'
         '$dark|${scheme?.surface.toARGB32()}|${scheme?.onSurface.toARGB32()}|'
         '${selectionColor.toARGB32()}';
     if (_activityForeground && key != _nativePreferencesKey) {
       _nativePreferencesKey = key;
       if (_nativeGeometryKey == geometry && bridge.canRecolor) {
+        final animate = !widget.state.reduceMotion &&
+            !MediaQuery.disableAnimationsOf(context);
         unawaited(bridge.recolor(prefs, dark: dark, selectionColor: selectionColor,
-          systemPalette: scheme).catchError((Object _) {
+          systemPalette: scheme, backgroundFile: widget.state.backgrounds.file,
+          transition: animate ? readerAppearanceDuration : Duration.zero,
+        ).catchError((Object _) {
             if (!mounted || _nativePreferencesKey != key) return;
             _nativeGeometryKey = null;
             setState(() => _nativePreferencesKey = null);
@@ -5472,14 +5476,12 @@ class _ReaderPageState extends State<ReaderPage>
             pageInsets: pageInsets,
             minimumStatusInset: statusBand,
             defaultsOnly: true,
+            backgroundFile: widget.state.backgrounds.file,
           ),
         );
         unawaited(
           () async {
-            final [font, background] = await Future.wait([
-              widget.state.fonts.readerFile(_readerFontId),
-              widget.state.backgrounds.file(prefs.backgroundImage),
-            ]);
+            final font = await widget.state.fonts.readerFile(_readerFontId);
             if (!mounted || _nativePreferencesKey != key) return;
             await bridge.preferences(
               prefs,
@@ -5492,7 +5494,7 @@ class _ReaderPageState extends State<ReaderPage>
               pageInsets: pageInsets,
               minimumStatusInset: statusBand,
               fontFile: font,
-              backgroundFile: background,
+              backgroundFile: widget.state.backgrounds.file,
               hiddenLanguages: hidden,
               onlyLanguage: only,
             );
@@ -5508,6 +5510,7 @@ class _ReaderPageState extends State<ReaderPage>
               selectionColor: selectionColor,
               systemPalette: scheme,
               fontFamily: null,
+              backgroundFile: widget.state.backgrounds.file,
               pageInsets: pageInsets,
               minimumStatusInset: statusBand,
               hiddenLanguages: hidden,
@@ -5640,7 +5643,10 @@ class _ReaderPageState extends State<ReaderPage>
     } else {
       _activityOverlays.remove(overlay);
     }
-    _readium?.turns.setOverlayOpen(_activityOverlays.isNotEmpty);
+    _readium?.turns.setOverlayOpen(
+      _activityOverlays.isNotEmpty,
+      showLivePage: _activityOverlays.contains('tools'),
+    );
     _syncReadingActivity();
   }
 
@@ -5903,6 +5909,7 @@ class _ReaderPageState extends State<ReaderPage>
   Duration? _autoLast;
   bool _autoRunning = false;
   bool _autoPaused = false;
+  ReaderPaper? _dayPaper;
   int _nightIconActivation = 0;
   int? _chromeProgressFrame;
   double? _chromeProgressPending;
@@ -5920,6 +5927,7 @@ class _ReaderPageState extends State<ReaderPage>
   Widget _readerSurface(Widget child) => ReaderAppearance(
     state: widget.state,
     bookId: widget.novel.id,
+    paintedBrightness: _readium?.paintedBrightness,
     child: child,
   );
 
@@ -9453,6 +9461,7 @@ class _ReaderPageState extends State<ReaderPage>
       child: ReaderAppearance(
         state: widget.state,
         bookId: widget.novel.id,
+        paintedBrightness: _readium?.paintedBrightness,
         child: Builder(
           builder: (context) => _readerScaffold(context, chapter),
         ),
@@ -9763,12 +9772,16 @@ class _ReaderPageState extends State<ReaderPage>
 
   void _toggleNightReading() {
     setState(() => _nightIconActivation++);
-    final dark = readerAppBrightness(context, widget.state) == Brightness.dark;
-    unawaited(
-      widget.state.setTheme(dark ? ThemeMode.light : ThemeMode.dark)
-          .catchError((Object _) {
-            if (mounted) showNovelFeedback(context, '外观设置未能保存，请重试');
-          }),
+    final preferences = _readerPreferences;
+    final dark = preferences.darkPaper(
+      readerAppBrightness(context, widget.state) == Brightness.dark,
+    );
+    if (!dark) _dayPaper = preferences.paper;
+    _applyReaderPreferences(
+      preferences.copyWith(
+        paper: dark ? _dayPaper ?? ReaderPaper.milk : ReaderPaper.night,
+      ),
+      true,
     );
   }
 
@@ -9868,9 +9881,7 @@ class _ReaderPageState extends State<ReaderPage>
     ]),
     builder: (context) {
       final generation = _contentGeneration;
-      final dark = _readerPreferences.darkPaper(
-        Theme.of(context).brightness == Brightness.dark,
-      );
+      final dark = Theme.of(context).brightness == Brightness.dark;
       final dockAnimation = _chrome.drive(
         CurveTween(curve: const Interval(0, .90)),
       );
@@ -10086,7 +10097,6 @@ class _ReaderPageState extends State<ReaderPage>
         return const SizedBox.shrink();
       }
       final safe = MediaQuery.viewPaddingOf(context);
-      final dark = Theme.of(context).brightness == Brightness.dark;
       final generation = _contentGeneration, chapterIndex = _chapter;
       final statusInsets = !footer && preferences.hideSystemStatus
           ? ReaderStatusFooter.horizontalInsetsFor(
@@ -10126,7 +10136,7 @@ class _ReaderPageState extends State<ReaderPage>
                       compact: true,
                       statusBand: true,
                       fontSize: preferences.statusFontSize,
-                      ink: preferences.controlForeground(dark),
+                      ink: Theme.of(context).colorScheme.onSurface,
                       showBattery: true,
                     ),
                   )
@@ -10201,7 +10211,7 @@ class _ReaderPageState extends State<ReaderPage>
                         statusInsets.right - safe.right,
                       ),
                     ),
-                    ink: preferences.controlForeground(dark),
+                    ink: Theme.of(context).colorScheme.onSurface,
                     paper: _readium?.pagePaper ?? Theme.of(context).colorScheme.surface,
                   ),
           ),
