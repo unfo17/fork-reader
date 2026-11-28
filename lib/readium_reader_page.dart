@@ -1438,11 +1438,12 @@ class ReadiumReaderBridge extends ChangeNotifier {
       await turns.whenPrepared;
     }
     if (_disposed || _owner != this || ticket != _paletteTicket) return;
+    final palette = (dark ? Brightness.dark : Brightness.light, paper);
     try {
       final applied = native.invokeMethod<int>('palette', {
         'paper': paper.toARGB32(),
         if (backgroundScript != null) 'backgroundScript': backgroundScript,
-        'awaitPaint': repaint,
+        'awaitPaint': repaint && _paintedPalette.value != palette,
         if (systemPalette != null) 'darkSelectionPalette': dark,
         'script': script,
       });
@@ -1452,7 +1453,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       if (!_disposed && ticket == _paletteTicket) {
         _pagePaper = color == null ? paper : Color(color);
         _paintRevision++;
-        _paintedPalette.value = (dark ? Brightness.dark : Brightness.light, paper);
+        _paintedPalette.value = palette;
       }
     } finally {
       _paletteDispatch = null;

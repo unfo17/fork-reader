@@ -550,20 +550,41 @@ object ReadiumReader :
                 }
             }
         }
+        val paper = readPaperColor(response) ?: fallback
         if (version == appPaletteVersion && visible != null &&
             (awaitPaint || backgroundScript != null)) {
-            kotlinx.coroutines.withTimeoutOrNull(180L) {
+            kotlinx.coroutines.withTimeoutOrNull(260L) {
                 kotlinx.coroutines.suspendCancellableCoroutine<Unit> { continuation ->
                     visible.postVisualStateCallback(System.nanoTime(), object : android.webkit.WebView.VisualStateCallback() {
                         override fun onComplete(requestId: Long) {
+                            if (!continuation.isActive || version != appPaletteVersion) return
+                            appSetPaper(paper)
                             visible.postInvalidateOnAnimation()
-                            if (continuation.isActive) continuation.resumeWith(Result.success(Unit))
+                            if (!awaitPaint) {
+                                continuation.resumeWith(Result.success(Unit))
+                                return
+                            }
+                            // Chromium is ready at this point, but Android still
+                            // has to submit the new platform-view frame.
+                            val observer = visible.viewTreeObserver
+                            val submitted = Runnable {
+                                if (continuation.isActive) continuation.resumeWith(Result.success(Unit))
+                            }
+                            if (android.os.Build.VERSION.SDK_INT >= 29 && visible.isHardwareAccelerated && observer.isAlive) {
+                                observer.registerFrameCommitCallback(submitted)
+                                continuation.invokeOnCancellation {
+                                    visible.post {
+                                        if (observer.isAlive) observer.unregisterFrameCommitCallback(submitted)
+                                    }
+                                }
+                            } else {
+                                visible.postOnAnimation { visible.postOnAnimation(submitted) }
+                            }
                         }
                     })
                 }
             }
         }
-        val paper = readPaperColor(response) ?: fallback
         if (version == appPaletteVersion) appSetPaper(paper)
         return paper
     }
