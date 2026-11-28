@@ -301,11 +301,12 @@ class ReadiumPageTurnController {
     Future<ReadiumPageFrame?> Function()? capture,
     int? transitionDirection,
     bool chapterEntrance = false,
+    bool fadeAppearance = false,
   }) async {
     final owner = _owner;
     if (owner == null) return action();
     await owner._navigate(action, capture: capture, transitionDirection: transitionDirection,
-      chapterEntrance: chapterEntrance);
+      chapterEntrance: chapterEntrance, fadeAppearance: fadeAppearance);
   }
 }
 
@@ -1578,6 +1579,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     Future<ReadiumPageFrame?> Function()? capture,
     int? transitionDirection,
     bool chapterEntrance = false,
+    bool fadeAppearance = false,
   }) async {
     _stopReturnAnimation();
     widget.onPrioritize?.call();
@@ -1592,7 +1594,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     ReadiumPageFrame? from, target;
     try {
       from = await _takeFrame(capturePage);
-      if (from == null && transitionDirection != null && mounted) {
+      if (from == null && (fadeAppearance || transitionDirection != null) && mounted) {
         from = await capturePage();
       }
       if (mounted && from != null) {
@@ -1606,8 +1608,20 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
         await WidgetsBinding.instance.endOfFrame;
       }
       await action();
-      if (!mounted || (!chapterEntrance && (from == null || transitionDirection == null)) ||
-          MediaQuery.disableAnimationsOf(context)) return;
+      if (!mounted || MediaQuery.disableAnimationsOf(context)) return;
+      if (fadeAppearance) {
+        if (from == null) return;
+        setState(() {
+          _effect = ReaderPageEffect.fade;
+          _liveDestination = true;
+        });
+        await _clock.animateTo(1,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeInOutCubic,
+        ).orCancel;
+        return;
+      }
+      if (!chapterEntrance && (from == null || transitionDirection == null)) return;
       for (var attempt = 0; attempt < 2 && mounted; attempt++) {
         target = await capturePage();
         if (target != null && target.location != from?.location) break;

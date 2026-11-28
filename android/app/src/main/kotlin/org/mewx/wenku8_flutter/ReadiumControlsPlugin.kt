@@ -61,6 +61,7 @@ class ReadiumControlsPlugin : FlutterPlugin {
                             "visualPage" -> result.success(ReadiumReader.appVisualPageState())
                             "jump" -> result.success(ReadiumReader.appJumpToPage(call.argument<String>("locator") ?: "{}", call.argument<Boolean>("seek") == true))
                             "locator" -> result.success(ReadiumReader.appCurrentLocatorJson())
+                            "locatorKey" -> result.success(ReadiumReader.appPageKeyJson())
                             "pageKey" -> result.success(ReadiumReader.appPageKeyJson())
                             "parkPublication" -> {
                                 updateSelectionStyle(null)

@@ -264,9 +264,10 @@ class ReadiumReaderBridge extends ChangeNotifier {
   Color? _pagePaper;
   Color get pagePaper => _systemPaper ?? _pagePaper ?? _appearance.background(_dark);
   void motionPreferences(ReaderPreferences preferences, bool dark, {ColorScheme? systemPalette}) {
+    final changedPaper = _dark != dark || _appearance.paper != preferences.paper;
     _appearance = preferences;
     _dark = dark;
-    if (_systemPaper != systemPalette?.surface) _pagePaper = null;
+    if (_systemPaper != systemPalette?.surface || changedPaper) _pagePaper = null;
     _systemPaper = systemPalette?.surface;
   }
 
@@ -715,20 +716,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
     _navigating = Platform.isAndroid;
     _nativeEventTicket++;
     try {
-      await turns.navigate(() async {
-        if (!Platform.isAndroid) {
-          await api.goToLocator(at);
-          return;
-        }
-        final moved = await native.invokeMethod<bool>('jump', {
-          'locator': jsonEncode(at.toJson()),
-          'seek': seek,
-        });
-        if (moved != true) throw StateError('原书位置未能打开');
-        await _waitForPageReady(stable: true);
-        final visible = await _visibleLocator();
-        if (visible != null) await _publishVisibleLocator(visible);
-      }, capture: () => _capturePage(allowNavigating: true),
+      await turns.navigate(() => _jumpToLocator(at, seek: seek),
+        capture: () => _capturePage(allowNavigating: true),
         transitionDirection: transitionDirection, chapterEntrance: chapterEntrance);
     } finally {
       _navigating = false;
@@ -736,8 +725,25 @@ class ReadiumReaderBridge extends ChangeNotifier {
     }
   }
 
-  Future<rd.Locator?> _visibleLocator() async {
-    final raw = await native.invokeMethod<String>('locator');
+  Future<void> _jumpToLocator(rd.Locator at, {bool seek = false}) async {
+    if (!Platform.isAndroid) {
+      await api.goToLocator(at);
+      return;
+    }
+    final moved = await native.invokeMethod<bool>('jump', {
+      'locator': jsonEncode(at.toJson()),
+      'seek': seek,
+    });
+    if (moved != true) throw StateError('原书位置未能打开');
+    await _waitForPageReady(stable: true);
+    final visible = await _visibleLocator();
+    if (visible != null) await _publishVisibleLocator(visible);
+  }
+
+  Future<rd.Locator?> _visibleLocator({bool includeText = true}) async {
+    final raw = await native.invokeMethod<String>(
+      includeText ? 'locator' : 'locatorKey',
+    );
     return raw == null ? null :
         rd.Locator.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }
@@ -1264,6 +1270,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
     required EdgeInsets pageInsets,
     required double minimumStatusInset,
     bool defaultsOnly = false,
+    bool paletteOnly = false,
+    bool animatePalette = false,
     File? fontFile,
     File? backgroundFile,
     Set<String> hiddenLanguages = const {},
@@ -1307,20 +1315,24 @@ class ReadiumReaderBridge extends ChangeNotifier {
     _preferences = nextPreferences;
     api.setDefaultPreferences(nextPreferences);
     if (defaultsOnly) return Future<void>.value();
-    return command(() async {
+    Future<void> apply() async {
       if (ticket != _preferencesTicket) return;
-      // The publication may finish opening while this preference update waits
-      // in the command queue. Prefer its saved position to any pre-style page.
+      // A color change keeps the visible navigator in place. Initial style
+      // and typography changes still use the measured layout restore path.
       final anchor = _layoutAnchor ?? requestedAnchor;
-      _styleReady = false;
-      notifyListeners();
+      if (!paletteOnly) {
+        _styleReady = false;
+        notifyListeners();
+      }
       await api.setEPUBPreferences(nextPreferences);
       if (Platform.isAndroid) {
-        await native.invokeMethod<void>('viewportInsets', {
-          'top': pageInsets.top,
-          'bottom': pageInsets.bottom,
-          'minimumStatus': minimumStatusInset,
-        });
+        if (!paletteOnly) {
+          await native.invokeMethod<void>('viewportInsets', {
+            'top': pageInsets.top,
+            'bottom': pageInsets.bottom,
+            'minimumStatus': minimumStatusInset,
+          });
+        }
         _fixedLayout ??=
             await native.invokeMethod<bool>('fixedLayout') ?? false;
         _appliedStyleSignature = '${identityHashCode(this)}:$ticket';
@@ -1479,11 +1491,13 @@ class ReadiumReaderBridge extends ChangeNotifier {
               })();''',
         });
       }
-      if (Platform.isAndroid) await _waitForLayoutStable(ticket: ticket);
+      if (Platform.isAndroid) {
+        await _waitForLayoutStable(ticket: ticket, paletteOnly: paletteOnly);
+      }
       if (anchor != null && ticket == _preferencesTicket) {
         final openingLocation = identical(anchor, initialLocator);
-        final visible = Platform.isAndroid && openingLocation
-            ? await _visibleLocator() : null;
+        final visible = Platform.isAndroid && (openingLocation || paletteOnly)
+            ? await _visibleLocator(includeText: !paletteOnly) : null;
         if (!Platform.isAndroid) {
           await Future<void>.delayed(const Duration(milliseconds: 120));
         }
@@ -1492,7 +1506,23 @@ class ReadiumReaderBridge extends ChangeNotifier {
             _owner == this &&
             identical(_layoutAnchor, anchor)) {
           final locations = anchor.locations;
-          if (_matchesInitialLocation(visible, anchor)) {
+          // Reuse the saved text anchor when the navigator reports the same
+          // page. Only resolve DOM offsets if Readium's cached locator moved.
+          bool matchesPage(rd.Locator? current) {
+            final progress = anchor.locations?.progression;
+            final reported = current?.locations?.progression;
+            return current?.href == anchor.href && progress != null &&
+                reported != null && (reported - progress).abs() < .00001;
+          }
+
+          if (paletteOnly && Platform.isAndroid) {
+            if (!matchesPage(visible)) {
+              final current = await _visibleLocator();
+              if (ticket == _preferencesTicket && !matchesPage(current)) {
+                await _jumpToLocator(anchor);
+              }
+            }
+          } else if (_matchesInitialLocation(visible, anchor)) {
             await _publishVisibleLocator(visible!);
           } else {
             await _navigate(anchor, seek: openingLocation &&
@@ -1503,6 +1533,26 @@ class ReadiumReaderBridge extends ChangeNotifier {
           _layoutAnchor = null;
         }
       }
+    }
+
+    return command(() async {
+      if (ticket != _preferencesTicket) return;
+      if (!paletteOnly || !Platform.isAndroid) {
+        await apply();
+        return;
+      }
+      _navigating = true;
+      _nativeEventTicket++;
+      try {
+        if (animatePalette) {
+          await turns.navigate(apply, capture: () => _capturePage(allowNavigating: true),
+            fadeAppearance: true);
+        } else {
+          await apply();
+        }
+      } finally {
+        _navigating = false;
+      }
     }, waitForView: false).whenComplete(() {
       if (!_disposed && ticket == _preferencesTicket) {
         _styleReady = true;
@@ -1512,7 +1562,10 @@ class ReadiumReaderBridge extends ChangeNotifier {
     });
   }
 
-  Future<void> _waitForLayoutStable({int? ticket}) async {
+  Future<void> _waitForLayoutStable({
+    int? ticket,
+    bool paletteOnly = false,
+  }) async {
     String? previous;
     var stable = 0;
     for (
@@ -1524,16 +1577,17 @@ class ReadiumReaderBridge extends ChangeNotifier {
         'script':
             '(function(){document.body.offsetHeight;return (window.__wenkuPageReady&&!window.__wenkuPageReady()?"pending":document.fonts.status)+"|"+innerWidth+"|"+innerHeight+"|"+document.documentElement.scrollWidth+"|"+document.documentElement.scrollHeight+"|"+scrollX+"|"+scrollY+"|"+getComputedStyle(document.body).fontSize+"|"+(window.__wenkuAppliedStyle||"")+"|"+getComputedStyle(document.documentElement).backgroundColor+"|"+(document.body.textContent.trim()?"text":"image");})()',
       });
-      if (sample != null &&
-          sample.contains('loaded') &&
-          sample == previous &&
+      final styled = sample != null &&
           (_fixedLayout == true ||
               _appliedStyleSignature == null ||
-              sample.contains(_appliedStyleSignature!)))
+              sample.contains(_appliedStyleSignature!));
+      if (styled && sample.contains('loaded') && sample == previous) {
         stable++;
-      else
+      } else {
         stable = 0;
-      if (stable >= (sample?.contains('|image') == true ? 1 : 2)) {
+      }
+      if (styled && paletteOnly ||
+          stable >= (sample?.contains('|image') == true ? 1 : 2)) {
         final rgb = RegExp(r'rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)').firstMatch(sample!);
         if (rgb != null) {
           final paper = _systemPaper ?? (rgb[4] != null && double.parse(rgb[4]!) == 0

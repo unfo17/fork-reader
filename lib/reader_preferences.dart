@@ -195,20 +195,20 @@ class ReaderPreferences {
     return '$geometry$gapKey$modeKey$textKey';
   }
 
-  Color background(bool dark) => switch (paper) {
-    ReaderPaper.system =>
-      dark ? ArchiveDesign.darkBackground : const Color(0xFFF7F7F2),
-    ReaderPaper.milk => const Color(0xFFF6F5EF),
-    ReaderPaper.parchment => const Color(0xFFEDE2CA),
-    ReaderPaper.sage => const Color(0xFFE4EBDD),
-    ReaderPaper.night => ArchiveDesign.darkBackground,
+  Color background(bool dark) => switch ((dark, paper)) {
+    (true, ReaderPaper.milk) => const Color(0xFF252522),
+    (true, ReaderPaper.parchment) => const Color(0xFF2B251D),
+    (true, ReaderPaper.sage) => const Color(0xFF202820),
+    (true, _) => ArchiveDesign.darkBackground,
+    (false, ReaderPaper.system) => const Color(0xFFF7F7F2),
+    (false, ReaderPaper.milk) => const Color(0xFFF6F5EF),
+    (false, ReaderPaper.parchment) => const Color(0xFFEDE2CA),
+    (false, ReaderPaper.sage) => const Color(0xFFE4EBDD),
+    (false, ReaderPaper.night) => const Color(0xFFE6EBED),
   };
   Color controlForeground(bool dark) =>
-      paper == ReaderPaper.night || paper == ReaderPaper.system && dark
-      ? ArchiveDesign.darkInk
-      : const Color(0xFF30352F);
-  bool darkPaper(bool dark) =>
-      paper == ReaderPaper.night || paper == ReaderPaper.system && dark;
+      dark ? ArchiveDesign.darkInk : const Color(0xFF30352F);
+  bool darkPaper(bool dark) => dark;
   Color foreground(bool dark) => darkPaper(dark)
       ? Color.lerp(
           background(dark),

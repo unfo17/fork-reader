@@ -548,7 +548,6 @@ class _NovelAppState extends State<NovelApp> with WidgetsBindingObserver {
       final id = _readerHandoff.currentBookId;
       return id == null ? child! : ReaderAppearance(
         state: state,
-        appTheme: Theme.of(context),
         bookId: id,
         child: child!,
       );

@@ -1699,7 +1699,6 @@ class _ReaderLoaderPageState extends State<ReaderLoaderPage> {
       return ReaderAppearance(
         state: widget.state,
         bookId: widget.novel.id,
-        appTheme: Theme.of(context),
         child: Scaffold(
           body: Atmosphere(
             archiveBackdrop: false,
@@ -5069,7 +5068,7 @@ class _ReaderPageState extends State<ReaderPage>
   ReaderIllustrationCache? _nativeImages;
   Timer? _nativeImageTimer;
   String? _nativeImageKey;
-  String? _nativePreferencesKey;
+  String? _nativePreferencesKey, _nativeGeometryKey;
   bool _nativeLocationChanging = false;
   double _nativeFraction = 0;
   double? _nativeSeekPreview;
@@ -5163,6 +5162,7 @@ class _ReaderPageState extends State<ReaderPage>
       _nativeImageKey = null;
       _nativePublication = _readium!.publication;
       _nativePreferencesKey = null;
+      _nativeGeometryKey = null;
       _nativeMarksKey = null;
     }
     final error = _readium!.error;
@@ -5418,7 +5418,7 @@ class _ReaderPageState extends State<ReaderPage>
     final bridge = _readium!;
     _nativeAnnotations();
     final prefs = _readerPreferences;
-    final theme = Theme.of(context);
+    final theme = readerTargetTheme(context);
     final dark = theme.brightness == Brightness.dark;
     final scheme = readerFollowsSystemPalette(widget.state, prefs) ? theme.colorScheme : null;
     final selectionColor = theme.textSelectionTheme.selectionColor!;
@@ -5441,9 +5441,18 @@ class _ReaderPageState extends State<ReaderPage>
           // stable so toggling information never reflows the native chapter.
           ReaderScrollLocation.extentOf(context),
     );
-    final key =
-        '$pageInsets|$statusBand|${prefs.layoutKey}|${prefs.paper.name}|${prefs.nightTextBrightness}|${prefs.backgroundImage}|${prefs.backgroundOpacity}|${prefs.backgroundFit}|$_fontSize|$_lineHeight|$_readerFontId|$dark|${scheme?.surface.toARGB32()}|${scheme?.onSurface.toARGB32()}|${selectionColor.toARGB32()}|$hidden|$only';
+    final geometry =
+        '$pageInsets|$statusBand|${prefs.layoutKey}|${prefs.backgroundImage}|'
+        '${prefs.backgroundOpacity}|${prefs.backgroundFit}|$_fontSize|$_lineHeight|'
+        '$_readerFontId|$hidden|$only';
+    final key = '$geometry|${prefs.paper.name}|${prefs.nightTextBrightness}|'
+        '$dark|${scheme?.surface.toARGB32()}|${scheme?.onSurface.toARGB32()}|'
+        '${selectionColor.toARGB32()}';
     if (_activityForeground && key != _nativePreferencesKey) {
+      final paletteOnly = _nativeGeometryKey == geometry && bridge.ready;
+      final animatePalette = paletteOnly && !widget.state.reduceMotion &&
+          !MediaQuery.disableAnimationsOf(context);
+      _nativeGeometryKey = geometry;
       _nativePreferencesKey = key;
       // Supply initial defaults synchronously, before creating the native view.
       unawaited(
@@ -5477,6 +5486,8 @@ class _ReaderPageState extends State<ReaderPage>
             fontFamily: _readerFontFamily,
             pageInsets: pageInsets,
             minimumStatusInset: statusBand,
+            paletteOnly: paletteOnly,
+            animatePalette: animatePalette,
             fontFile: font,
             backgroundFile: background,
             hiddenLanguages: hidden,
@@ -5495,6 +5506,8 @@ class _ReaderPageState extends State<ReaderPage>
             fontFamily: null,
             pageInsets: pageInsets,
             minimumStatusInset: statusBand,
+            paletteOnly: paletteOnly,
+            animatePalette: animatePalette,
             hiddenLanguages: hidden,
             onlyLanguage: only,
           );
@@ -5886,7 +5899,6 @@ class _ReaderPageState extends State<ReaderPage>
   Duration? _autoLast;
   bool _autoRunning = false;
   bool _autoPaused = false;
-  ReaderPaper? _dayPaper;
   int _nightIconActivation = 0;
   int? _chromeProgressFrame;
   double? _chromeProgressPending;
@@ -5904,7 +5916,6 @@ class _ReaderPageState extends State<ReaderPage>
   Widget _readerSurface(Widget child) => ReaderAppearance(
     state: widget.state,
     bookId: widget.novel.id,
-    appTheme: Theme.of(context),
     child: child,
   );
 
@@ -8973,6 +8984,7 @@ class _ReaderPageState extends State<ReaderPage>
     final engine = _readium;
     if (engine == null || href.isEmpty || _nativeImageOpening) return;
     _nativeImageOpening = true;
+    AppHaptics.play(context, HapticCue.action);
     _cancelExitRequest();
     _stopAutoScroll();
     _suspendListeningFollow();
@@ -9429,8 +9441,6 @@ class _ReaderPageState extends State<ReaderPage>
     }
     _layoutWidth = MediaQuery.sizeOf(context).width;
     _layoutTypeface = _readerFontId;
-    final appTheme = Theme.of(context);
-    final appDark = appTheme.brightness == Brightness.dark;
     return PopScope<void>(
       canPop: _allowExit,
       onPopInvokedWithResult: (didPop, _) {
@@ -9439,9 +9449,8 @@ class _ReaderPageState extends State<ReaderPage>
       child: ReaderAppearance(
         state: widget.state,
         bookId: widget.novel.id,
-        appTheme: appTheme,
         child: Builder(
-          builder: (context) => _readerScaffold(context, chapter, appDark),
+          builder: (context) => _readerScaffold(context, chapter),
         ),
       ),
     );
@@ -9750,17 +9759,31 @@ class _ReaderPageState extends State<ReaderPage>
 
   void _toggleNightReading() {
     setState(() => _nightIconActivation++);
-    final preferences = _readerPreferences;
-    final dark = preferences.darkPaper(
-      Theme.of(context).brightness == Brightness.dark,
+    final dark = readerAppBrightness(context, widget.state) == Brightness.dark;
+    unawaited(
+      widget.state.setTheme(dark ? ThemeMode.light : ThemeMode.dark)
+          .catchError((Object _) {
+            if (mounted) showNovelFeedback(context, '外观设置未能保存，请重试');
+          }),
     );
-    if (!dark) _dayPaper = preferences.paper;
-    _applyReaderPreferences(
-      preferences.copyWith(
-        paper: dark ? _dayPaper ?? ReaderPaper.milk : ReaderPaper.night,
-      ),
-      true,
-    );
+  }
+
+  void _jumpAdjacentChapter(int direction) {
+    if (!_ready) return;
+    _cancelExitRequest();
+    _stopAutoScroll();
+    _suspendListeningFollow();
+    final target = _chapter + direction;
+    if (target < 0 || target >= _sourceBook.chapters.length) return;
+    if (_readium case final bridge?) {
+      final animated = _readerPreferences.pageEffect != ReaderPageEffect.none &&
+          !widget.state.reduceMotion && !MediaQuery.disableAnimationsOf(context);
+      // Readium already has the publication and the chapter's start locator.
+      // The visible locator updates the chapter only after the jump lands.
+      unawaited(bridge.go(target, animated: animated));
+      return;
+    }
+    _go(target, turnDirection: _paginated ? direction : 0);
   }
 
   Rect? get _readerDockAnchor {
@@ -9925,10 +9948,10 @@ class _ReaderPageState extends State<ReaderPage>
                           onFind: _findInChapter,
                           onSeek: _commitChromeProgress,
                           onPrevious: _chapter > 0
-                              ? () => _go(_chapter - 1)
+                              ? () => _jumpAdjacentChapter(-1)
                               : null,
                           onNext: _chapter + 1 < _sourceBook.chapters.length
-                              ? () => _go(_chapter + 1)
+                              ? () => _jumpAdjacentChapter(1)
                               : null,
                           onPreview: (value) {
                             if (generation == _contentGeneration) {
@@ -10186,7 +10209,6 @@ class _ReaderPageState extends State<ReaderPage>
   Widget _readerScaffold(
     BuildContext context,
     NovelChapter chapter,
-    bool appDark,
   ) => Scaffold(
     // The catalogue owns the keyboard inset; keep the obscured article and
     // its saved scroll geometry fixed while searching in the drawer.
@@ -10260,7 +10282,7 @@ class _ReaderPageState extends State<ReaderPage>
                                     controller: _contentTapSurface,
                                     onTapUp: _contentTap,
                                     onPreview: _previewContentTap,
-                                    child: _article(context, chapter, appDark),
+                                    child: _article(context, chapter),
                                   ),
                                 ),
                               ),
@@ -10345,7 +10367,7 @@ class _ReaderPageState extends State<ReaderPage>
   Widget _scrollHeading(
     int index,
     ReaderPreferences prefs,
-    bool dark, {
+    Color ink, {
     bool continuation = false,
     bool showTitle = true,
   }) => Padding(
@@ -10365,7 +10387,7 @@ class _ReaderPageState extends State<ReaderPage>
                   ? '目录 ${_sourceBook.directoryIndexFor(index) + 1} / ${_sourceBook.directory.length}'
                   : '第 ${index + 1} 章',
               style: TextStyle(
-                color: prefs.foreground(dark).withValues(alpha: .65),
+                color: ink.withValues(alpha: .65),
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
               ),
@@ -10378,7 +10400,7 @@ class _ReaderPageState extends State<ReaderPage>
                   _authoredDirectory
                       ? 'EPUB / TEXT'
                       : 'CH.${(index + 1).toString().padLeft(3, '0')} / TEXT',
-                  color: prefs.foreground(dark).withValues(alpha: .65),
+                  color: ink.withValues(alpha: .65),
                 ),
               ),
             ),
@@ -10394,7 +10416,7 @@ class _ReaderPageState extends State<ReaderPage>
                   : 'reader-chapter-title-$index',
             ),
             style: TextStyle(
-              color: prefs.foreground(dark),
+              color: ink,
               fontSize: 23,
               fontWeight: FontWeight.w700,
             ),
@@ -10521,7 +10543,7 @@ class _ReaderPageState extends State<ReaderPage>
 
   Widget _scrollArticle(
     ReaderPreferences prefs,
-    bool dark,
+    Color ink,
     TextStyle style,
     ReaderContent? content,
     Object? error,
@@ -10597,7 +10619,7 @@ class _ReaderPageState extends State<ReaderPage>
                   controller: _scroll,
                   slivers: [
                     SliverToBoxAdapter(
-                      child: _scrollHeading(_chapter, prefs, dark),
+                      child: _scrollHeading(_chapter, prefs, ink),
                     ),
                     SliverToBoxAdapter(
                       child: error == null
@@ -10674,7 +10696,7 @@ class _ReaderPageState extends State<ReaderPage>
                       return _scrollHeading(
                         chapter,
                         prefs,
-                        dark,
+                        ink,
                         continuation: chapter != _scrollStream.originChapter,
                         showTitle:
                             !isLocalBook(widget.novel.id) ||
@@ -10733,17 +10755,14 @@ class _ReaderPageState extends State<ReaderPage>
     );
   }
 
-  Widget _article(
-    BuildContext context,
-    NovelChapter chapter,
-    bool dark,
-  ) => AnimatedBuilder(
+  Widget _article(BuildContext context, NovelChapter chapter) => AnimatedBuilder(
     animation: widget.state.readerSettingsChanges,
     builder: (context, child) =>
         FutureBuilder<({ReaderContent? content, Object? error})>(
           future: _content,
           builder: (context, snapshot) {
             final prefs = _readerPreferences;
+            final ink = readerArticleInk(context);
             final chapterIndex = _chapter, sourceBook = _sourceBook;
             String pageTitle(int index, ReaderTextAnchor anchor) =>
                 sourceBook.readingTitleFor(
@@ -10782,7 +10801,7 @@ class _ReaderPageState extends State<ReaderPage>
                     height: _lineHeight,
                     letterSpacing: prefs.letterSpacing,
                     fontWeight: prefs.textWeight.weight,
-                    color: prefs.foreground(dark),
+                    color: ink,
                   ),
                 )
                 .copyWith(inherit: false);
@@ -10861,7 +10880,7 @@ class _ReaderPageState extends State<ReaderPage>
                   fit: StackFit.expand,
                   children: [
                     DefaultTextStyle.merge(
-                      style: TextStyle(color: prefs.foreground(dark)),
+                      style: TextStyle(color: ink),
                       child: _paginated && !ready && !failed
                           ? ReaderPageSkeleton(
                               title: chapter.title,
@@ -10924,7 +10943,7 @@ class _ReaderPageState extends State<ReaderPage>
                             )
                           : _scrollArticle(
                               prefs,
-                              dark,
+                              ink,
                               paragraphStyle,
                               content,
                               snapshot.data?.error ?? snapshot.error,

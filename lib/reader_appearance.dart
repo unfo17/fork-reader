@@ -15,14 +15,19 @@ ThemeData readerTheme(
   bool followSystemPalette = false,
 }) {
   final appDark = app.brightness == Brightness.dark;
-  final systemPaper = followSystemPalette && preferences.paper == ReaderPaper.system;
-  final paper = systemPaper ? app.colorScheme.surface : preferences.background(appDark);
-  final brightness = ThemeData.estimateBrightnessForColor(paper);
+  final systemPaper =
+      followSystemPalette && preferences.paper == ReaderPaper.system;
+  final paper = systemPaper
+      ? app.colorScheme.surface
+      : preferences.background(appDark);
+  final brightness = app.brightness;
   final dark = brightness == Brightness.dark;
   final base = novelTheme(brightness, fontFamily: fontFamily);
   // Dim only the article's ink. Sliders, buttons and text selection retain
   // their readable control contrast while a user previews night text levels.
-  final ink = systemPaper ? app.colorScheme.onSurface : preferences.controlForeground(appDark);
+  final ink = systemPaper
+      ? app.colorScheme.onSurface
+      : preferences.controlForeground(appDark);
   final selectionAccent = systemPaper ? app.colorScheme.primary : ink;
   final selectionColor = selectionAccent.withValues(
     alpha: systemPaper ? (dark ? .38 : .27) : (dark ? .20 : .18),
@@ -77,6 +82,9 @@ ThemeData readerTheme(
         (extension) =>
             extension is! GlassPalette && extension is! AppTonalColors,
       ),
+      _ReaderInk(
+        dark ? Color.lerp(paper, ink, preferences.nightTextBrightness)! : ink,
+      ),
       GlassPalette(
         tint: dark ? raised(.10) : Color.lerp(paper, Colors.white, .24)!,
         thumb: Color.lerp(paper, Colors.white, dark ? .90 : .62)!,
@@ -85,7 +93,10 @@ ThemeData readerTheme(
   );
 }
 
-bool readerFollowsSystemPalette(LibraryState state, ReaderPreferences preferences) =>
+bool readerFollowsSystemPalette(
+  LibraryState state,
+  ReaderPreferences preferences,
+) =>
     preferences.paper == ReaderPaper.system &&
     state.appPalette.source == AppPaletteSource.system &&
     state.systemTonalColors != null;
@@ -96,12 +107,10 @@ class ReaderAppearance extends StatefulWidget {
   const ReaderAppearance({
     super.key,
     required this.state,
-    required this.appTheme,
     required this.child,
     this.bookId,
   });
   final LibraryState state;
-  final ThemeData appTheme;
   final Widget child;
   final int? bookId;
 
@@ -113,7 +122,6 @@ class ReaderAppearance extends StatefulWidget {
         ? child
         : ReaderAppearance(
             state: owner.state,
-            appTheme: owner.appTheme,
             bookId: owner.bookId,
             child: child,
           );
@@ -124,28 +132,36 @@ class ReaderAppearance extends StatefulWidget {
 }
 
 class _ReaderAppearanceState extends State<ReaderAppearance> {
-  ThemeData? _base, _theme;
-  ReaderPaper? _paper;
+  Object? _key;
+  ThemeData? _theme;
   String? _family;
-  (Color, Color, Color)? _systemPalette;
-  ThemeData _resolve() {
-    final preferences = widget.state.readerPreferencesFor(widget.bookId);
-    final paper = preferences.paper;
-    final family = widget.state.readerFontFamilyFor(widget.bookId);
-    final scheme = widget.appTheme.colorScheme;
-    final systemPalette = readerFollowsSystemPalette(widget.state, preferences)
-        ? (scheme.surface, scheme.onSurface, scheme.primary)
+
+  ThemeData _resolve(BuildContext context) {
+    final state = widget.state;
+    final brightness = readerAppBrightness(context, state);
+    final preferences = state.readerPreferencesFor(widget.bookId);
+    final family = state.readerFontFamilyFor(widget.bookId);
+    final systemColors = readerFollowsSystemPalette(state, preferences)
+        ? state.systemTonalColors
         : null;
-    if (_base?.brightness != widget.appTheme.brightness ||
-        _paper != paper ||
-        _family != family ||
-        _systemPalette != systemPalette) {
-      _base = widget.appTheme;
-      _paper = paper;
-      _family = family;
-      _systemPalette = systemPalette;
+    final key = (
+      brightness,
+      preferences.paper,
+      preferences.nightTextBrightness,
+      family,
+      systemColors?.signature,
+    );
+    if (_key != key) {
+      _key = key;
       _theme = readerTheme(
-        _base!, preferences, fontFamily: family, followSystemPalette: systemPalette != null,
+        novelTheme(
+          brightness,
+          palette: state.appPalette,
+          systemColors: systemColors,
+        ),
+        preferences,
+        fontFamily: family,
+        followSystemPalette: systemColors != null,
       );
     }
     return _theme!;
@@ -153,26 +169,80 @@ class _ReaderAppearanceState extends State<ReaderAppearance> {
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-    animation: widget.state.readerSettingsChanges,
+    animation: Listenable.merge([
+      widget.state.readerSettingsChanges,
+      widget.state.appearanceChanges,
+    ]),
     child: widget.child,
     builder: (context, child) {
-      final theme = _resolve();
+      final previousFamily = _family;
+      final theme = _resolve(context);
+      _family = widget.state.readerFontFamilyFor(widget.bookId);
+      final animate =
+          previousFamily == _family &&
+          !widget.state.reduceMotion &&
+          !MediaQuery.disableAnimationsOf(context);
       return AnnotatedRegion<SystemUiOverlayStyle>(
         value: novelSystemUiStyle(theme.brightness),
-        child: Theme(
-          data: theme,
-          // Theme alone does not replace MaterialApp's DefaultSelectionStyle.
-          // Its app-light dark tint would disappear on a separately dark paper.
-          child: DefaultSelectionStyle.merge(
-            selectionColor: theme.textSelectionTheme.selectionColor,
-            cursorColor: theme.textSelectionTheme.cursorColor,
-            child: DefaultTextStyle(
-              style: theme.textTheme.bodyMedium!,
-              child: IconTheme(data: theme.iconTheme, child: child!),
+        child: _ReaderThemeTarget(
+          theme: theme,
+          child: AnimatedTheme(
+            data: theme,
+            duration: animate
+                ? const Duration(milliseconds: 220)
+                : Duration.zero,
+            curve: Curves.easeInOutCubic,
+            child: Builder(
+              builder: (context) {
+                final current = Theme.of(context);
+                return DefaultSelectionStyle.merge(
+                  selectionColor: current.textSelectionTheme.selectionColor,
+                  cursorColor: current.textSelectionTheme.cursorColor,
+                  child: DefaultTextStyle(
+                    style: current.textTheme.bodyMedium!,
+                    child: IconTheme(data: current.iconTheme, child: child!),
+                  ),
+                );
+              },
             ),
           ),
         ),
       );
     },
   );
+}
+
+Brightness readerAppBrightness(BuildContext context, LibraryState state) =>
+    switch (state.theme) {
+      ThemeMode.light => Brightness.light,
+      ThemeMode.dark => Brightness.dark,
+      ThemeMode.system => MediaQuery.platformBrightnessOf(context),
+    };
+
+/// Platform views consume the final colors once while Flutter chrome blends.
+class _ReaderThemeTarget extends InheritedWidget {
+  const _ReaderThemeTarget({required this.theme, required super.child});
+  final ThemeData theme;
+  @override
+  bool updateShouldNotify(_ReaderThemeTarget oldWidget) =>
+      theme != oldWidget.theme;
+}
+
+ThemeData readerTargetTheme(BuildContext context) =>
+    context.dependOnInheritedWidgetOfExactType<_ReaderThemeTarget>()?.theme ??
+    Theme.of(context);
+
+class _ReaderInk extends ThemeExtension<_ReaderInk> {
+  const _ReaderInk(this.color);
+  final Color color;
+  @override
+  _ReaderInk copyWith({Color? color}) => _ReaderInk(color ?? this.color);
+  @override
+  _ReaderInk lerp(_ReaderInk? other, double t) =>
+      other == null ? this : _ReaderInk(Color.lerp(color, other.color, t)!);
+}
+
+Color readerArticleInk(BuildContext context) {
+  final theme = Theme.of(context);
+  return theme.extension<_ReaderInk>()?.color ?? theme.colorScheme.onSurface;
 }
