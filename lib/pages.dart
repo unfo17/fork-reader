@@ -5449,54 +5449,19 @@ class _ReaderPageState extends State<ReaderPage>
         '$dark|${scheme?.surface.toARGB32()}|${scheme?.onSurface.toARGB32()}|'
         '${selectionColor.toARGB32()}';
     if (_activityForeground && key != _nativePreferencesKey) {
-      final paletteOnly = _nativeGeometryKey == geometry && bridge.ready;
-      final animatePalette = paletteOnly && !widget.state.reduceMotion &&
-          !MediaQuery.disableAnimationsOf(context);
-      _nativeGeometryKey = geometry;
       _nativePreferencesKey = key;
-      // Supply initial defaults synchronously, before creating the native view.
-      unawaited(
-        bridge.preferences(
-          prefs,
-          fontSize: _fontSize,
-          lineHeight: _lineHeight,
-          dark: dark,
-          selectionColor: selectionColor,
-          systemPalette: scheme,
-          fontFamily: null,
-          pageInsets: pageInsets,
-          minimumStatusInset: statusBand,
-          defaultsOnly: true,
-        ),
-      );
-      unawaited(
-        () async {
-          final [font, background] = await Future.wait([
-            widget.state.fonts.readerFile(_readerFontId),
-            widget.state.backgrounds.file(prefs.backgroundImage),
-          ]);
-          if (!mounted || _nativePreferencesKey != key) return;
-          await bridge.preferences(
-            prefs,
-            fontSize: _fontSize,
-            lineHeight: _lineHeight,
-            dark: dark,
-            selectionColor: selectionColor,
-            systemPalette: scheme,
-            fontFamily: _readerFontFamily,
-            pageInsets: pageInsets,
-            minimumStatusInset: statusBand,
-            paletteOnly: paletteOnly,
-            animatePalette: animatePalette,
-            fontFile: font,
-            backgroundFile: background,
-            hiddenLanguages: hidden,
-            onlyLanguage: only,
-          );
-        }().catchError((Object _) async {
-          if (!mounted || _nativePreferencesKey != key) return;
-          showNovelFeedback(context, '阅读字体或背景未能加载，请重新选择');
-          await bridge.preferences(
+      if (_nativeGeometryKey == geometry && bridge.canRecolor) {
+        unawaited(bridge.recolor(prefs, dark: dark, selectionColor: selectionColor,
+          systemPalette: scheme).catchError((Object _) {
+            if (!mounted || _nativePreferencesKey != key) return;
+            _nativeGeometryKey = null;
+            setState(() => _nativePreferencesKey = null);
+          }));
+      } else {
+        _nativeGeometryKey = null;
+        // Supply initial defaults synchronously, before creating the native view.
+        unawaited(
+          bridge.preferences(
             prefs,
             fontSize: _fontSize,
             lineHeight: _lineHeight,
@@ -5506,13 +5471,52 @@ class _ReaderPageState extends State<ReaderPage>
             fontFamily: null,
             pageInsets: pageInsets,
             minimumStatusInset: statusBand,
-            paletteOnly: paletteOnly,
-            animatePalette: animatePalette,
-            hiddenLanguages: hidden,
-            onlyLanguage: only,
-          );
-        }),
-      );
+            defaultsOnly: true,
+          ),
+        );
+        unawaited(
+          () async {
+            final [font, background] = await Future.wait([
+              widget.state.fonts.readerFile(_readerFontId),
+              widget.state.backgrounds.file(prefs.backgroundImage),
+            ]);
+            if (!mounted || _nativePreferencesKey != key) return;
+            await bridge.preferences(
+              prefs,
+              fontSize: _fontSize,
+              lineHeight: _lineHeight,
+              dark: dark,
+              selectionColor: selectionColor,
+              systemPalette: scheme,
+              fontFamily: _readerFontFamily,
+              pageInsets: pageInsets,
+              minimumStatusInset: statusBand,
+              fontFile: font,
+              backgroundFile: background,
+              hiddenLanguages: hidden,
+              onlyLanguage: only,
+            );
+            if (mounted && _nativePreferencesKey == key) _nativeGeometryKey = geometry;
+          }().catchError((Object _) async {
+            if (!mounted || _nativePreferencesKey != key) return;
+            showNovelFeedback(context, '阅读字体或背景未能加载，请重新选择');
+            await bridge.preferences(
+              prefs,
+              fontSize: _fontSize,
+              lineHeight: _lineHeight,
+              dark: dark,
+              selectionColor: selectionColor,
+              systemPalette: scheme,
+              fontFamily: null,
+              pageInsets: pageInsets,
+              minimumStatusInset: statusBand,
+              hiddenLanguages: hidden,
+              onlyLanguage: only,
+            );
+            if (mounted && _nativePreferencesKey == key) _nativeGeometryKey = geometry;
+          }),
+        );
+      }
     }
     final view = bridge.view();
     return ReaderTouchSurface(

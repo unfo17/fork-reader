@@ -121,6 +121,9 @@ object ReadiumReader :
     CoroutineScope by CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) {
     // App-owned preferences are reapplied to each Readium resource, never to a separate renderer.
     var appReaderStyleScript: String? = null
+    private var appReaderPaletteScript: String? = null
+    private var appPaletteVersion = 0
+    private var appFallbackPaper: Int? = null
     var appReaderWebViewSetup: ((android.webkit.WebView) -> Unit)? = null
     var appSelectionToolbar = false
     var appSelectionMode: android.view.ActionMode? = null
@@ -496,14 +499,69 @@ object ReadiumReader :
         return null
     }
 
+    suspend fun appApplyPalette(
+        script: String,
+        fallbackPaper: Int,
+        setup: (android.webkit.WebView) -> Unit,
+    ): Int? {
+        appReaderPaletteScript = script
+        appFallbackPaper = fallbackPaper
+        appReaderWebViewSetup = setup
+        return applyReaderPalette()
+    }
+
+    fun appReapplyStyle() {
+        val version = appPaletteVersion
+        val script = listOfNotNull(appReaderStyleScript, appReaderPaletteScript).joinToString("\n")
+        if (script.isEmpty()) return
+        appEvaluateAllWebViews(script, appReaderWebViewSetup) { view, value ->
+            if (version == appPaletteVersion && view === appVisibleWebView()) {
+                readPaperColor(value)?.let(::appSetPaper)
+            }
+        }
+    }
+
+    private suspend fun applyReaderPalette(): Int? {
+        val script = appReaderPaletteScript ?: return null
+        val fallback = appFallbackPaper ?: return null
+        val version = ++appPaletteVersion
+        val visible = appVisibleWebView()
+        val color = kotlinx.coroutines.withTimeoutOrNull(180) {
+            kotlinx.coroutines.suspendCancellableCoroutine<Int?> { continuation ->
+                appEvaluateAllWebViews(script, appReaderWebViewSetup) { view, value ->
+                    if (view === visible && continuation.isActive) {
+                        continuation.resumeWith(Result.success(readPaperColor(value)))
+                    }
+                }
+                if (visible == null && continuation.isActive) {
+                    continuation.resumeWith(Result.success(null))
+                }
+            }
+        }
+        val paper = color ?: fallback
+        if (version == appPaletteVersion) appSetPaper(paper)
+        return paper
+    }
+
+    private fun readPaperColor(value: String?): Int? {
+        val match = Regex("""rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)""").find(value.orEmpty())
+            ?: return null
+        val (r, g, b, alpha) = match.destructured
+        if (alpha == "0") return null
+        return android.graphics.Color.rgb(r.toInt(), g.toInt(), b.toInt())
+    }
+
     fun appEvaluateAllWebViews(
         script: String,
         setup: ((android.webkit.WebView) -> Unit)? = null,
+        onResult: ((android.webkit.WebView, String?) -> Unit)? = null,
     ) {
         fun apply(node: android.view.View) {
             if (node is android.webkit.WebView) {
                 setup?.invoke(node)
-                node.evaluateJavascript(script, null)
+                node.evaluateJavascript(script, onResult?.let { callback ->
+                    android.webkit.ValueCallback { value -> callback(node, value) }
+                })
             } else if (node is android.view.ViewGroup) {
                 for (i in 0 until node.childCount) apply(node.getChildAt(i))
             }
@@ -1420,6 +1478,9 @@ object ReadiumReader :
 
     fun closePublication() {
         appReaderStyleScript = null
+        appReaderPaletteScript = null
+        appFallbackPaper = null
+        appPaletteVersion++
         appReaderWebViewSetup = null
         ttsNavigator?.dispose()
         ttsNavigator = null

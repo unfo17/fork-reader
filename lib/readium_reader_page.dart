@@ -740,10 +740,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
     if (visible != null) await _publishVisibleLocator(visible);
   }
 
-  Future<rd.Locator?> _visibleLocator({bool includeText = true}) async {
-    final raw = await native.invokeMethod<String>(
-      includeText ? 'locator' : 'locatorKey',
-    );
+  Future<rd.Locator?> _visibleLocator() async {
+    final raw = await native.invokeMethod<String>('locator');
     return raw == null ? null :
         rd.Locator.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }
@@ -1014,10 +1012,10 @@ class ReadiumReaderBridge extends ChangeNotifier {
   Future<ReadiumPageFrame?> _capturePage({
     bool allowNavigating = false, bool fullResolution = false,
   }) async {
-    if (!Platform.isAndroid || _disposed || _owner != this || !_styleReady)
+    if (!Platform.isAndroid || _disposed || _owner != this || !_styleReady || _paletteApplying)
       return null;
     if (_navigating && !allowNavigating) return null;
-    final style = _preferencesTicket;
+    final style = _preferencesTicket, palette = _paletteTicket;
     final pixels = await native.invokeMapMethod<String, dynamic>('capture', {
       'bands': _appearance.pageEffect == ReaderPageEffect.staggered,
       'vertical': _preferences.verticalText == true,
@@ -1042,7 +1040,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     final image = await decoded.future;
     if (_disposed ||
         (_navigating && !allowNavigating) ||
-        style != _preferencesTicket) {
+        style != _preferencesTicket || palette != _paletteTicket) {
       image.dispose();
       return null;
     }
@@ -1259,6 +1257,115 @@ class ReadiumReaderBridge extends ChangeNotifier {
   rd.Locator? _layoutAnchor;
   EdgeInsets _pageInsets = EdgeInsets.zero;
   double _minimumStatusInset = 0;
+  int _paletteTicket = 0;
+  bool _paletteApplying = false;
+  bool _hasAndroidBackground = false;
+  bool get canRecolor => Platform.isAndroid && _navigatorReady && _styleReady;
+
+  Future<void> recolor(
+    ReaderPreferences prefs, {
+    required bool dark,
+    required Color selectionColor,
+    ColorScheme? systemPalette,
+  }) async {
+    if (_disposed || _owner != this) return;
+    final ticket = ++_paletteTicket;
+    final paper = systemPalette?.surface ?? prefs.background(dark);
+    final ink = systemPalette?.onSurface ?? prefs.controlForeground(dark);
+    final text = dark ? Color.lerp(paper, ink, prefs.nightTextBrightness)! : ink;
+    String cssColor(Color color, {double? alpha}) {
+      final channels = '${(color.r * 255).round()},'
+          '${(color.g * 255).round()},${(color.b * 255).round()}';
+      return alpha == null ? 'rgb($channels)' : 'rgba($channels,$alpha)';
+    }
+
+    final selection = cssColor(selectionColor, alpha: selectionColor.a);
+    final shade = cssColor(paper, alpha: 1 - prefs.backgroundOpacity);
+    final overridePaper = dark || prefs.paper != ReaderPaper.system ||
+        _hasAndroidBackground || systemPalette != null;
+    final overrideImage = dark || prefs.paper != ReaderPaper.system;
+    final script = '''
+(function(){
+  var root=document.documentElement,body=document.body;
+  if(!body)return ${jsonEncode(cssColor(paper))};
+  var tint=document.getElementById('wenku-reader-selection');
+  if(!tint){
+    tint=document.createElement('style');
+    tint.id='wenku-reader-selection';
+    (document.head||root).appendChild(tint);
+  }
+  tint.textContent=${jsonEncode('::selection,body *::selection{background-color:$selection !important;}')};
+  if(${_fixedLayout == true})return ${jsonEncode(cssColor(paper))};
+  var authored=window.__wenkuAuthoredPaper;
+  if(!authored){
+    var b=getComputedStyle(body),r=getComputedStyle(root);
+    var opaque=b.backgroundColor!=='rgba(0, 0, 0, 0)'&&b.backgroundColor!=='transparent';
+    var paints=!!root.style.getPropertyValue('background-color');
+    function paintsRoot(rules){
+      for(var rule of Array.from(rules||[])){
+        if(rule.selectorText&&rule.style){
+          try{if(root.matches(rule.selectorText)&&(rule.style.background||rule.style.backgroundColor))return true;}catch(e){}
+        }
+        if(rule.cssRules&&(!rule.media||matchMedia(rule.conditionText||'all').matches)&&paintsRoot(rule.cssRules))return true;
+      }
+      return false;
+    }
+    for(var sheet of Array.from(document.styleSheets)){
+      if(/readium_assets|readium-css/i.test(sheet.href||'')||/readium|wenku/i.test(sheet.ownerNode&&sheet.ownerNode.id||''))continue;
+      try{if(paintsRoot(sheet.cssRules))paints=true;}catch(e){}
+    }
+    var source=b.backgroundImage!=='none'?b:r;
+    authored=window.__wenkuAuthoredPaper={
+      color:opaque?b.backgroundColor:(paints?r.backgroundColor:null),
+      image:source.backgroundImage,size:source.backgroundSize,
+      repeat:source.backgroundRepeat,position:source.backgroundPosition
+    };
+  }
+  var paper=${jsonEncode(cssColor(paper))}, text=${jsonEncode(cssColor(text))};
+  if($dark){
+    root.style.setProperty('--USER__backgroundColor',paper);
+    root.style.setProperty('--USER__textColor',text);
+  }else{
+    root.style.removeProperty('--USER__backgroundColor');
+    root.style.removeProperty('--USER__textColor');
+  }
+  var color=$overridePaper?paper:(authored.color||paper);
+  root.style.setProperty('background-color',color,'important');
+  root.style.setProperty('--wenku-paper-shade',${jsonEncode(shade)});
+  if(${_hasAndroidBackground}){
+    root.style.removeProperty('background-image');
+  }else{
+    root.style.setProperty('background-image',$overrideImage?'none':authored.image,'important');
+    root.style.setProperty('background-size',authored.size);
+    root.style.setProperty('background-repeat',authored.repeat);
+    root.style.setProperty('background-position',authored.position);
+    root.style.setProperty('background-attachment','fixed');
+  }
+  body.style.setProperty('background-color','transparent','important');
+  body.style.setProperty('background-image','none','important');
+  return color;
+})();''';
+    final repaint = canRecolor;
+    _paletteApplying = true;
+    if (repaint) _interruptPreview();
+    try {
+      final applied = native.invokeMethod<int>('palette', {
+        'paper': paper.toARGB32(),
+        if (systemPalette != null) 'darkSelectionPalette': dark,
+        'script': script,
+      });
+      final color = await applied;
+      if (!_disposed && ticket == _paletteTicket) {
+        _pagePaper = color == null ? paper : Color(color);
+      }
+    } finally {
+      if (!_disposed && ticket == _paletteTicket) {
+        _paletteApplying = false;
+        if (repaint) notifyListeners();
+      }
+    }
+  }
+
   Future<void> preferences(
     ReaderPreferences prefs, {
     required double fontSize,
@@ -1270,8 +1377,6 @@ class ReadiumReaderBridge extends ChangeNotifier {
     required EdgeInsets pageInsets,
     required double minimumStatusInset,
     bool defaultsOnly = false,
-    bool paletteOnly = false,
-    bool animatePalette = false,
     File? fontFile,
     File? backgroundFile,
     Set<String> hiddenLanguages = const {},
@@ -1285,7 +1390,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     final darkPaper = prefs.darkPaper(dark);
     final ink = systemPalette?.onSurface ?? prefs.controlForeground(dark);
     final textColor = darkPaper ? Color.lerp(paperColor, ink, prefs.nightTextBrightness) : ink;
-    final useReadiumColors = darkPaper || (!Platform.isAndroid && systemPalette != null);
+    final useReadiumColors = !Platform.isAndroid && (darkPaper || systemPalette != null);
     final requestedAnchor = defaultsOnly ? null : (_layoutAnchor ??= locator);
     final nextPreferences = rd.EPUBPreferences(
       publisherStyles: true,
@@ -1315,34 +1420,22 @@ class ReadiumReaderBridge extends ChangeNotifier {
     _preferences = nextPreferences;
     api.setDefaultPreferences(nextPreferences);
     if (defaultsOnly) return Future<void>.value();
-    Future<void> apply() async {
+    return command(() async {
       if (ticket != _preferencesTicket) return;
-      // A color change keeps the visible navigator in place. Initial style
-      // and typography changes still use the measured layout restore path.
       final anchor = _layoutAnchor ?? requestedAnchor;
-      if (!paletteOnly) {
-        _styleReady = false;
-        notifyListeners();
-      }
+      _styleReady = false;
+      notifyListeners();
       await api.setEPUBPreferences(nextPreferences);
       if (Platform.isAndroid) {
-        if (!paletteOnly) {
-          await native.invokeMethod<void>('viewportInsets', {
-            'top': pageInsets.top,
-            'bottom': pageInsets.bottom,
-            'minimumStatus': minimumStatusInset,
-          });
-        }
+        await native.invokeMethod<void>('viewportInsets', {
+          'top': pageInsets.top,
+          'bottom': pageInsets.bottom,
+          'minimumStatus': minimumStatusInset,
+        });
         _fixedLayout ??=
             await native.invokeMethod<bool>('fixedLayout') ?? false;
         _appliedStyleSignature = '${identityHashCode(this)}:$ticket';
-        final paper = paperColor
-            .toARGB32()
-            .toRadixString(16)
-            .padLeft(8, '0')
-            .substring(2);
-        // In daytime, change only the paper so publisher boxes/tables survive.
-        // At night Readium also clears those backgrounds to match its text colour.
+        _hasAndroidBackground = backgroundFile != null;
         final css = StringBuffer(
           'body{box-sizing:border-box;'
           'padding:0 ${pageInsets.right}px 0 ${pageInsets.left}px !important;'
@@ -1374,16 +1467,13 @@ class ReadiumReaderBridge extends ChangeNotifier {
         }
         if (backgroundFile != null) {
           final data = await _dataUrl(backgroundFile, 'image/png');
-          final c = paperColor;
-          final shade =
-              'rgba(${(c.r * 255).round()},${(c.g * 255).round()},${(c.b * 255).round()},${1 - prefs.backgroundOpacity})';
           final fit = prefs.backgroundFit == BoxFit.contain
               ? 'contain'
               : prefs.backgroundFit == BoxFit.fill
               ? '100% 100%'
               : 'cover';
           css.write(
-            'html{background-image:linear-gradient($shade,$shade),url("$data") !important;background-size:$fit !important;background-position:center !important;background-attachment:fixed !important;}body{background-color:transparent !important;}',
+            'html{background-image:linear-gradient(var(--wenku-paper-shade),var(--wenku-paper-shade)),url("$data") !important;background-size:$fit !important;background-position:center !important;background-attachment:fixed !important;}body{background-color:transparent !important;}',
           );
         }
         // Native EPUB language tags stay intact; only the user's explicit filter hides them.
@@ -1401,31 +1491,12 @@ class ReadiumReaderBridge extends ChangeNotifier {
               'body [lang]:not([lang|="$code"]){display:none !important;}',
             );
         }
-        final overrideBackground =
-            backgroundFile != null ||
-            prefs.paper != ReaderPaper.system ||
-            prefs.darkPaper(dark);
-        final selectionInk =
-            'rgba(${(selectionColor.r * 255).round()},'
-            '${(selectionColor.g * 255).round()},'
-            '${(selectionColor.b * 255).round()},${selectionColor.a})';
-        final selectionCss =
-            '::selection,body *::selection{background-color:$selectionInk !important;}';
+        if (ticket != _preferencesTicket) return;
         await native.invokeMethod<String>('style', {
-          if (systemPalette != null) 'darkSelectionPalette': dark,
           'script':
               '''(function(){
                 var root=document.documentElement,body=document.body;
-                if(!body)return;
-                var tint=document.getElementById('wenku-reader-selection');
-                if(!tint){
-                  tint=document.createElement('style');
-                  tint.id='wenku-reader-selection';
-                  (document.head||root).appendChild(tint);
-                }
-                var selectionCss=${jsonEncode(selectionCss)};
-                if(tint.textContent!==selectionCss)tint.textContent=selectionCss;
-                if(${_fixedLayout == true})return;
+                if(!body||${_fixedLayout == true})return;
                 if(!window.__wenkuPageReady)window.__wenkuPageReady=function(){
                   // Off-screen images in this chapter can finish independently.
                   if(document.readyState==='loading')return false;
@@ -1457,47 +1528,23 @@ class ReadiumReaderBridge extends ChangeNotifier {
                 window.__wenkuAppliedStyle=signature;
                 var s=document.getElementById("wenku-reader-preferences");
                 if(s)s.remove();
-                var saved=window.__wenkuRootBackground;
-                if(!saved){saved={color:root.style.getPropertyValue('background-color'),image:root.style.getPropertyValue('background-image'),bodyColor:body.style.getPropertyValue('background-color'),bodyPriority:body.style.getPropertyPriority('background-color'),bodyImage:body.style.getPropertyValue('background-image'),bodyImagePriority:body.style.getPropertyPriority('background-image')};window.__wenkuRootBackground=saved;}
-                for(var pair of [['background-color',saved.color],['background-image',saved.image]]){if(pair[1])root.style.setProperty(pair[0],pair[1]);else root.style.removeProperty(pair[0]);}
-                if(saved.bodyColor)body.style.setProperty('background-color',saved.bodyColor,saved.bodyPriority);else body.style.removeProperty('background-color');
-                if(saved.bodyImage)body.style.setProperty('background-image',saved.bodyImage,saved.bodyImagePriority);else body.style.removeProperty('background-image');
-                var bg=getComputedStyle(body),html=getComputedStyle(root);
-                var opaque=bg.backgroundColor!=='rgba(0, 0, 0, 0)'&&bg.backgroundColor!=='transparent';
-                // Readium's default white root is not an authored book colour.
-                // Keep the original app paper unless the book paints html/body.
-                var authoredRoot=!!saved.color;
-                function paintsRoot(rules){
-                  for(var r of Array.from(rules||[])){
-                    if(r.selectorText&&r.style){try{if(root.matches(r.selectorText)&&(r.style.background||r.style.backgroundColor))return true;}catch(e){}}
-                    if(r.cssRules&&(!r.media||matchMedia(r.conditionText||'all').matches)&&paintsRoot(r.cssRules))return true;
-                  }return false;
-                }
-                for(var sheet of Array.from(document.styleSheets)){
-                  if(/readium_assets|readium-css/i.test(sheet.href||'')||/readium|wenku/i.test(sheet.ownerNode&&sheet.ownerNode.id||''))continue;
-                  try{if(paintsRoot(sheet.cssRules))authoredRoot=true;}catch(e){}
-                }
-                var color=${overrideBackground || systemPalette != null ? jsonEncode('#$paper') : "opaque?bg.backgroundColor:(authoredRoot?html.backgroundColor:'#$paper')"};
-                var image=${overrideBackground ? "'none'" : "bg.backgroundImage!=='none'?bg.backgroundImage:html.backgroundImage"};
                 s=document.createElement('style');s.id='wenku-reader-preferences';
-                s.textContent=${jsonEncode(css.toString())} + (image!=='none'&&!${overrideBackground}?'html{background-size:'+bg.backgroundSize+';background-repeat:'+bg.backgroundRepeat+';background-position:'+bg.backgroundPosition+';background-attachment:fixed;}':'');document.head.appendChild(s);
-                // Page height and vertical clearance belong to the navigator's
-                // native viewport. Inline body padding sets the column width.
+                s.textContent=${jsonEncode(css.toString())};
+                document.head.appendChild(s);
                 body.style.setProperty('padding','0 ${pageInsets.right}px 0 ${pageInsets.left}px','important');
-                root.style.setProperty('background-color',color,'important');
-                if(!${backgroundFile != null})root.style.setProperty('background-image',image,'important');
-                body.style.setProperty('background-color','transparent','important');
-                body.style.setProperty('background-image','none','important');
               })();''',
         });
       }
       if (Platform.isAndroid) {
-        await _waitForLayoutStable(ticket: ticket, paletteOnly: paletteOnly);
+        if (ticket != _preferencesTicket) return;
+        await recolor(prefs, dark: dark, selectionColor: selectionColor,
+          systemPalette: systemPalette);
+        await _waitForLayoutStable(ticket: ticket);
       }
       if (anchor != null && ticket == _preferencesTicket) {
         final openingLocation = identical(anchor, initialLocator);
-        final visible = Platform.isAndroid && (openingLocation || paletteOnly)
-            ? await _visibleLocator(includeText: !paletteOnly) : null;
+        final visible = Platform.isAndroid && openingLocation
+            ? await _visibleLocator() : null;
         if (!Platform.isAndroid) {
           await Future<void>.delayed(const Duration(milliseconds: 120));
         }
@@ -1506,23 +1553,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
             _owner == this &&
             identical(_layoutAnchor, anchor)) {
           final locations = anchor.locations;
-          // Reuse the saved text anchor when the navigator reports the same
-          // page. Only resolve DOM offsets if Readium's cached locator moved.
-          bool matchesPage(rd.Locator? current) {
-            final progress = anchor.locations?.progression;
-            final reported = current?.locations?.progression;
-            return current?.href == anchor.href && progress != null &&
-                reported != null && (reported - progress).abs() < .00001;
-          }
-
-          if (paletteOnly && Platform.isAndroid) {
-            if (!matchesPage(visible)) {
-              final current = await _visibleLocator();
-              if (ticket == _preferencesTicket && !matchesPage(current)) {
-                await _jumpToLocator(anchor);
-              }
-            }
-          } else if (_matchesInitialLocation(visible, anchor)) {
+          if (_matchesInitialLocation(visible, anchor)) {
             await _publishVisibleLocator(visible!);
           } else {
             await _navigate(anchor, seek: openingLocation &&
@@ -1533,26 +1564,6 @@ class ReadiumReaderBridge extends ChangeNotifier {
           _layoutAnchor = null;
         }
       }
-    }
-
-    return command(() async {
-      if (ticket != _preferencesTicket) return;
-      if (!paletteOnly || !Platform.isAndroid) {
-        await apply();
-        return;
-      }
-      _navigating = true;
-      _nativeEventTicket++;
-      try {
-        if (animatePalette) {
-          await turns.navigate(apply, capture: () => _capturePage(allowNavigating: true),
-            fadeAppearance: true);
-        } else {
-          await apply();
-        }
-      } finally {
-        _navigating = false;
-      }
     }, waitForView: false).whenComplete(() {
       if (!_disposed && ticket == _preferencesTicket) {
         _styleReady = true;
@@ -1562,10 +1573,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     });
   }
 
-  Future<void> _waitForLayoutStable({
-    int? ticket,
-    bool paletteOnly = false,
-  }) async {
+  Future<void> _waitForLayoutStable({int? ticket}) async {
     String? previous;
     var stable = 0;
     for (
@@ -1586,8 +1594,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       } else {
         stable = 0;
       }
-      if (styled && paletteOnly ||
-          stable >= (sample?.contains('|image') == true ? 1 : 2)) {
+      if (stable >= (sample?.contains('|image') == true ? 1 : 2)) {
         final rgb = RegExp(r'rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)').firstMatch(sample!);
         if (rgb != null) {
           final paper = _systemPaper ?? (rgb[4] != null && double.parse(rgb[4]!) == 0
@@ -1650,7 +1657,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     return ReadiumPageSurface(
       controller: turns,
       frameKey:
-          "${locator?.href}|$fraction|$_preferencesTicket|$_marksRevision|$_styleReady|${_appearance.pageEffect}",
+          "${locator?.href}|$fraction|$_preferencesTicket|$_paletteTicket|$_paletteApplying|$_marksRevision|$_styleReady|${_appearance.pageEffect}",
       layoutKey: '$_preferencesTicket|$_marksRevision|$_styleReady|${_appearance.pageEffect}',
       preferences: _appearance,
       paper: pagePaper,

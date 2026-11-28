@@ -189,7 +189,7 @@ class _ReaderAppearanceState extends State<ReaderAppearance> {
           child: AnimatedTheme(
             data: theme,
             duration: animate
-                ? const Duration(milliseconds: 220)
+                ? const Duration(milliseconds: 120)
                 : Duration.zero,
             curve: Curves.easeInOutCubic,
             child: Builder(

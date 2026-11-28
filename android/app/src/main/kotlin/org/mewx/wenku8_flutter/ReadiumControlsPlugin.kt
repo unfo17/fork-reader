@@ -61,7 +61,6 @@ class ReadiumControlsPlugin : FlutterPlugin {
                             "visualPage" -> result.success(ReadiumReader.appVisualPageState())
                             "jump" -> result.success(ReadiumReader.appJumpToPage(call.argument<String>("locator") ?: "{}", call.argument<Boolean>("seek") == true))
                             "locator" -> result.success(ReadiumReader.appCurrentLocatorJson())
-                            "locatorKey" -> result.success(ReadiumReader.appPageKeyJson())
                             "pageKey" -> result.success(ReadiumReader.appPageKeyJson())
                             "parkPublication" -> {
                                 updateSelectionStyle(null)
@@ -133,8 +132,13 @@ class ReadiumControlsPlugin : FlutterPlugin {
                             }
                             "style" -> {
                                 val script = call.argument<String>("script") ?: ""
-                                updateSelectionStyle(call.argument<Boolean>("darkSelectionPalette"))
                                 result.success(ReadiumReader.appApplyStyle(script, ::applySelectionStyle))
+                            }
+                            "palette" -> {
+                                val script = call.argument<String>("script") ?: ""
+                                val fallback = call.argument<Number>("paper")?.toInt() ?: android.graphics.Color.WHITE
+                                updateSelectionStyle(call.argument<Boolean>("darkSelectionPalette"))
+                                result.success(ReadiumReader.appApplyPalette(script, fallback, ::applySelectionStyle))
                             }
                             "evaluate" -> result.success(ReadiumReader.epubEvaluateJavascript(call.argument<String>("script") ?: ""))
                             else -> result.notImplemented()
