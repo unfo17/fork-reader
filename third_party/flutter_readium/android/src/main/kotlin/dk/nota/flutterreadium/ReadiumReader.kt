@@ -549,11 +549,13 @@ object ReadiumReader :
         }
         val paper = color ?: fallback
         if (version == appPaletteVersion) {
-            if ((awaitPaint || transitionMs > 0) && visible != null && color != null) {
+            if ((awaitPaint || transitionMs > 0 || backgroundScript != null) && visible != null && color != null) {
                 kotlinx.coroutines.withTimeoutOrNull(180L) {
                     kotlinx.coroutines.suspendCancellableCoroutine<Unit> { continuation ->
                         visible.postVisualStateCallback(System.nanoTime(), object : android.webkit.WebView.VisualStateCallback() {
                             override fun onComplete(requestId: Long) {
+                                // Refresh the platform texture after Chromium commits the new paper.
+                                visible.postInvalidateOnAnimation()
                                 if (continuation.isActive) continuation.resumeWith(Result.success(Unit))
                             }
                         })

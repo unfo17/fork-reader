@@ -1341,7 +1341,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
     tint.id='wenku-reader-selection';
     (document.head||root).appendChild(tint);
   }
-  tint.textContent=${jsonEncode('::selection,body *::selection{background-color:$selection !important;}')};
+  var selectionStyle=${jsonEncode('::selection,body *::selection{background-color:$selection !important;}')};
+  if(tint.textContent!==selectionStyle)tint.textContent=selectionStyle;
   if(${_fixedLayout == true})return ${jsonEncode(cssColor(paper))};
   var authored=window.__wenkuAuthoredPaper;
   if(!authored){
@@ -1399,9 +1400,12 @@ class ReadiumReaderBridge extends ChangeNotifier {
   }
   root.style.setProperty('background-color',color,'important');
   root.style.setProperty('--wenku-paper-shade',${jsonEncode(shade)});
-  var image=asset?'linear-gradient(var(--wenku-paper-shade),var(--wenku-paper-shade)),url("'+asset+'")'
-      :($overrideImage?'none':authored.image);
-  root.style.setProperty('background-image',image,'important');
+  var source=asset||($overrideImage?'none':authored.image);
+  if(window.__wenkuPaintedBackground!==source){
+    window.__wenkuPaintedBackground=source;
+    var image=asset?'linear-gradient(var(--wenku-paper-shade),var(--wenku-paper-shade)),url("'+asset+'")':source;
+    root.style.setProperty('background-image',image,'important');
+  }
   root.style.setProperty('background-size',asset?${jsonEncode(fit)}:authored.size);
   root.style.setProperty('background-repeat',asset?'no-repeat':authored.repeat);
   root.style.setProperty('background-position',asset?'center':authored.position);
