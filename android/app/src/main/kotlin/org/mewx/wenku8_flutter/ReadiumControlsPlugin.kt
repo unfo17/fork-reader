@@ -142,7 +142,6 @@ class ReadiumControlsPlugin : FlutterPlugin {
                                     script,
                                     fallback,
                                     call.argument<String>("backgroundScript"),
-                                    (call.argument<Number>("transitionMs")?.toLong() ?: 0L).coerceIn(0L, 220L),
                                     call.argument<Boolean>("awaitPaint") == true,
                                     ::applySelectionStyle,
                                 ))

@@ -263,12 +263,16 @@ class ReadiumReaderBridge extends ChangeNotifier {
   bool _dark = false;
   Color? _systemPaper;
   Color? _pagePaper;
-  Color get pagePaper => _systemPaper ?? _pagePaper ?? _appearance.background(_dark);
+  Color get pagePaper =>
+      (Platform.isAndroid ? _pagePaper : _systemPaper ?? _pagePaper) ??
+      _systemPaper ?? _appearance.background(_dark);
   void motionPreferences(ReaderPreferences preferences, bool dark, {ColorScheme? systemPalette}) {
     final changedPaper = _dark != dark || _appearance.paper != preferences.paper;
     _appearance = preferences;
     _dark = dark;
-    if (_systemPaper != systemPalette?.surface || changedPaper) _pagePaper = null;
+    if (!Platform.isAndroid && (_systemPaper != systemPalette?.surface || changedPaper)) {
+      _pagePaper = null;
+    }
     _systemPaper = systemPalette?.surface;
   }
 
@@ -609,7 +613,8 @@ class ReadiumReaderBridge extends ChangeNotifier {
         api.setDefaultPreferences(_preferences);
         publication = await api.openPublication(file.uri.toString());
         _androidBackgroundId = null;
-        _androidNight = null;
+        _pagePaper = null;
+        _paintedPalette.value = null;
         _backgroundRequest = null;
       });
       _lifecycle = acquire.catchError((Object _) {});
@@ -1263,12 +1268,12 @@ class ReadiumReaderBridge extends ChangeNotifier {
   double _minimumStatusInset = 0;
   int _paletteTicket = 0;
   bool _paletteApplying = false;
-  final _paintedBrightness = ValueNotifier<Brightness?>(null);
-  ValueListenable<Brightness?> get paintedBrightness => _paintedBrightness;
+  int _paintRevision = 0;
+  final _paintedPalette = ValueNotifier<(Brightness, Color)?>(null);
+  ValueListenable<(Brightness, Color)?> get paintedPalette => _paintedPalette;
   String? _androidBackgroundId;
   (String, Future<String?>)? _backgroundRequest;
   Future<int?>? _paletteDispatch;
-  bool? _androidNight;
   bool get canRecolor => Platform.isAndroid && _navigatorReady && _styleReady;
 
   Future<void> recolor(
@@ -1277,7 +1282,6 @@ class ReadiumReaderBridge extends ChangeNotifier {
     required Color selectionColor,
     required Future<File?> Function(String? id) backgroundFile,
     ColorScheme? systemPalette,
-    Duration transition = Duration.zero,
   }) async {
     if (_disposed || _owner != this) return;
     final ticket = ++_paletteTicket;
@@ -1299,8 +1303,12 @@ class ReadiumReaderBridge extends ChangeNotifier {
         final request = cached?.$1 == backgroundId
             ? cached!.$2
             : () async {
-                final file = await backgroundFile(backgroundId);
-                return file == null ? null : _dataUrl(file, 'image/png');
+                try {
+                  final file = await backgroundFile(backgroundId);
+                  return file == null ? null : await _dataUrl(file, 'image/png');
+                } on FileSystemException {
+                  return null;
+                }
               }();
         _backgroundRequest = (backgroundId, request);
         asset = await request;
@@ -1308,8 +1316,6 @@ class ReadiumReaderBridge extends ChangeNotifier {
       backgroundScript = 'window.__wenkuBackgroundAsset=${jsonEncode(asset)};';
     }
     if (_disposed || _owner != this || ticket != _paletteTicket) return;
-    final duration = _androidNight != null && _androidNight != dark
-        ? transition : Duration.zero;
     final paper = systemPalette?.surface ?? prefs.background(dark);
     final ink = systemPalette?.onSurface ?? prefs.controlForeground(dark);
     final text = dark ? Color.lerp(paper, ink, prefs.nightTextBrightness)! : ink;
@@ -1332,8 +1338,6 @@ class ReadiumReaderBridge extends ChangeNotifier {
     final script = '''
 (function(){
   var root=document.documentElement,body=document.body;
-  var animate=window.__wenkuAnimatePalette===true;
-  window.__wenkuAnimatePalette=false;
   if(!body)return ${jsonEncode(cssColor(paper))};
   var tint=document.getElementById('wenku-reader-selection');
   if(!tint){
@@ -1370,87 +1374,88 @@ class ReadiumReaderBridge extends ChangeNotifier {
     };
   }
   var paper=${jsonEncode(cssColor(paper))}, text=${jsonEncode(cssColor(text))};
-  var asset=window.__wenkuBackgroundAsset;
-  var color=$overridePaper||asset?paper:(authored.color||paper);
-  // Apply ink, paper and publisher box colors in one style update. A CSS
-  // paint transition keeps them on the same clock without copying the page.
-  var motion=document.getElementById('wenku-paper-transition');
-  if(animate&&window.__wenkuPaperNight!==undefined&&window.__wenkuPaperNight!==$dark){
-    if(motion)motion.remove();
-    motion=document.createElement('style');
-    motion.id='wenku-paper-transition';
-    motion.textContent='@property --wenku-paper-shade{syntax:"<color>";inherits:false;initial-value:transparent}'+
-      'html,body,body *{transition-property:color,background-color,border-color,--wenku-paper-shade !important;'+
-      'transition-duration:${duration.inMilliseconds}ms !important;transition-delay:0ms !important;'+
-      'transition-timing-function:cubic-bezier(.4,0,.2,1) !important}';
-    (document.head||root).appendChild(motion);
-    // Preserve the old computed colors before the first palette change.
-    getComputedStyle(root).backgroundColor;
-    setTimeout(function(){motion.remove();},${duration.inMilliseconds}+100);
-  }else if(motion&&window.__wenkuPaperNight!==$dark){
-    motion.remove();
+  var requestedAsset=window.__wenkuBackgroundAsset;
+  function paint(asset){
+    if(window.__wenkuPendingPalette!==paint)return;
+    var color=$overridePaper||asset?paper:(authored.color||paper);
+    if($dark){
+      root.style.setProperty('--USER__backgroundColor',paper);
+      root.style.setProperty('--USER__textColor',text);
+    }else{
+      root.style.removeProperty('--USER__backgroundColor');
+      root.style.removeProperty('--USER__textColor');
+    }
+    root.style.setProperty('background-color',color,'important');
+    root.style.setProperty('--wenku-paper-shade',${jsonEncode(shade)});
+    var source=asset||($overrideImage?'none':authored.image);
+    if(window.__wenkuPaintedBackground!==source){
+      window.__wenkuPaintedBackground=source;
+      var image=asset?'linear-gradient(var(--wenku-paper-shade),var(--wenku-paper-shade)),url("'+asset+'")':source;
+      root.style.setProperty('background-image',image,'important');
+    }
+    root.style.setProperty('background-size',asset?${jsonEncode(fit)}:authored.size);
+    root.style.setProperty('background-repeat',asset?'no-repeat':authored.repeat);
+    root.style.setProperty('background-position',asset?'center':authored.position);
+    root.style.setProperty('background-attachment','fixed');
+    body.style.setProperty('background-color','transparent','important');
+    body.style.setProperty('background-image','none','important');
+    window.__wenkuPendingPalette=null;
+    return color;
   }
-  window.__wenkuPaperNight=$dark;
-  if($dark){
-    root.style.setProperty('--USER__backgroundColor',paper);
-    root.style.setProperty('--USER__textColor',text);
-  }else{
-    root.style.removeProperty('--USER__backgroundColor');
-    root.style.removeProperty('--USER__textColor');
+  window.__wenkuPendingPalette=paint;
+  if(!requestedAsset||window.__wenkuPaintedBackground===requestedAsset){
+    return paint(requestedAsset);
   }
-  root.style.setProperty('background-color',color,'important');
-  root.style.setProperty('--wenku-paper-shade',${jsonEncode(shade)});
-  var source=asset||($overrideImage?'none':authored.image);
-  if(window.__wenkuPaintedBackground!==source){
-    window.__wenkuPaintedBackground=source;
-    var image=asset?'linear-gradient(var(--wenku-paper-shade),var(--wenku-paper-shade)),url("'+asset+'")':source;
-    root.style.setProperty('background-image',image,'important');
+  // Leave the old paper in place until the new image can be drawn. Slider
+  // changes share the pending decode and only the latest palette may commit.
+  var pending=window.__wenkuBackgroundDecode;
+  if(!pending||pending.asset!==requestedAsset){
+    var image=new Image();
+    var ready;
+    if(typeof image.decode==='function'){
+      image.src=requestedAsset;
+      ready=image.decode();
+    }else{
+      ready=new Promise(function(resolve,reject){
+        image.onload=resolve;
+        image.onerror=reject;
+        image.src=requestedAsset;
+      });
+    }
+    pending=window.__wenkuBackgroundDecode={
+      asset:requestedAsset, ready:ready.then(function(){return true;},function(){return false;})
+    };
   }
-  root.style.setProperty('background-size',asset?${jsonEncode(fit)}:authored.size);
-  root.style.setProperty('background-repeat',asset?'no-repeat':authored.repeat);
-  root.style.setProperty('background-position',asset?'center':authored.position);
-  root.style.setProperty('background-attachment','fixed');
-  body.style.setProperty('background-color','transparent','important');
-  body.style.setProperty('background-image','none','important');
-  return color;
+  pending.ready.then(function(ready){paint(ready?requestedAsset:null);});
+  return 'pending '+paper;
 })();''';
     final repaint = canRecolor;
-    if (repaint) _interruptPreview();
-    final blend = repaint && duration != Duration.zero
-        ? await turns.holdPaperForBlend(duration)
-        : null;
-    if (_disposed || _owner != this || ticket != _paletteTicket) {
-      blend?.call();
-      return;
-    }
     _paletteApplying = true;
+    if (repaint) {
+      _interruptPreview();
+      // A speculative turn uses the same native WebView. Let it return to
+      // the visible locator before changing any paint colors.
+      await turns.whenPrepared;
+    }
+    if (_disposed || _owner != this || ticket != _paletteTicket) return;
     try {
       final applied = native.invokeMethod<int>('palette', {
         'paper': paper.toARGB32(),
         if (backgroundScript != null) 'backgroundScript': backgroundScript,
-        if (blend != null) 'awaitPaint': true,
-        if (blend == null && duration != Duration.zero)
-          'transitionMs': duration.inMilliseconds,
+        'awaitPaint': repaint,
         if (systemPalette != null) 'darkSelectionPalette': dark,
         'script': script,
       });
       _paletteDispatch = applied;
       final color = await applied;
-      if (!_disposed && _owner == this) {
-        _androidBackgroundId = backgroundId;
-        _androidNight = dark;
-      }
+      if (!_disposed && _owner == this) _androidBackgroundId = backgroundId;
       if (!_disposed && ticket == _paletteTicket) {
         _pagePaper = color == null ? paper : Color(color);
-        _paintedBrightness.value = dark ? Brightness.dark : Brightness.light;
+        _paintRevision++;
+        _paintedPalette.value = (dark ? Brightness.dark : Brightness.light, paper);
       }
     } finally {
       _paletteDispatch = null;
-      blend?.call();
-      if (duration != Duration.zero && ticket == _paletteTicket) {
-        // Keep lookahead captures out of the WebView's compositor transition.
-        await Future<void>.delayed(duration);
-      }
       if (!_disposed && ticket == _paletteTicket) {
         _paletteApplying = false;
         if (repaint) notifyListeners();
@@ -1737,7 +1742,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
     return ReadiumPageSurface(
       controller: turns,
       frameKey:
-          "${locator?.href}|$fraction|$_preferencesTicket|$_paletteTicket|$_paletteApplying|$_marksRevision|$_styleReady|${_appearance.pageEffect}",
+          "${locator?.href}|$fraction|$_preferencesTicket|$_paintRevision|$_marksRevision|$_styleReady|${_appearance.pageEffect}",
       layoutKey: '$_preferencesTicket|$_marksRevision|$_styleReady|${_appearance.pageEffect}',
       preferences: _appearance,
       paper: pagePaper,
@@ -1754,6 +1759,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
       rightToLeft: _rightToLeft,
       refreshRateLimit: _refreshRateLimit,
       onPrioritize: _interruptPreview,
+      canWarm: () => !controls.value && !_paletteApplying,
       onTurnAvailable: _continueHeldDrag,
       replayTap: (point) => native.invokeMethod<void>('tap', {'x': point.dx, 'y': point.dy}),
       replayPress: Platform.isAndroid
@@ -1830,7 +1836,7 @@ class ReadiumReaderBridge extends ChangeNotifier {
   void dispose() {
     if (Platform.isAndroid) FrameRateSettings.shared.removeListener(_frameRateChanged);
     _disposed = true;
-    _paintedBrightness.dispose();
+    _paintedPalette.dispose();
     persist();
     unawaited(_events?.cancel());
     if (!_firstLocation.isCompleted) _firstLocation.complete();

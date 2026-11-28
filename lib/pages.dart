@@ -5451,11 +5451,8 @@ class _ReaderPageState extends State<ReaderPage>
     if (_activityForeground && key != _nativePreferencesKey) {
       _nativePreferencesKey = key;
       if (_nativeGeometryKey == geometry && bridge.canRecolor) {
-        final animate = !widget.state.reduceMotion &&
-            !MediaQuery.disableAnimationsOf(context);
         unawaited(bridge.recolor(prefs, dark: dark, selectionColor: selectionColor,
           systemPalette: scheme, backgroundFile: widget.state.backgrounds.file,
-          transition: animate ? readerAppearanceDuration : Duration.zero,
         ).catchError((Object _) {
             if (!mounted || _nativePreferencesKey != key) return;
             _nativeGeometryKey = null;
@@ -5927,7 +5924,7 @@ class _ReaderPageState extends State<ReaderPage>
   Widget _readerSurface(Widget child) => ReaderAppearance(
     state: widget.state,
     bookId: widget.novel.id,
-    paintedBrightness: _readium?.paintedBrightness,
+    paintedPalette: _readium?.paintedPalette,
     child: child,
   );
 
@@ -9461,7 +9458,7 @@ class _ReaderPageState extends State<ReaderPage>
       child: ReaderAppearance(
         state: widget.state,
         bookId: widget.novel.id,
-        paintedBrightness: _readium?.paintedBrightness,
+        paintedPalette: _readium?.paintedPalette,
         child: Builder(
           builder: (context) => _readerScaffold(context, chapter),
         ),

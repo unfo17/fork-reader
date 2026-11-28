@@ -124,7 +124,6 @@ object ReadiumReader :
     private var appReaderPaletteScript: String? = null
     private var appReaderBackgroundScript: String? = null
     private var appPaletteVersion = 0
-    private var appFallbackPaper: Int? = null
     var appReaderWebViewSetup: ((android.webkit.WebView) -> Unit)? = null
     var appSelectionToolbar = false
     var appSelectionMode: android.view.ActionMode? = null
@@ -504,15 +503,13 @@ object ReadiumReader :
         script: String,
         fallbackPaper: Int,
         backgroundScript: String?,
-        transitionMs: Long,
         awaitPaint: Boolean,
         setup: (android.webkit.WebView) -> Unit,
     ): Int? {
         appReaderPaletteScript = script
         if (backgroundScript != null) appReaderBackgroundScript = backgroundScript
-        appFallbackPaper = fallbackPaper
         appReaderWebViewSetup = setup
-        return applyReaderPalette(backgroundScript, transitionMs, awaitPaint)
+        return applyReaderPalette(backgroundScript, fallbackPaper, awaitPaint)
     }
 
     fun appReapplyStyle() {
@@ -520,26 +517,24 @@ object ReadiumReader :
         val script = listOfNotNull(appReaderStyleScript, appReaderBackgroundScript, appReaderPaletteScript).joinToString("\n")
         if (script.isEmpty()) return
         appEvaluateAllWebViews(script, appReaderWebViewSetup) { view, value ->
-            if (version == appPaletteVersion && view === appVisibleWebView()) {
+            if (version == appPaletteVersion && view === appVisibleWebView() &&
+                !paletteWaitsForImage(value)) {
                 readPaperColor(value)?.let(::appSetPaper)
             }
         }
     }
 
-    private suspend fun applyReaderPalette(backgroundScript: String?, transitionMs: Long, awaitPaint: Boolean): Int? {
-        val script = appReaderPaletteScript ?: return null
-        val change = listOfNotNull(backgroundScript, script).joinToString("\n")
-        val fallback = appFallbackPaper ?: return null
+    private suspend fun applyReaderPalette(
+        backgroundScript: String?, fallback: Int, awaitPaint: Boolean,
+    ): Int {
         val version = ++appPaletteVersion
+        val change = listOfNotNull(backgroundScript, appReaderPaletteScript).joinToString("\n")
         val visible = appVisibleWebView()
-        val color = kotlinx.coroutines.withTimeoutOrNull(180) {
-            kotlinx.coroutines.suspendCancellableCoroutine<Int?> { continuation ->
-                if (transitionMs > 0 && visible != null) {
-                    visible.evaluateJavascript("window.__wenkuAnimatePalette=true", null)
-                }
+        val response = kotlinx.coroutines.withTimeoutOrNull(180L) {
+            kotlinx.coroutines.suspendCancellableCoroutine<String?> { continuation ->
                 appEvaluateAllWebViews(change, appReaderWebViewSetup) { view, value ->
                     if (view === visible && continuation.isActive) {
-                        continuation.resumeWith(Result.success(readPaperColor(value)))
+                        continuation.resumeWith(Result.success(value))
                     }
                 }
                 if (visible == null && continuation.isActive) {
@@ -547,25 +542,33 @@ object ReadiumReader :
                 }
             }
         }
-        val paper = color ?: fallback
-        if (version == appPaletteVersion) {
-            if ((awaitPaint || transitionMs > 0 || backgroundScript != null) && visible != null && color != null) {
-                kotlinx.coroutines.withTimeoutOrNull(180L) {
-                    kotlinx.coroutines.suspendCancellableCoroutine<Unit> { continuation ->
-                        visible.postVisualStateCallback(System.nanoTime(), object : android.webkit.WebView.VisualStateCallback() {
-                            override fun onComplete(requestId: Long) {
-                                // Refresh the platform texture after Chromium commits the new paper.
-                                visible.postInvalidateOnAnimation()
-                                if (continuation.isActive) continuation.resumeWith(Result.success(Unit))
-                            }
-                        })
-                    }
+        if (paletteWaitsForImage(response)) {
+            kotlinx.coroutines.withTimeoutOrNull(480L) {
+                while (version == appPaletteVersion && visible === appVisibleWebView() &&
+                    appEvaluateVisible("window.__wenkuPendingPalette == null") != "true") {
+                    kotlinx.coroutines.delay(16)
                 }
             }
-            if (version == appPaletteVersion) setTransitioningPaper(paper, transitionMs)
         }
+        if (version == appPaletteVersion && visible != null &&
+            (awaitPaint || backgroundScript != null)) {
+            kotlinx.coroutines.withTimeoutOrNull(180L) {
+                kotlinx.coroutines.suspendCancellableCoroutine<Unit> { continuation ->
+                    visible.postVisualStateCallback(System.nanoTime(), object : android.webkit.WebView.VisualStateCallback() {
+                        override fun onComplete(requestId: Long) {
+                            visible.postInvalidateOnAnimation()
+                            if (continuation.isActive) continuation.resumeWith(Result.success(Unit))
+                        }
+                    })
+                }
+            }
+        }
+        val paper = readPaperColor(response) ?: fallback
+        if (version == appPaletteVersion) appSetPaper(paper)
         return paper
     }
+
+    private fun paletteWaitsForImage(value: String?) = value?.startsWith("\"pending ") == true
 
     private fun readPaperColor(value: String?): Int? {
         val match = Regex("""rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)""").find(value.orEmpty())
@@ -593,36 +596,7 @@ object ReadiumReader :
         currentReaderWidget?.getView()?.let { apply(it) }
     }
 
-    private var appPaperColor: Int? = null
-    private var appPaperTarget: Int? = null
-    private var appPaperAnimator: android.animation.ValueAnimator? = null
-
-    private fun setTransitioningPaper(paper: Int, durationMs: Long) {
-        val current = appPaperColor
-        if (durationMs <= 0L || current == null || current == paper) {
-            appSetPaper(paper)
-            return
-        }
-        appPaperAnimator?.cancel()
-        appPaperTarget = paper
-        appPaperAnimator = android.animation.ValueAnimator.ofArgb(current, paper).apply {
-            duration = durationMs
-            interpolator = android.view.animation.PathInterpolator(.4f, 0f, .2f, 1f)
-            addUpdateListener { paintPaper(it.animatedValue as Int) }
-            start()
-        }
-    }
-
     fun appSetPaper(color: Int) {
-        if (appPaperAnimator?.isRunning == true && appPaperTarget == color) return
-        appPaperAnimator?.cancel()
-        appPaperAnimator = null
-        appPaperTarget = null
-        paintPaper(color)
-    }
-
-    private fun paintPaper(color: Int) {
-        appPaperColor = color
         val root = currentReaderWidget?.getView() ?: return
         var view: android.view.View? = appVisibleWebView()
         while (view != null) {
@@ -1533,11 +1507,6 @@ object ReadiumReader :
         appReaderStyleScript = null
         appReaderPaletteScript = null
         appReaderBackgroundScript = null
-        appFallbackPaper = null
-        appPaperAnimator?.cancel()
-        appPaperAnimator = null
-        appPaperColor = null
-        appPaperTarget = null
         appPaletteVersion++
         appReaderWebViewSetup = null
         ttsNavigator?.dispose()

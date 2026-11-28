@@ -6,8 +6,8 @@ class ReleaseSection {
   final List<String> items;
 }
 
-const _opening = '恢复原版的阅读日间与夜读切换，EPUB 正文和纸色同步过渡。';
-const _readerPalette = '打开外观面板即可实时预览背景图片、图片布局与浓度。';
+const _opening = '恢复原版的直接换色方式，日间和夜读切换时保留当前书页。';
+const _readerPalette = '在外观面板换背景图时，保留旧背景直到新图可显示。';
 const _androidInstall = '已安装本仓库固定签名版的 Android 用户可以直接覆盖更新，书籍和阅读记录会保留。';
 
 const publicReleaseNotes =

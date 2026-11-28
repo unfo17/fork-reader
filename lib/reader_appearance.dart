@@ -112,12 +112,12 @@ class ReaderAppearance extends StatefulWidget {
     required this.state,
     required this.child,
     this.bookId,
-    this.paintedBrightness,
+    this.paintedPalette,
   });
   final LibraryState state;
   final Widget child;
   final int? bookId;
-  final ValueListenable<Brightness?>? paintedBrightness;
+  final ValueListenable<(Brightness, Color)?>? paintedPalette;
 
   /// Continue a reader-owned route without changing ordinary app entry points.
   /// Reuse the live book palette rather than capturing one ThemeData snapshot.
@@ -136,13 +136,10 @@ class ReaderAppearance extends StatefulWidget {
   State<ReaderAppearance> createState() => _ReaderAppearanceState();
 }
 
-const readerAppearanceDuration = Duration(milliseconds: 180);
-
 class _ReaderAppearanceState extends State<ReaderAppearance> {
   Object? _key;
   ThemeData? _theme;
   ThemeData? _visibleTheme;
-  String? _family;
 
   ThemeData _resolve(BuildContext context) {
     final state = widget.state;
@@ -180,34 +177,26 @@ class _ReaderAppearanceState extends State<ReaderAppearance> {
     animation: Listenable.merge([
       widget.state.readerSettingsChanges,
       widget.state.appearanceChanges,
-      widget.paintedBrightness,
+      widget.paintedPalette,
     ]),
     child: widget.child,
     builder: (context, child) {
-      final previousFamily = _family;
       final theme = _resolve(context);
       final previous = _visibleTheme;
-      final painted = widget.paintedBrightness?.value;
-      // The native page receives the target immediately. Start the controls'
-      // transition when the new page colors are ready to draw.
-      final visible = painted != null && painted != theme.brightness &&
-              previous != null && previous.brightness != theme.brightness
-          ? previous
+      final painted = widget.paintedPalette?.value;
+      // Keep the existing paper and chrome together until Readium can draw
+      // the new palette. The target below is sent to the navigator immediately.
+      final visible = painted != null &&
+              painted != (theme.brightness, theme.colorScheme.surface)
+          ? previous ?? theme
           : theme;
       _visibleTheme = visible;
-      _family = widget.state.readerFontFamilyFor(widget.bookId);
-      final animate =
-          previousFamily == _family &&
-          !widget.state.reduceMotion &&
-          !MediaQuery.disableAnimationsOf(context);
       return AnnotatedRegion<SystemUiOverlayStyle>(
         value: novelSystemUiStyle(visible.brightness),
         child: _ReaderThemeTarget(
           theme: theme,
-          child: AnimatedTheme(
+          child: Theme(
             data: visible,
-            duration: animate ? readerAppearanceDuration : Duration.zero,
-            curve: Curves.fastOutSlowIn,
             child: Builder(
               builder: (context) {
                 final current = Theme.of(context);
@@ -235,7 +224,7 @@ Brightness readerAppBrightness(BuildContext context, LibraryState state) =>
       ThemeMode.system => MediaQuery.platformBrightnessOf(context),
     };
 
-/// Platform views consume the final colors once while Flutter chrome blends.
+/// Platform views receive the requested colors before the controls update.
 class _ReaderThemeTarget extends InheritedWidget {
   const _ReaderThemeTarget({required this.theme, required super.child});
   final ThemeData theme;
