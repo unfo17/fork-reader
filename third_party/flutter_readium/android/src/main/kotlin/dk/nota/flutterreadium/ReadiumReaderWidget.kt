@@ -10,6 +10,7 @@ import android.view.ViewConfiguration
 import android.widget.LinearLayout
 import android.widget.LinearLayout.generateViewId
 import androidx.core.view.ViewCompat
+import androidx.core.graphics.Insets
 import androidx.core.view.WindowInsetsCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.fragment.app.commitNow
@@ -563,8 +564,9 @@ private class AppPageGestureLayout(
     private var contentBottom = 0
     private var minimumStatus = 0
     private var hasReaderInsets = false
-    private var systemTop = 0
-    private var systemBottom = 0
+    private val readerInsetTypes = WindowInsetsCompat.Type.statusBars() or
+        WindowInsetsCompat.Type.navigationBars() or WindowInsetsCompat.Type.displayCutout()
+    private var systemInsets = Insets.NONE
 
     fun setReaderInsets(top: Double, bottom: Double, status: Double) {
         val density = resources.displayMetrics.density
@@ -575,7 +577,14 @@ private class AppPageGestureLayout(
             hasReaderInsets = true
             ViewCompat.setOnApplyWindowInsetsListener(this) { _, window ->
                 applyReaderInsets(window)
-                window
+                // The host has already reserved these insets. Readium's pager
+                // should not see a second set that changes with transient bars.
+                WindowInsetsCompat.Builder(window)
+                    .setDisplayCutout(null)
+                    .setInsets(readerInsetTypes, Insets.NONE)
+                    .setInsetsIgnoringVisibility(readerInsetTypes, Insets.NONE)
+                    .setVisible(readerInsetTypes, false)
+                    .build()
             }
         }
         applyReaderInsets(ViewCompat.getRootWindowInsets(this))
@@ -587,17 +596,13 @@ private class AppPageGestureLayout(
         // Flutter is compositing the platform view under the reader chrome.
         val decor = ReadiumReader.fragmentActivity?.window?.decorView
         val root = decor?.let(ViewCompat::getRootWindowInsets) ?: window
-        root?.getInsetsIgnoringVisibility(
-            WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.navigationBars() or
-                WindowInsetsCompat.Type.displayCutout(),
-        )?.let {
-            systemTop = it.top
-            systemBottom = it.bottom
+        if (root != null) systemInsets = root.getInsetsIgnoringVisibility(readerInsetTypes)
+        val top = maxOf(systemInsets.top, minimumStatus) + contentTop
+        val bottom = systemInsets.bottom + contentBottom
+        if (paddingLeft != systemInsets.left || paddingRight != systemInsets.right ||
+            paddingTop != top || paddingBottom != bottom) {
+            setPadding(systemInsets.left, top, systemInsets.right, bottom)
         }
-        val top = maxOf(systemTop, minimumStatus) + contentTop
-        val bottom = systemBottom + contentBottom
-        if (paddingTop != top || paddingBottom != bottom)
-            setPadding(paddingLeft, top, paddingRight, bottom)
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {

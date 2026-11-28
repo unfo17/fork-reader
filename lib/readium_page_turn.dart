@@ -289,8 +289,7 @@ class ReadiumPageTurnController {
 
   Future<void> freezeForRoute() async => _owner?._freezeForRoute();
   Future<void> thawAfterRoute() async => _owner?._thawAfterRoute();
-  void setOverlayOpen(bool open, {bool showLivePage = false}) =>
-      _owner?._setOverlayOpen(open, showLivePage: showLivePage);
+  void setOverlayOpen(bool open) => _owner?._setOverlayOpen(open);
   void setChromeAnimating(bool animating) => _owner?._setChromeAnimating(animating);
   void setSelectionActive(bool active) => _owner?._setSelectionActive(active);
   void setNativeContact(bool active) => _owner?._setNativeContact(active);
@@ -422,7 +421,6 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   bool _selectionActive = false, _nativeContact = false, _retainedContact = false;
   bool get _inputActive => _selectionActive || _nativeContact || _retainedContact;
   ReadiumPageFrame? _routeCover;
-  ReadiumPageFrame? _overlayCover;
   ReadiumPageFrame? _presented;
   int? _scrubCallback;
   Duration? _nextDragTick;
@@ -433,25 +431,14 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       (widget.rightToLeft || widget.preferences.mode == ReaderMode.vertical
           ? -direction : direction).toDouble();
 
-  bool _liveOverlay = false;
-
-  void _setOverlayOpen(bool open, {required bool showLivePage}) {
-    final live = open && showLivePage;
-    if (open == _overlayOpen && live == _liveOverlay) return;
+  void _setOverlayOpen(bool open) {
+    if (open == _overlayOpen) return;
     _overlayOpen = open;
-    _liveOverlay = live;
     if (open) {
       _warmTimer?.cancel();
       if (!_busy && _preparing != null) widget.onPrioritize?.call();
-      if (live) {
-        _releaseOverlayCover();
-        if (_presented != null) setState(_releasePresentedPage);
-      } else if ((_presented ?? _cached) case final frame? when !_busy) {
-        _releaseOverlayCover();
-        setState(() => _overlayCover = frame.retain());
-      }
+      if (!_busy && _presented != null) setState(_releasePresentedPage);
     } else {
-      _releaseOverlayCover();
       _resumeWarmWhenReady();
     }
   }
@@ -500,13 +487,6 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     }
   }
 
-  void _releaseOverlayCover() {
-    final frame = _overlayCover;
-    if (frame == null) return;
-    setState(() => _overlayCover = null);
-    WidgetsBinding.instance.addPostFrameCallback((_) => frame.dispose());
-  }
-
   Widget _pageImage(ReadiumPageFrame frame) => RawImage(
     image: frame.image,
     fit: BoxFit.fill,
@@ -514,6 +494,7 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
   );
 
   void _holdPresentedPage(ReadiumPageFrame frame) {
+    if (_overlayOpen) return;
     final previous = _presented;
     _presented = frame.retain();
     if (previous != null) {
@@ -1546,7 +1527,6 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.layoutKey != widget.layoutKey) {
       _stopReturnAnimation();
-      _releaseOverlayCover();
     }
     if (oldWidget.frameKey != widget.frameKey) {
       _warmRetries = 0;
@@ -1917,7 +1897,6 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     children: [
       Opacity(
         opacity: _routeCover != null ||
-                (_overlayCover != null && _previewCover == null) ||
                 (_returnFrame != null && _entryFromBottom) ||
                 (_sceneCoversPage && widget.preview != null && _previewCover == null)
             ? 0 : 1,
@@ -1926,8 +1905,6 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
       if (_presented case final frame? when !_sceneCoversPage && _previewCover == null && _routeCover == null)
         Positioned.fill(child: IgnorePointer(child: _pageImage(frame))),
       if (_routeCover case final cover?)
-        Positioned.fill(child: IgnorePointer(child: _pageImage(cover))),
-      if (_overlayCover case final cover?)
         Positioned.fill(child: IgnorePointer(child: _pageImage(cover))),
       if (_previewCover case final cover? when !_sceneCoversPage)
         Positioned.fill(child: IgnorePointer(child: _pageImage(cover))),
@@ -2027,7 +2004,6 @@ class _ReadiumPageSurfaceState extends State<ReadiumPageSurface>
     if (_scrubCallback case final callback?) SchedulerBinding.instance.cancelFrameCallbackWithId(callback);
     _presented?.dispose();
     _returnFrame?.dispose();
-    _overlayCover?.dispose();
     _cached?.dispose();
     _routeCover?.dispose(); _routeCover = null;
     _clearNeighbors();

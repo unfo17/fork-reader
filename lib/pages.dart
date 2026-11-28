@@ -5432,9 +5432,9 @@ class _ReaderPageState extends State<ReaderPage>
       fontSize: prefs.statusFontSize,
     ) + math.max(0.0, prefs.statusTopOffset);
     final pageInsets = EdgeInsets.fromLTRB(
-      safe.left + prefs.leftMargin,
+      (nativeSafeArea ? 0 : safe.left) + prefs.leftMargin,
       (nativeSafeArea ? 0 : math.max(safe.top, statusBand)) + prefs.marginTop,
-      safe.right + prefs.rightMargin,
+      (nativeSafeArea ? 0 : safe.right) + prefs.rightMargin,
       (nativeSafeArea ? 0 : safe.bottom) +
           prefs.marginBottom +
           // Visibility belongs to the footer overlay. Keep its page margin
@@ -5640,10 +5640,7 @@ class _ReaderPageState extends State<ReaderPage>
     } else {
       _activityOverlays.remove(overlay);
     }
-    _readium?.turns.setOverlayOpen(
-      _activityOverlays.isNotEmpty,
-      showLivePage: _activityOverlays.contains('tools'),
-    );
+    _readium?.turns.setOverlayOpen(_activityOverlays.isNotEmpty);
     _syncReadingActivity();
   }
 
@@ -10228,12 +10225,17 @@ class _ReaderPageState extends State<ReaderPage>
       shareGlass: true,
       archiveBackdrop: false,
       child: Stack(
+        fit: StackFit.expand,
         children: [
-          ReaderScreenBinding(
-            state: widget.state,
-            onPage: _pageBy,
-            readerOverlayOpen: () =>
-                _toolsOpen || _catalogueOpen || _findOpen || _noteOpen,
+          Positioned(
+            top: 0,
+            left: 0,
+            child: ReaderScreenBinding(
+              state: widget.state,
+              onPage: _pageBy,
+              readerOverlayOpen: () =>
+                  _toolsOpen || _catalogueOpen || _findOpen || _noteOpen,
+            ),
           ),
           Positioned.fill(
             child: NativeGlassGroup(
